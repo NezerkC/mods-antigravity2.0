@@ -173,9 +173,9 @@ The framework defines target slots mapped to Antigravity 2.0 DOM selectors:
 - [x] Add unit tests verifying port parsing from Antigravity logs across multiple session formats.
 
 ### Phase 2: Mod SDK & Standard Lifecycle Contract
-- [ ] Define the `AntigravityMod` base interface and lifecycle events (`onInit`, `render`, `onUpdate`, `onDestroy`).
-- [ ] Implement runtime CSS prefixing / style isolation for injected mods.
-- [ ] Create a Mod Loader (`ModLoader.js`) that automatically discovers and registers mods from `mods/*/`.
+- [x] Define the `AntigravityMod` base interface and lifecycle events (`onInit`, `render`, `onUpdate`, `onDestroy`).
+- [x] Implement runtime CSS prefixing / style isolation for injected mods.
+- [x] Create a Mod Loader (`ModLoader.js`) that automatically discovers and registers mods from `mods/*/`.
 
 ### Phase 3: Port Context Tachometer as First-Party Mod
 - [ ] Migrate `src/metrics.js` to `src/services/TelemetryService.js`.
