@@ -160,7 +160,7 @@ class CdpWebSocketClient {
           if (data.error) {
             reject(new Error(data.error.message || 'CDP execution error'));
           } else {
-            resolve(data.result);
+            resolve(data.result?.result || data.result);
           }
         } catch (err) {
           ws.close();

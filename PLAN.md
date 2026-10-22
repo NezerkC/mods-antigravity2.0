@@ -188,9 +188,9 @@ The framework defines target slots mapped to Antigravity 2.0 DOM selectors:
 - [x] Verify simultaneous mounting and unmounting of multiple mock mods.
 
 ### Phase 5: Developer Ergonomics & Documentation
-- [ ] Provide a boilerplate template for creating new mods in 5 minutes (`mods/template/`).
-- [ ] Document the Mod SDK API in `docs/MOD_AUTHORING_GUIDE.md`.
-- [ ] Release automated smoke test script (`tests/verify_loader.mjs`).
+- [x] Provide a boilerplate template for creating new mods in 5 minutes (`mods/template/`).
+- [x] Document the Mod SDK API in `docs/MOD_AUTHORING_GUIDE.md`.
+- [x] Release automated smoke test script (`tests/verify_loader.mjs`).
 
 ---
 
@@ -198,3 +198,7 @@ The framework defines target slots mapped to Antigravity 2.0 DOM selectors:
 1. **Host Stability:** Mod failure or uncaught exceptions inside a mod MUST NOT crash Antigravity or hang the CDP connection.
 2. **Zero Global Pollution:** Mods cannot pollute the global `window` namespace except through a single namespaced registry (`window.__antigravityMods`).
 3. **Strict Gate:** No code execution or refactoring begins until the architecture blueprint is validated.
+- [x] Architectural blueprint consolidated into a single actionable `PLAN.md`.
+- [x] Plan approved by human lead architect prior to code modifications.
+- [x] All subsequent work items driven by strict Red-Green-Refactor TDD (26 unit tests passing).
+- [x] Live smoke test verified against Electron runtime (`tests/verify_loader.mjs`).

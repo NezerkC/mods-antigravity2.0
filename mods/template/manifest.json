@@ -1,0 +1,8 @@
+{
+  "id": "my-custom-mod",
+  "name": "My Custom Mod",
+  "version": "1.0.0",
+  "description": "A starter boilerplate mod for Antigravity 2.0 desktop UI",
+  "slot": "header-actions",
+  "priority": 10
+}
