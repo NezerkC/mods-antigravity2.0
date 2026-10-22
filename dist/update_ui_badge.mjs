@@ -206,7 +206,7 @@ async function injectContextUI() {
             else if (clamped >= 25) needleColor = '#eab308';
 
             return \`
-              <svg viewBox="0 0 100 100" width="\${size}" height="\${size}" style="vertical-align: middle; flex-shrink: 0; overflow: visible;">
+              <svg viewBox="0 0 100 100" width="\${size}" height="\${size}" style="vertical-align: middle; flex-shrink: 0; overflow: visible; pointer-events: none;">
                 <defs>
                   <linearGradient id="antigravityGaugeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
                     <stop offset="0%" stop-color="#22c55e" />
@@ -215,22 +215,23 @@ async function injectContextUI() {
                     <stop offset="100%" stop-color="#ef4444" />
                   </linearGradient>
                 </defs>
-                <!-- Background Arc (Dark Muted) -->
                 <path d="M 18.82 68 A 36 36 0 1 1 81.18 68" fill="none" stroke="rgba(255, 255, 255, 0.15)" stroke-width="10" stroke-linecap="round" />
-                <!-- Rainbow Arc (Green at left/0% -> Red at right/100%) -->
                 <path d="M 18.82 68 A 36 36 0 1 1 81.18 68" fill="none" stroke="url(#antigravityGaugeGrad)" stroke-width="10" stroke-linecap="round" />
-                <!-- Needle with Dynamic Status Color -->
                 <g style="transform-origin: 50px 50px; transform: rotate(\${angle.toFixed(1)}deg); transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);">
                   <polygon points="46.5,50 50,14 53.5,50" fill="\${needleColor}" />
                 </g>
-                <!-- Center Hub -->
                 <circle cx="50" cy="50" r="10" fill="#18181b" stroke="#ffffff" stroke-width="2" />
                 <circle cx="50" cy="50" r="3.5" fill="#ffffff" />
               </svg>
             \`.trim();
           }
 
-          // 4. Global popover element in document.body
+          // 4. Global popover state & elements
+          let isHoveringBadge = false;
+          let isHoveringPopover = false;
+          let isPinned = false;
+          let hideTimer = null;
+
           let popover = document.getElementById('antigravity-context-popover');
           if (!popover) {
             popover = document.createElement('div');
@@ -239,30 +240,59 @@ async function injectContextUI() {
             popover.style.zIndex = '999999';
             popover.style.display = 'none';
             popover.style.opacity = '0';
-            popover.style.transform = 'translateY(4px)';
-            popover.style.transition = 'opacity 0.18s ease, transform 0.18s ease';
+            popover.style.transform = 'translateY(6px)';
+            popover.style.transition = 'opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)';
             popover.style.pointerEvents = 'auto';
             document.body.appendChild(popover);
 
-            let hideTimer = null;
             popover.addEventListener('mouseenter', () => {
+              isHoveringPopover = true;
               if (hideTimer) clearTimeout(hideTimer);
             });
+
             popover.addEventListener('mouseleave', () => {
-              hideTimer = setTimeout(() => {
-                popover.style.opacity = '0';
-                popover.style.transform = 'translateY(4px)';
-                setTimeout(() => { popover.style.display = 'none'; }, 180);
-              }, 120);
+              isHoveringPopover = false;
+              scheduleHide();
             });
-            window.__antigravityPopoverHide = () => {
-              popover.style.opacity = '0';
-              popover.style.transform = 'translateY(4px)';
-              setTimeout(() => { popover.style.display = 'none'; }, 180);
-            };
+
+            // Light dismiss on click outside
+            document.addEventListener('click', (e) => {
+              if (isPinned && !popover.contains(e.target) && !e.target.closest('.antigravity-context-badge')) {
+                isPinned = false;
+                scheduleHide(0);
+              }
+            });
+
+            // Dismiss on Escape
+            document.addEventListener('keydown', (e) => {
+              if (e.key === 'Escape') {
+                isPinned = false;
+                isHoveringBadge = false;
+                isHoveringPopover = false;
+                scheduleHide(0);
+              }
+            });
+          }
+
+          function scheduleHide(delay = 220) {
+            if (isPinned) return;
+            if (hideTimer) clearTimeout(hideTimer);
+            hideTimer = setTimeout(() => {
+              if (!isHoveringBadge && !isHoveringPopover && !isPinned) {
+                popover.style.opacity = '0';
+                popover.style.transform = 'translateY(6px)';
+                setTimeout(() => {
+                  if (!isHoveringBadge && !isHoveringPopover && !isPinned) {
+                    popover.style.display = 'none';
+                  }
+                }, 200);
+              }
+            }, delay);
           }
 
           function showPopover(badgeEl, m) {
+            if (hideTimer) clearTimeout(hideTimer);
+
             const b = m.breakdown || {};
             const user = b.user || { tokens: 0, pct: 0 };
             const model = b.model || { tokens: 0, pct: 0 };
@@ -329,32 +359,33 @@ async function injectContextUI() {
                 </div>
                 <div style="display: flex; justify-content: space-between; border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 7px; font-size: 10px; color: #71717a;">
                   <span>\${m.steps || 0} turnos analizados</span>
-                  <span>\${m.sizeKb || 0} KB memoria</span>
+                  <span style="display: flex; align-items: center; gap: 4px;">
+                    <span>\${m.sizeKb || 0} KB</span>
+                    \${isPinned ? '<span style="color: #38bdf8; font-weight: 600;">(Fijado)</span>' : ''}
+                  </span>
                 </div>
               </div>
             \`;
 
-            // Smart Screen-Aware Positioning (Flip upwards if close to bottom)
+            // Position calculation: NEVER overlap the badge to prevent hover flicker!
             const rect = badgeEl.getBoundingClientRect();
-            const popoverHeight = 250;
             const spaceBelow = window.innerHeight - rect.bottom;
             const spaceAbove = rect.top;
 
-            let top;
-            if (spaceBelow < popoverHeight + 15 && spaceAbove > popoverHeight) {
-              // Open UPWARDS above the toolbar
-              top = rect.top - popoverHeight - 10;
-              popover.style.transform = 'translateY(4px)';
+            // When bottom-anchored, bottom position guarantees ZERO vertical overlap
+            if (spaceBelow < 280 && spaceAbove > 240) {
+              // Open UPWARDS: Anchor bottom of popover exactly 10px ABOVE badge top
+              popover.style.top = 'auto';
+              popover.style.bottom = (window.innerHeight - rect.top + 10) + 'px';
+              popover.style.transform = 'translateY(6px)';
             } else {
-              // Open DOWNWARDS
-              top = rect.bottom + 8;
-              popover.style.transform = 'translateY(-4px)';
+              // Open DOWNWARDS: Anchor top of popover exactly 10px BELOW badge bottom
+              popover.style.bottom = 'auto';
+              popover.style.top = (rect.bottom + 10) + 'px';
+              popover.style.transform = 'translateY(-6px)';
             }
 
-            top = Math.max(10, Math.min(window.innerHeight - popoverHeight - 10, top));
-            const left = Math.max(10, Math.min(window.innerWidth - 315, rect.left - 50));
-
-            popover.style.top = top + 'px';
+            const left = Math.max(10, Math.min(window.innerWidth - 315, rect.left - 40));
             popover.style.left = left + 'px';
             popover.style.display = 'block';
 
@@ -404,14 +435,14 @@ async function injectContextUI() {
 
               // Remove existing older version badges
               let badge = parentRow.querySelector('.antigravity-context-badge');
-              if (badge && badge.__v !== 4) {
+              if (badge && badge.__v !== 5) {
                 badge.remove();
                 badge = null;
               }
 
               if (!badge) {
                 badge = document.createElement('div');
-                badge.__v = 4;
+                badge.__v = 5;
                 badge.className = 'antigravity-context-badge';
                 badge.style.display = 'inline-flex';
                 badge.style.alignItems = 'center';
@@ -430,24 +461,23 @@ async function injectContextUI() {
                 badge.style.whiteSpace = 'nowrap';
                 badge.style.transition = 'background-color 0.15s ease, border-color 0.15s ease';
 
-                let leaveTimeout = null;
                 badge.addEventListener('mouseenter', () => {
+                  isHoveringBadge = true;
                   badge.style.backgroundColor = 'rgba(255, 255, 255, 0.14)';
                   badge.style.borderColor = 'rgba(255, 255, 255, 0.25)';
-                  if (leaveTimeout) clearTimeout(leaveTimeout);
                   showPopover(badge, badge.__currentMetric || m);
                 });
 
                 badge.addEventListener('mouseleave', () => {
+                  isHoveringBadge = false;
                   badge.style.backgroundColor = 'rgba(255, 255, 255, 0.08)';
                   badge.style.borderColor = 'rgba(255, 255, 255, 0.12)';
-                  leaveTimeout = setTimeout(() => {
-                    if (window.__antigravityPopoverHide) window.__antigravityPopoverHide();
-                  }, 120);
+                  scheduleHide();
                 });
 
                 badge.addEventListener('click', (e) => {
                   e.stopPropagation();
+                  isPinned = !isPinned;
                   showPopover(badge, badge.__currentMetric || m);
                 });
 
@@ -461,23 +491,28 @@ async function injectContextUI() {
               badge.__currentMetric = m;
               const pctNum = m.pctNumber || parseFloat(m.pct) || 0;
 
-              let statusColor = '#22c55e';
-              if (pctNum >= 85) statusColor = '#ef4444';
-              else if (pctNum >= 60) statusColor = '#f97316';
-              else if (pctNum >= 25) statusColor = '#eab308';
+              // Only re-render innerHTML if token count actually changed to prevent DOM thrashing
+              if (badge.__lastTokens !== m.estTokens) {
+                badge.__lastTokens = m.estTokens;
 
-              badge.innerHTML = \`
-                \${getGaugeSvg(pctNum, 17)}
-                <span style="font-weight: 600; color: \${statusColor}; font-family: monospace;">\${m.displayTokens}</span>
-                <span style="opacity: 0.45; font-size: 10px;">/1M</span>
-                <span style="background: \${statusColor}22; color: \${statusColor}; padding: 0 4px; border-radius: 9999px; font-size: 9.5px; font-weight: 600; margin-left: 2px;">\${m.pct}%</span>
-              \`;
+                let statusColor = '#22c55e';
+                if (pctNum >= 85) statusColor = '#ef4444';
+                else if (pctNum >= 60) statusColor = '#f97316';
+                else if (pctNum >= 25) statusColor = '#eab308';
+
+                badge.innerHTML = \`
+                  \${getGaugeSvg(pctNum, 17)}
+                  <span style="font-weight: 600; color: \${statusColor}; font-family: monospace; pointer-events: none;">\${m.displayTokens}</span>
+                  <span style="opacity: 0.45; font-size: 10px; pointer-events: none;">/1M</span>
+                  <span style="background: \${statusColor}22; color: \${statusColor}; padding: 0 4px; border-radius: 9999px; font-size: 9.5px; font-weight: 600; margin-left: 2px; pointer-events: none;">\${m.pct}%</span>
+                \`;
+              }
             }
           }
 
           syncAll();
           window.__antigravityGaugeLoop = setInterval(syncAll, 1200);
-          return "Gauge and breakdown popover v4 with smart positioning initialized!";
+          return "Gauge and breakdown popover v5 (Zero-Flicker & Pin Support) initialized!";
         })()
       `;
 
