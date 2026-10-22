@@ -1,0 +1,13 @@
+{
+  "name": "antigravity-ui-mods",
+  "version": "2.0.0",
+  "description": "Custom UI modifications and context tachometer for Google Antigravity 2.0",
+  "type": "module",
+  "main": "src/injector.js",
+  "scripts": {
+    "build": "node build.js",
+    "deploy": "node build.js"
+  },
+  "author": "Victor Manuel Martinez Munoz",
+  "license": "MIT"
+}
