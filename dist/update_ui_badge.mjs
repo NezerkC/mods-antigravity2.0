@@ -195,29 +195,33 @@ async function injectContextUI() {
           // 2. Register updated metrics
           window.__antigravityAllMetrics = ${clientPayload};
 
-          // 3. Helper for SVG Gauge (Analog Speedometer matching reference)
+          // 3. Helper for SVG Gauge (Analog Speedometer: Green = empty/left, Red = full/right)
           function getGaugeSvg(pct, size) {
             const clamped = Math.min(Math.max(pct, 0), 100);
             const angle = -120 + (clamped / 100) * 240;
-            const dashLength = 150.8;
-            const circumference = 226.19;
+
+            let needleColor = '#22c55e';
+            if (clamped >= 85) needleColor = '#ef4444';
+            else if (clamped >= 60) needleColor = '#f97316';
+            else if (clamped >= 25) needleColor = '#eab308';
+
             return \`
               <svg viewBox="0 0 100 100" width="\${size}" height="\${size}" style="vertical-align: middle; flex-shrink: 0; overflow: visible;">
                 <defs>
-                  <linearGradient id="antigravityGaugeGrad" x1="0%" y1="100%" x2="100%" y2="100%">
+                  <linearGradient id="antigravityGaugeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
                     <stop offset="0%" stop-color="#22c55e" />
                     <stop offset="35%" stop-color="#eab308" />
                     <stop offset="70%" stop-color="#f97316" />
                     <stop offset="100%" stop-color="#ef4444" />
                   </linearGradient>
                 </defs>
-                <!-- Background Arc -->
-                <circle cx="50" cy="50" r="36" fill="none" stroke="rgba(255, 255, 255, 0.15)" stroke-width="10" stroke-dasharray="\${dashLength} \${circumference}" stroke-linecap="round" transform="rotate(150 50 50)" />
-                <!-- Rainbow Arc -->
-                <circle cx="50" cy="50" r="36" fill="none" stroke="url(#antigravityGaugeGrad)" stroke-width="10" stroke-dasharray="\${dashLength} \${circumference}" stroke-linecap="round" transform="rotate(150 50 50)" />
-                <!-- Needle -->
+                <!-- Background Arc (Dark Muted) -->
+                <path d="M 18.82 68 A 36 36 0 1 1 81.18 68" fill="none" stroke="rgba(255, 255, 255, 0.15)" stroke-width="10" stroke-linecap="round" />
+                <!-- Rainbow Arc (Green at left/0% -> Red at right/100%) -->
+                <path d="M 18.82 68 A 36 36 0 1 1 81.18 68" fill="none" stroke="url(#antigravityGaugeGrad)" stroke-width="10" stroke-linecap="round" />
+                <!-- Needle with Dynamic Status Color -->
                 <g style="transform-origin: 50px 50px; transform: rotate(\${angle.toFixed(1)}deg); transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);">
-                  <polygon points="46.5,50 50,14 53.5,50" fill="#ef4444" />
+                  <polygon points="46.5,50 50,14 53.5,50" fill="\${needleColor}" />
                 </g>
                 <!-- Center Hub -->
                 <circle cx="50" cy="50" r="10" fill="#18181b" stroke="#ffffff" stroke-width="2" />
@@ -235,7 +239,7 @@ async function injectContextUI() {
             popover.style.zIndex = '999999';
             popover.style.display = 'none';
             popover.style.opacity = '0';
-            popover.style.transform = 'translateY(-4px)';
+            popover.style.transform = 'translateY(4px)';
             popover.style.transition = 'opacity 0.18s ease, transform 0.18s ease';
             popover.style.pointerEvents = 'auto';
             document.body.appendChild(popover);
@@ -247,13 +251,13 @@ async function injectContextUI() {
             popover.addEventListener('mouseleave', () => {
               hideTimer = setTimeout(() => {
                 popover.style.opacity = '0';
-                popover.style.transform = 'translateY(-4px)';
+                popover.style.transform = 'translateY(4px)';
                 setTimeout(() => { popover.style.display = 'none'; }, 180);
               }, 120);
             });
             window.__antigravityPopoverHide = () => {
               popover.style.opacity = '0';
-              popover.style.transform = 'translateY(-4px)';
+              popover.style.transform = 'translateY(4px)';
               setTimeout(() => { popover.style.display = 'none'; }, 180);
             };
           }
@@ -330,9 +334,28 @@ async function injectContextUI() {
               </div>
             \`;
 
+            // Smart Screen-Aware Positioning (Flip upwards if close to bottom)
             const rect = badgeEl.getBoundingClientRect();
-            popover.style.left = Math.max(10, Math.min(window.innerWidth - 310, rect.left - 100)) + 'px';
-            popover.style.top = (rect.bottom + 8) + 'px';
+            const popoverHeight = 250;
+            const spaceBelow = window.innerHeight - rect.bottom;
+            const spaceAbove = rect.top;
+
+            let top;
+            if (spaceBelow < popoverHeight + 15 && spaceAbove > popoverHeight) {
+              // Open UPWARDS above the toolbar
+              top = rect.top - popoverHeight - 10;
+              popover.style.transform = 'translateY(4px)';
+            } else {
+              // Open DOWNWARDS
+              top = rect.bottom + 8;
+              popover.style.transform = 'translateY(-4px)';
+            }
+
+            top = Math.max(10, Math.min(window.innerHeight - popoverHeight - 10, top));
+            const left = Math.max(10, Math.min(window.innerWidth - 315, rect.left - 50));
+
+            popover.style.top = top + 'px';
+            popover.style.left = left + 'px';
             popover.style.display = 'block';
 
             requestAnimationFrame(() => {
@@ -381,14 +404,14 @@ async function injectContextUI() {
 
               // Remove existing older version badges
               let badge = parentRow.querySelector('.antigravity-context-badge');
-              if (badge && badge.__v !== 3) {
+              if (badge && badge.__v !== 4) {
                 badge.remove();
                 badge = null;
               }
 
               if (!badge) {
                 badge = document.createElement('div');
-                badge.__v = 3;
+                badge.__v = 4;
                 badge.className = 'antigravity-context-badge';
                 badge.style.display = 'inline-flex';
                 badge.style.alignItems = 'center';
@@ -438,18 +461,23 @@ async function injectContextUI() {
               badge.__currentMetric = m;
               const pctNum = m.pctNumber || parseFloat(m.pct) || 0;
 
+              let statusColor = '#22c55e';
+              if (pctNum >= 85) statusColor = '#ef4444';
+              else if (pctNum >= 60) statusColor = '#f97316';
+              else if (pctNum >= 25) statusColor = '#eab308';
+
               badge.innerHTML = \`
                 \${getGaugeSvg(pctNum, 17)}
-                <span style="font-weight: 600; color: #38bdf8; font-family: monospace;">\${m.displayTokens}</span>
+                <span style="font-weight: 600; color: \${statusColor}; font-family: monospace;">\${m.displayTokens}</span>
                 <span style="opacity: 0.45; font-size: 10px;">/1M</span>
-                <span style="background: rgba(56, 189, 248, 0.16); color: #38bdf8; padding: 0 4px; border-radius: 9999px; font-size: 9.5px; font-weight: 600; margin-left: 2px;">\${m.pct}%</span>
+                <span style="background: \${statusColor}22; color: \${statusColor}; padding: 0 4px; border-radius: 9999px; font-size: 9.5px; font-weight: 600; margin-left: 2px;">\${m.pct}%</span>
               \`;
             }
           }
 
           syncAll();
           window.__antigravityGaugeLoop = setInterval(syncAll, 1200);
-          return "Gauge and breakdown popover v3 initialized!";
+          return "Gauge and breakdown popover v4 with smart positioning initialized!";
         })()
       `;
 
