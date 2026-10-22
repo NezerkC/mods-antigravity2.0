@@ -1,0 +1,54 @@
+.antigravity-tachometer-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 9px 3px 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+  cursor: pointer;
+  user-select: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1;
+  color: #e4e4e7;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  position: relative;
+}
+
+.antigravity-tachometer-badge:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: translateY(-0.5px);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);
+}
+
+.antigravity-tachometer-badge:active {
+  transform: translateY(0.5px);
+}
+
+.antigravity-popover-container {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 99999;
+  display: none;
+  animation: popoverFadeIn 0.15s ease-out;
+}
+
+.antigravity-tachometer-badge:hover .antigravity-popover-container,
+.antigravity-popover-container:hover {
+  display: block;
+}
+
+@keyframes popoverFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

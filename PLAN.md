@@ -178,9 +178,9 @@ The framework defines target slots mapped to Antigravity 2.0 DOM selectors:
 - [x] Create a Mod Loader (`ModLoader.js`) that automatically discovers and registers mods from `mods/*/`.
 
 ### Phase 3: Port Context Tachometer as First-Party Mod
-- [ ] Migrate `src/metrics.js` to `src/services/TelemetryService.js`.
-- [ ] Migrate `gauge.js` and `popover.js` into `mods/context-tachometer/`.
-- [ ] Implement `mods/context-tachometer/index.js` matching the new `AntigravityMod` contract.
+- [x] Migrate `src/metrics.js` to `src/services/TelemetryService.js`.
+- [x] Migrate `gauge.js` and `popover.js` into `mods/context-tachometer/`.
+- [x] Implement `mods/context-tachometer/index.js` matching the new `AntigravityMod` contract.
 
 ### Phase 4: Build System & Multi-Mod Bundling
 - [ ] Update `build.js` to bundle the Core Host together with all enabled mods into `dist/antigravity_mod_loader.mjs`.

@@ -1,0 +1,8 @@
+{
+  "id": "context-tachometer",
+  "name": "Context Window Tachometer",
+  "version": "2.0.0",
+  "description": "Analog speedometer and context breakdown telemetry popover for Antigravity 2.0",
+  "slot": "header-actions",
+  "priority": 50
+}
