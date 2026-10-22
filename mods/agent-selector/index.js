@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AntigravityMod } from '../../src/sdk/AntigravityMod.js';
 import { renderAgentIconSvg } from './components/AgentIconSvg.js';
-import { renderAgentDropdownHtml } from './components/AgentDropdownHtml.js';
+import { renderAgentDropdownHtml, getAgentColor } from './components/AgentDropdownHtml.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,11 +34,24 @@ export class AgentSelectorMod extends AntigravityMod {
    */
   render(context = {}) {
     const iconSvg = renderAgentIconSvg(16);
+    const initialAgentId = 'lead-architect';
     const initialAgentName = 'Lead Architect';
-    const dropdownHtml = renderAgentDropdownHtml('lead-architect');
+    const initialColor = getAgentColor(initialAgentId);
+    const dropdownHtml = renderAgentDropdownHtml(initialAgentId);
 
     const html = `
-      <div id="antigravity-agent-badge" class="antigravity-agent-badge" title="Active Specialist: ${initialAgentName}" tabindex="0">
+      <div 
+        id="antigravity-agent-badge" 
+        class="antigravity-agent-badge" 
+        title="Active Specialist: ${initialAgentName}" 
+        style="border-color: ${initialColor}55; box-shadow: 0 0 8px ${initialColor}22;"
+        tabindex="0"
+      >
+        <span 
+          id="antigravity-active-agent-dot" 
+          class="agent-badge-dot" 
+          style="background: ${initialColor}; box-shadow: 0 0 6px ${initialColor};"
+        ></span>
         ${iconSvg}
         <span id="antigravity-active-agent-name" class="agent-label">${initialAgentName}</span>
         <span class="agent-caret">▼</span>
@@ -47,16 +60,33 @@ export class AgentSelectorMod extends AntigravityMod {
         </div>
         <script>
           if (!window.__selectAntigravityAgent) {
-            window.__selectAntigravityAgent = function(agentId, agentName) {
+            window.__selectAntigravityAgent = function(agentId, agentName, agentColor) {
               const label = document.getElementById('antigravity-active-agent-name');
               const badge = document.getElementById('antigravity-agent-badge');
+              const dot = document.getElementById('antigravity-active-agent-dot');
+
               if (label) label.textContent = agentName;
-              if (badge) badge.setAttribute('title', 'Active Specialist: ' + agentName);
+              if (badge) {
+                badge.setAttribute('title', 'Active Specialist: ' + agentName);
+                if (agentColor) {
+                  badge.style.borderColor = agentColor + '66';
+                  badge.style.boxShadow = '0 0 8px ' + agentColor + '33';
+                }
+              }
+              if (dot && agentColor) {
+                dot.style.background = agentColor;
+                dot.style.boxShadow = '0 0 6px ' + agentColor;
+              }
+
               try {
-                localStorage.setItem('__antigravity_selected_agent', JSON.stringify({ id: agentId, name: agentName }));
+                localStorage.setItem('__antigravity_selected_agent', JSON.stringify({ 
+                  id: agentId, 
+                  name: agentName,
+                  color: agentColor 
+                }));
               } catch (e) {}
 
-              // Update active tick marks in list
+              // Update active tick marks and selections in list
               const items = document.querySelectorAll('.antigravity-agent-item');
               items.forEach(el => {
                 const isMatch = el.getAttribute('data-agent-id') === agentId;
@@ -72,7 +102,7 @@ export class AgentSelectorMod extends AntigravityMod {
               if (saved) {
                 const parsed = JSON.parse(saved);
                 if (parsed && parsed.name) {
-                  window.__selectAntigravityAgent(parsed.id, parsed.name);
+                  window.__selectAntigravityAgent(parsed.id, parsed.name, parsed.color);
                 }
               }
             } catch (e) {}
