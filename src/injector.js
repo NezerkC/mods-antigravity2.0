@@ -54,51 +54,60 @@ export async function injectContextUI() {
           // 2. Register updated metrics
           window.__antigravityAllMetrics = ${clientPayload};
 
-          // 3. Inject CSS Styles for Context Tachometer & Responsive Compact Mode
+          // 3. Inject CSS Styles for Context Tachometer with Pin Expansion
           let styleEl = document.getElementById('antigravity-context-styles');
           if (!styleEl) {
             styleEl = document.createElement('style');
             styleEl.id = 'antigravity-context-styles';
-            styleEl.textContent = \`
-              .antigravity-context-badge {
-                display: inline-flex;
-                align-items: center;
-                height: 24px;
-                border-radius: 9999px;
-                user-select: none;
-                background-color: rgba(255, 255, 255, 0.08);
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                cursor: pointer;
-                flex-shrink: 0;
-                margin-left: 6px;
-                white-space: nowrap;
-                transition: background-color 0.15s ease, border-color 0.15s ease, padding 0.15s ease;
-              }
-              .antigravity-context-badge:hover {
-                background-color: rgba(255, 255, 255, 0.14);
-                border-color: rgba(255, 255, 255, 0.25);
-              }
-              /* Compact Mode: Active when chat panel is split or space is constrained */
-              .antigravity-context-badge.compact {
-                padding: 0 4px;
-                gap: 0;
-              }
-              .antigravity-context-badge.compact .badge-label-group {
-                display: none !important;
-              }
-              /* Normal Expanded Mode */
-              .antigravity-context-badge:not(.compact) {
-                padding: 0 8px 0 6px;
-                gap: 6px;
-              }
-              .antigravity-context-badge:not(.compact) .badge-label-group {
-                display: inline-flex;
-                align-items: center;
-                gap: 3px;
-              }
-            \`;
             document.head.appendChild(styleEl);
           }
+
+          styleEl.textContent = \`
+            .antigravity-context-badge {
+              display: inline-flex;
+              align-items: center;
+              height: 24px;
+              border-radius: 9999px;
+              user-select: none;
+              background-color: rgba(255, 255, 255, 0.08);
+              border: 1px solid rgba(255, 255, 255, 0.12);
+              cursor: pointer;
+              flex-shrink: 0;
+              margin-left: 6px;
+              white-space: nowrap;
+              transition: background-color 0.15s ease, border-color 0.15s ease, padding 0.15s ease;
+            }
+            .antigravity-context-badge:hover {
+              background-color: rgba(255, 255, 255, 0.14);
+              border-color: rgba(255, 255, 255, 0.25);
+            }
+            /* Compact Mode (Icon Only): Active in split panels when unpinned */
+            .antigravity-context-badge.compact:not(.pinned) {
+              padding: 0 4px !important;
+              gap: 0 !important;
+            }
+            .antigravity-context-badge.compact:not(.pinned) .badge-label-group {
+              display: none !important;
+            }
+            /* Expanded Mode: Normal wide mode OR when Pinned by user */
+            .antigravity-context-badge:not(.compact),
+            .antigravity-context-badge.pinned {
+              padding: 0 8px 0 6px !important;
+              gap: 6px !important;
+            }
+            .antigravity-context-badge:not(.compact) .badge-label-group,
+            .antigravity-context-badge.pinned .badge-label-group {
+              display: inline-flex !important;
+              align-items: center;
+              gap: 3px;
+            }
+            /* Visual feedback for pinned state */
+            .antigravity-context-badge.pinned {
+              background-color: rgba(255, 255, 255, 0.16) !important;
+              border-color: rgba(56, 189, 248, 0.5) !important;
+              box-shadow: 0 0 8px rgba(56, 189, 248, 0.2);
+            }
+          \`;
 
           // 4. Helper for SVG Gauge (Analog Speedometer)
           function getGaugeSvg(pct, size) {
@@ -134,8 +143,16 @@ export async function injectContextUI() {
           // 5. Global popover state & elements
           let isHoveringBadge = false;
           let isHoveringPopover = false;
-          let isPinned = false;
+          let activePinnedBadge = null;
           let hideTimer = null;
+
+          function unpinAll() {
+            activePinnedBadge = null;
+            document.querySelectorAll('.antigravity-context-badge.pinned').forEach(b => {
+              b.classList.remove('pinned');
+            });
+            scheduleHide(0);
+          }
 
           let popover = document.getElementById('antigravity-context-popover');
           if (!popover) {
@@ -161,31 +178,27 @@ export async function injectContextUI() {
             });
 
             document.addEventListener('click', (e) => {
-              if (isPinned && !popover.contains(e.target) && !e.target.closest('.antigravity-context-badge')) {
-                isPinned = false;
-                scheduleHide(0);
+              if (activePinnedBadge && !popover.contains(e.target) && !e.target.closest('.antigravity-context-badge')) {
+                unpinAll();
               }
             });
 
             document.addEventListener('keydown', (e) => {
               if (e.key === 'Escape') {
-                isPinned = false;
-                isHoveringBadge = false;
-                isHoveringPopover = false;
-                scheduleHide(0);
+                unpinAll();
               }
             });
           }
 
           function scheduleHide(delay = 220) {
-            if (isPinned) return;
+            if (activePinnedBadge) return;
             if (hideTimer) clearTimeout(hideTimer);
             hideTimer = setTimeout(() => {
-              if (!isHoveringBadge && !isHoveringPopover && !isPinned) {
+              if (!isHoveringBadge && !isHoveringPopover && !activePinnedBadge) {
                 popover.style.opacity = '0';
                 popover.style.transform = 'translateY(6px)';
                 setTimeout(() => {
-                  if (!isHoveringBadge && !isHoveringPopover && !isPinned) {
+                  if (!isHoveringBadge && !isHoveringPopover && !activePinnedBadge) {
                     popover.style.display = 'none';
                   }
                 }, 200);
@@ -208,6 +221,8 @@ export async function injectContextUI() {
             if (pctNum >= 85) statusColor = '#ef4444';
             else if (pctNum >= 60) statusColor = '#f97316';
             else if (pctNum >= 25) statusColor = '#eab308';
+
+            const isPinned = activePinnedBadge === badgeEl;
 
             const row = (icon, label, data, barColor) => \`
               <div style="margin-bottom: 7px;">
@@ -301,7 +316,6 @@ export async function injectContextUI() {
                 const row = entry.target;
                 const badge = row.querySelector('.antigravity-context-badge');
                 if (badge) {
-                  // In split view or when container width < 265px, switch to compact icon-only mode
                   if (entry.contentRect.width < 265) {
                     badge.classList.add('compact');
                   } else {
@@ -355,17 +369,16 @@ export async function injectContextUI() {
 
               // Remove existing older version badges
               let badge = parentRow.querySelector('.antigravity-context-badge');
-              if (badge && badge.__v !== 6) {
+              if (badge && badge.__v !== 7) {
                 badge.remove();
                 badge = null;
               }
 
               if (!badge) {
                 badge = document.createElement('div');
-                badge.__v = 6;
+                badge.__v = 7;
                 badge.className = 'antigravity-context-badge';
 
-                // Initial size check
                 if (parentRow.offsetWidth < 265) {
                   badge.classList.add('compact');
                 }
@@ -382,8 +395,14 @@ export async function injectContextUI() {
 
                 badge.addEventListener('click', (e) => {
                   e.stopPropagation();
-                  isPinned = !isPinned;
-                  showPopover(badge, badge.__currentMetric || m);
+                  if (activePinnedBadge === badge) {
+                    unpinAll();
+                  } else {
+                    unpinAll();
+                    activePinnedBadge = badge;
+                    badge.classList.add('pinned');
+                    showPopover(badge, badge.__currentMetric || m);
+                  }
                 });
 
                 if (trigger.nextSibling) {
@@ -396,7 +415,6 @@ export async function injectContextUI() {
               badge.__currentMetric = m;
               const pctNum = m.pctNumber || parseFloat(m.pct) || 0;
 
-              // Only re-render if token count or structure changed
               if (badge.__lastTokens !== m.estTokens) {
                 badge.__lastTokens = m.estTokens;
 
@@ -405,7 +423,7 @@ export async function injectContextUI() {
                 else if (pctNum >= 60) statusColor = '#f97316';
                 else if (pctNum >= 25) statusColor = '#eab308';
 
-                badge.title = 'Contexto: ' + m.estTokens.toLocaleString() + ' tokens (' + m.pct + '%) de 1M - Clic para desglose';
+                badge.title = 'Contexto: ' + m.estTokens.toLocaleString() + ' tokens (' + m.pct + '%) de 1M - Clic para fijar';
 
                 badge.innerHTML = \`
                   \${getGaugeSvg(pctNum, 17)}
@@ -421,7 +439,7 @@ export async function injectContextUI() {
 
           syncAll();
           window.__antigravityGaugeLoop = setInterval(syncAll, 1200);
-          return "Context Tachometer v6 with ResizeObserver & Compact Split Mode initialized!";
+          return "Context Tachometer v7 with Pinned-Expansion initialized!";
         })()
       `;
 
