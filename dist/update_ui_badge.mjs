@@ -195,7 +195,53 @@ async function injectContextUI() {
           // 2. Register updated metrics
           window.__antigravityAllMetrics = ${clientPayload};
 
-          // 3. Helper for SVG Gauge (Analog Speedometer: Green = empty/left, Red = full/right)
+          // 3. Inject CSS Styles for Context Tachometer & Responsive Compact Mode
+          let styleEl = document.getElementById('antigravity-context-styles');
+          if (!styleEl) {
+            styleEl = document.createElement('style');
+            styleEl.id = 'antigravity-context-styles';
+            styleEl.textContent = \`
+              .antigravity-context-badge {
+                display: inline-flex;
+                align-items: center;
+                height: 24px;
+                border-radius: 9999px;
+                user-select: none;
+                background-color: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                cursor: pointer;
+                flex-shrink: 0;
+                margin-left: 6px;
+                white-space: nowrap;
+                transition: background-color 0.15s ease, border-color 0.15s ease, padding 0.15s ease;
+              }
+              .antigravity-context-badge:hover {
+                background-color: rgba(255, 255, 255, 0.14);
+                border-color: rgba(255, 255, 255, 0.25);
+              }
+              /* Compact Mode: Active when chat panel is split or space is constrained */
+              .antigravity-context-badge.compact {
+                padding: 0 4px;
+                gap: 0;
+              }
+              .antigravity-context-badge.compact .badge-label-group {
+                display: none !important;
+              }
+              /* Normal Expanded Mode */
+              .antigravity-context-badge:not(.compact) {
+                padding: 0 8px 0 6px;
+                gap: 6px;
+              }
+              .antigravity-context-badge:not(.compact) .badge-label-group {
+                display: inline-flex;
+                align-items: center;
+                gap: 3px;
+              }
+            \`;
+            document.head.appendChild(styleEl);
+          }
+
+          // 4. Helper for SVG Gauge (Analog Speedometer)
           function getGaugeSvg(pct, size) {
             const clamped = Math.min(Math.max(pct, 0), 100);
             const angle = -120 + (clamped / 100) * 240;
@@ -226,7 +272,7 @@ async function injectContextUI() {
             \`.trim();
           }
 
-          // 4. Global popover state & elements
+          // 5. Global popover state & elements
           let isHoveringBadge = false;
           let isHoveringPopover = false;
           let isPinned = false;
@@ -255,7 +301,6 @@ async function injectContextUI() {
               scheduleHide();
             });
 
-            // Light dismiss on click outside
             document.addEventListener('click', (e) => {
               if (isPinned && !popover.contains(e.target) && !e.target.closest('.antigravity-context-badge')) {
                 isPinned = false;
@@ -263,7 +308,6 @@ async function injectContextUI() {
               }
             });
 
-            // Dismiss on Escape
             document.addEventListener('keydown', (e) => {
               if (e.key === 'Escape') {
                 isPinned = false;
@@ -339,7 +383,7 @@ async function injectContextUI() {
                   <div style="display: flex; align-items: center; gap: 9px;">
                     \${getGaugeSvg(pctNum, 32)}
                     <div>
-                      <div style="font-size: 12.5px; font-weight: 600; color: #fafafa;">Ventana de Contexto</div>
+                      <div style="font-size: 12.5px; font-weight: 600; color: #fafafa;">Tacómetro de Contexto</div>
                       <div style="font-size: 11px; color: #a1a1aa; font-family: monospace;">~\${m.estTokens.toLocaleString()} / 1.000.000 tokens</div>
                     </div>
                   </div>
@@ -367,21 +411,17 @@ async function injectContextUI() {
               </div>
             \`;
 
-            // Position calculation: NEVER overlap the badge to prevent hover flicker!
             const rect = badgeEl.getBoundingClientRect();
             const spaceBelow = window.innerHeight - rect.bottom;
             const spaceAbove = rect.top;
 
-            // When bottom-anchored, bottom position guarantees ZERO vertical overlap
             if (spaceBelow < 280 && spaceAbove > 240) {
-              // Open UPWARDS: Anchor bottom of popover exactly 10px ABOVE badge top
               popover.style.top = 'auto';
-              popover.style.bottom = (window.innerHeight - rect.top + 10) + 'px';
+              popover.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
               popover.style.transform = 'translateY(6px)';
             } else {
-              // Open DOWNWARDS: Anchor top of popover exactly 10px BELOW badge bottom
               popover.style.bottom = 'auto';
-              popover.style.top = (rect.bottom + 10) + 'px';
+              popover.style.top = (rect.bottom + 8) + 'px';
               popover.style.transform = 'translateY(-6px)';
             }
 
@@ -395,7 +435,25 @@ async function injectContextUI() {
             });
           }
 
-          // 5. Sync badges across all visible panels
+          // 6. ResizeObserver for responsive compact mode in split panels
+          if (!window.__antigravityResizeObserver) {
+            window.__antigravityResizeObserver = new ResizeObserver((entries) => {
+              for (const entry of entries) {
+                const row = entry.target;
+                const badge = row.querySelector('.antigravity-context-badge');
+                if (badge) {
+                  // In split view or when container width < 265px, switch to compact icon-only mode
+                  if (entry.contentRect.width < 265) {
+                    badge.classList.add('compact');
+                  } else {
+                    badge.classList.remove('compact');
+                  }
+                }
+              }
+            });
+          }
+
+          // 7. Sync badges across all visible panels
           function syncAll() {
             const metricsMap = window.__antigravityAllMetrics || {};
             const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'))
@@ -433,45 +491,33 @@ async function injectContextUI() {
               parentRow.style.alignItems = 'center';
               parentRow.style.flexWrap = 'nowrap';
 
+              // Observe row for responsive auto-collapse
+              window.__antigravityResizeObserver.observe(parentRow);
+
               // Remove existing older version badges
               let badge = parentRow.querySelector('.antigravity-context-badge');
-              if (badge && badge.__v !== 5) {
+              if (badge && badge.__v !== 6) {
                 badge.remove();
                 badge = null;
               }
 
               if (!badge) {
                 badge = document.createElement('div');
-                badge.__v = 5;
+                badge.__v = 6;
                 badge.className = 'antigravity-context-badge';
-                badge.style.display = 'inline-flex';
-                badge.style.alignItems = 'center';
-                badge.style.height = '24px';
-                badge.style.gap = '6px';
-                badge.style.borderRadius = '9999px';
-                badge.style.padding = '0 8px 0 6px';
-                badge.style.fontSize = '11px';
-                badge.style.userSelect = 'none';
-                badge.style.backgroundColor = 'rgba(255, 255, 255, 0.08)';
-                badge.style.color = '#a1a1aa';
-                badge.style.border = '1px solid rgba(255, 255, 255, 0.12)';
-                badge.style.cursor = 'pointer';
-                badge.style.flexShrink = '0';
-                badge.style.marginLeft = '8px';
-                badge.style.whiteSpace = 'nowrap';
-                badge.style.transition = 'background-color 0.15s ease, border-color 0.15s ease';
+
+                // Initial size check
+                if (parentRow.offsetWidth < 265) {
+                  badge.classList.add('compact');
+                }
 
                 badge.addEventListener('mouseenter', () => {
                   isHoveringBadge = true;
-                  badge.style.backgroundColor = 'rgba(255, 255, 255, 0.14)';
-                  badge.style.borderColor = 'rgba(255, 255, 255, 0.25)';
                   showPopover(badge, badge.__currentMetric || m);
                 });
 
                 badge.addEventListener('mouseleave', () => {
                   isHoveringBadge = false;
-                  badge.style.backgroundColor = 'rgba(255, 255, 255, 0.08)';
-                  badge.style.borderColor = 'rgba(255, 255, 255, 0.12)';
                   scheduleHide();
                 });
 
@@ -491,7 +537,7 @@ async function injectContextUI() {
               badge.__currentMetric = m;
               const pctNum = m.pctNumber || parseFloat(m.pct) || 0;
 
-              // Only re-render innerHTML if token count actually changed to prevent DOM thrashing
+              // Only re-render if token count or structure changed
               if (badge.__lastTokens !== m.estTokens) {
                 badge.__lastTokens = m.estTokens;
 
@@ -500,11 +546,15 @@ async function injectContextUI() {
                 else if (pctNum >= 60) statusColor = '#f97316';
                 else if (pctNum >= 25) statusColor = '#eab308';
 
+                badge.title = 'Contexto: ' + m.estTokens.toLocaleString() + ' tokens (' + m.pct + '%) de 1M - Clic para desglose';
+
                 badge.innerHTML = \`
                   \${getGaugeSvg(pctNum, 17)}
-                  <span style="font-weight: 600; color: \${statusColor}; font-family: monospace; pointer-events: none;">\${m.displayTokens}</span>
-                  <span style="opacity: 0.45; font-size: 10px; pointer-events: none;">/1M</span>
-                  <span style="background: \${statusColor}22; color: \${statusColor}; padding: 0 4px; border-radius: 9999px; font-size: 9.5px; font-weight: 600; margin-left: 2px; pointer-events: none;">\${m.pct}%</span>
+                  <span class="badge-label-group">
+                    <span style="font-weight: 600; color: \${statusColor}; font-family: monospace; pointer-events: none;">\${m.displayTokens}</span>
+                    <span style="opacity: 0.45; font-size: 10px; pointer-events: none;">/1M</span>
+                    <span style="background: \${statusColor}22; color: \${statusColor}; padding: 0 4px; border-radius: 9999px; font-size: 9.5px; font-weight: 600; margin-left: 2px; pointer-events: none;">\${m.pct}%</span>
+                  </span>
                 \`;
               }
             }
@@ -512,7 +562,7 @@ async function injectContextUI() {
 
           syncAll();
           window.__antigravityGaugeLoop = setInterval(syncAll, 1200);
-          return "Gauge and breakdown popover v5 (Zero-Flicker & Pin Support) initialized!";
+          return "Context Tachometer v6 with ResizeObserver & Compact Split Mode initialized!";
         })()
       `;
 
