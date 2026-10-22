@@ -183,9 +183,9 @@ The framework defines target slots mapped to Antigravity 2.0 DOM selectors:
 - [x] Implement `mods/context-tachometer/index.js` matching the new `AntigravityMod` contract.
 
 ### Phase 4: Build System & Multi-Mod Bundling
-- [ ] Update `build.js` to bundle the Core Host together with all enabled mods into `dist/antigravity_mod_loader.mjs`.
-- [ ] Deploy the bundle to `~/.gemini/config/mods/` and configure `~/.gemini/config/hooks.json`.
-- [ ] Verify simultaneous mounting and unmounting of multiple mock mods.
+- [x] Update `build.js` to bundle the Core Host together with all enabled mods into `dist/antigravity_mod_loader.mjs`.
+- [x] Deploy the bundle to `~/.gemini/config/mods/` and configure `~/.gemini/config/hooks.json`.
+- [x] Verify simultaneous mounting and unmounting of multiple mock mods.
 
 ### Phase 5: Developer Ergonomics & Documentation
 - [ ] Provide a boilerplate template for creating new mods in 5 minutes (`mods/template/`).
