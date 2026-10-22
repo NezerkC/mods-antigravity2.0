@@ -33,24 +33,30 @@ async function verifyLiveLoader() {
     const probeExpression = `
       (() => {
         const slot = document.getElementById('antigravity-slot-header-actions');
-        const badge = document.getElementById('antigravity-tachometer-badge');
+        const tachometer = document.getElementById('antigravity-tachometer-badge');
+        const agentBadge = document.getElementById('antigravity-agent-badge');
+        const activeAgentLabel = document.getElementById('antigravity-active-agent-name');
         const modsRegistry = window.__antigravityMods;
         return {
           hasSlot: Boolean(slot),
-          hasBadge: Boolean(badge),
+          hasTachometer: Boolean(tachometer),
+          hasAgentBadge: Boolean(agentBadge),
+          activeAgent: activeAgentLabel ? activeAgentLabel.textContent : null,
           hasRegistry: Boolean(modsRegistry),
-          activeBadgeTitle: badge ? badge.getAttribute('title') : null
+          activeBadgeTitle: tachometer ? tachometer.getAttribute('title') : null
         };
       })()
     `;
 
     const result = await client.evaluate(probeExpression);
     console.log('[3/3] Electron DOM Evaluation completed:');
-    console.log('   - Slot Header Actions present:', result.value.hasSlot ? '✅ YES' : '❌ NO');
-    console.log('   - Tachometer Badge mounted:   ', result.value.hasBadge ? '✅ YES' : '❌ NO');
-    console.log('   - Mod Registry active:        ', result.value.hasRegistry ? '✅ YES' : '❌ NO');
+    console.log('   - Slot Header Actions present:  ', result.value.hasSlot ? '✅ YES' : '❌ NO');
+    console.log('   - Tachometer Badge mounted:     ', result.value.hasTachometer ? '✅ YES' : '❌ NO');
+    console.log('   - Agent Selector Badge mounted: ', result.value.hasAgentBadge ? '✅ YES' : '❌ NO');
+    console.log('   - Active Selected Agent:        ', result.value.activeAgent ? `"${result.value.activeAgent}"` : 'None');
+    console.log('   - Mod Registry active:          ', result.value.hasRegistry ? '✅ YES' : '❌ NO');
     if (result.value.activeBadgeTitle) {
-      console.log(`   - Live Telemetry Tooltip:      "${result.value.activeBadgeTitle}"`);
+      console.log(`   - Live Telemetry Tooltip:       "${result.value.activeBadgeTitle}"`);
     }
 
     console.log('\n🎉 Smoke test completed successfully!');

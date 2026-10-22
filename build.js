@@ -36,7 +36,17 @@ async function build() {
     .replace(/const __dirname = .*?;/, '')
     .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(tachometerCss)};`);
 
-  // 3. Assemble Standalone Bundle
+  // 3. Read Agent Selector Mod sources
+  const agentIconSvg = cleanModuleCode('mods/agent-selector/components/AgentIconSvg.js');
+  const agentDropdownHtml = cleanModuleCode('mods/agent-selector/components/AgentDropdownHtml.js');
+  const agentSelectorCss = fs.readFileSync(path.resolve('mods/agent-selector/styles.css'), 'utf-8');
+
+  const agentSelectorIndex = cleanModuleCode('mods/agent-selector/index.js')
+    .replace(/const __filename = .*?;/, '')
+    .replace(/const __dirname = .*?;/, '')
+    .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(agentSelectorCss)};`);
+
+  // 4. Assemble Standalone Bundle
   const bundle = `// Antigravity Mod Framework Runtime Host (Bundle)
 import fs from 'node:fs';
 import path from 'node:path';
@@ -67,11 +77,19 @@ ${popoverHtml}
 
 ${tachometerIndex}
 
+// ===================== Agent Selector Mod =====================
+${agentIconSvg}
+
+${agentDropdownHtml}
+
+${agentSelectorIndex}
+
 // ======================= Entrypoint Execution =======================
 async function main() {
   try {
     const host = new ModHost();
     host.registerMod(new ContextTachometerMod());
+    host.registerMod(new AgentSelectorMod());
     await host.dispatch();
   } catch (err) {
     // Fail silently in background hook context

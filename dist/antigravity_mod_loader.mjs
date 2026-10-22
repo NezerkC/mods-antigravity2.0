@@ -1055,11 +1055,236 @@ class ContextTachometerMod extends AntigravityMod {
 }
 
 
+// ===================== Agent Selector Mod =====================
+/**
+ * Vector SVG representation of the Fedora Hat and Sunglasses icon.
+ * Matches the classic spy / agent silhouette.
+ */
+function renderAgentIconSvg(size = 16) {
+  return `
+    <svg class="antigravity-agent-icon" viewBox="0 0 100 100" width="${size}" height="${size}" fill="currentColor" style="vertical-align: middle; flex-shrink: 0; overflow: visible;">
+      <!-- Fedora Hat Crown with classic crease -->
+      <path d="M 33 40 C 29 23, 40 13, 50 18 C 60 13, 71 23, 67 40 Z" />
+      
+      <!-- Hat Ribbon Band -->
+      <path d="M 31 38 C 44 35, 56 35, 69 38 L 71 43 C 57 40, 43 40, 29 43 Z" opacity="0.8" />
+      
+      <!-- Wide Curved Brim -->
+      <path d="M 12 47 C 32 38, 68 38, 88 47 C 68 43, 32 43, 12 47 Z" />
+      
+      <!-- Sunglasses Frame -->
+      <path d="M 24 57 C 24 53, 46 53, 47 57 L 46 69 C 45 77, 26 77, 25 69 Z" />
+      <path d="M 53 57 C 54 53, 76 53, 76 57 L 75 69 C 74 77, 55 77, 54 69 Z" />
+      
+      <!-- Sunglasses Bridge -->
+      <path d="M 46 57 Q 50 54 54 57" stroke="currentColor" stroke-width="3" stroke-linecap="round" fill="none" />
+      
+      <!-- Lens Gloss Highlights -->
+      <path d="M 28 58 Q 38 56 42 61" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" fill="none" opacity="0.6" />
+      <path d="M 57 58 Q 67 56 71 61" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" fill="none" opacity="0.6" />
+    </svg>
+  `.trim();
+}
+
+
+const AGENT_REGISTRY = [
+  {
+    id: 'lead-architect',
+    name: 'Lead Architect',
+    role: 'Multi-Agent Orchestrator & Hexagonal Design',
+    category: 'Architecture',
+    icon: '🏛️',
+    badgeColor: '#38bdf8'
+  },
+  {
+    id: 'product-manager',
+    name: 'Product Manager',
+    role: 'Business Discovery & PRD Formulation',
+    category: 'Discovery',
+    icon: '📋',
+    badgeColor: '#a855f7'
+  },
+  {
+    id: 'scrum-master',
+    name: 'Scrum Master',
+    role: 'Epics, User Stories & Backlog Refinement',
+    category: 'Delivery',
+    icon: '⏱️',
+    badgeColor: '#ec4899'
+  },
+  {
+    id: 'code-reviewer',
+    name: 'Code Reviewer',
+    role: 'Clean Architecture Invariants & PR Gates',
+    category: 'Quality',
+    icon: '🔍',
+    badgeColor: '#10b981'
+  },
+  {
+    id: 'security-engineer',
+    name: 'Security Engineer',
+    role: 'OWASP Top 10, Zero Trust & Hardening',
+    category: 'Quality',
+    icon: '🛡️',
+    badgeColor: '#ef4444'
+  },
+  {
+    id: 'devops-cloud',
+    name: 'DevOps & Cloud',
+    role: 'Deterministic CI/CD, Docker & GitOps',
+    category: 'Delivery',
+    icon: '🚀',
+    badgeColor: '#f59e0b'
+  },
+  {
+    id: 'ui-ux-pro',
+    name: 'UI/UX Pro Max',
+    role: 'Design Tokens, A11y & Visual Systems',
+    category: 'Frontend',
+    icon: '🎨',
+    badgeColor: '#06b6d4'
+  },
+  {
+    id: 'rpa-windows',
+    name: 'Windows RPA',
+    role: 'PowerShell Automation & Desktop Tasks',
+    category: 'Automation',
+    icon: '🤖',
+    badgeColor: '#8b5cf6'
+  }
+];
+
+function renderAgentDropdownHtml(activeAgentId = 'lead-architect') {
+  const itemsHtml = AGENT_REGISTRY.map(agent => {
+    const isSelected = agent.id === activeAgentId;
+    return `
+      <div 
+        class="antigravity-agent-item ${isSelected ? 'selected' : ''}" 
+        data-agent-id="${agent.id}"
+        data-agent-name="${agent.name}"
+        data-agent-icon="${agent.icon}"
+        onclick="window.__selectAntigravityAgent('${agent.id}', '${agent.name}')"
+      >
+        <span class="agent-item-icon">${agent.icon}</span>
+        <div class="agent-item-details">
+          <div class="agent-item-name-row">
+            <span class="agent-item-name">${agent.name}</span>
+            <span class="agent-item-category">${agent.category}</span>
+          </div>
+          <div class="agent-item-role">${agent.role}</div>
+        </div>
+        <span class="agent-check">${isSelected ? '✓' : ''}</span>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="antigravity-agent-dropdown">
+      <div class="agent-dropdown-header">
+        <div class="agent-dropdown-title">
+          <span>🕶️</span>
+          <span>Active Architecture Specialist</span>
+        </div>
+        <span class="agent-dropdown-count">${AGENT_REGISTRY.length} Available</span>
+      </div>
+      <div class="agent-list-scroll">
+        ${itemsHtml}
+      </div>
+    </div>
+  `.trim();
+}
+
+
+
+
+
+
+
+
+
+
+
+class AgentSelectorMod extends AntigravityMod {
+  constructor() {
+    super({
+      id: 'agent-selector',
+      name: 'Agent Role Selector',
+      version: '1.0.0',
+      slot: 'header-actions',
+      priority: 45
+    });
+
+    this.cachedCss = ".antigravity-agent-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  padding: 4px 10px 4px 7px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n  font-size: 11px;\n  line-height: 1;\n  color: #f4f4f5;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n}\n\n.antigravity-agent-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  transform: translateY(-0.5px);\n  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);\n}\n\n.antigravity-agent-badge:active {\n  transform: translateY(0.5px);\n}\n\n.agent-label {\n  font-weight: 500;\n  letter-spacing: -0.01em;\n  color: #e4e4e7;\n  white-space: nowrap;\n}\n\n.agent-caret {\n  font-size: 8px;\n  color: #a1a1aa;\n  margin-left: 1px;\n  transition: transform 0.2s ease;\n}\n\n.antigravity-agent-badge:hover .agent-caret {\n  transform: rotate(180deg);\n}\n\n/* Responsive shrinking for narrow resolutions */\n@media (max-width: 960px) {\n  .agent-label {\n    display: none;\n  }\n  .agent-caret {\n    display: none;\n  }\n  .antigravity-agent-badge {\n    padding: 4px 6px;\n  }\n}\n\n/* Interactive Dropdown Popover */\n.antigravity-agent-dropdown-wrapper {\n  position: absolute;\n  top: calc(100% + 8px);\n  left: 0;\n  z-index: 99999;\n  display: none;\n  animation: agentFadeIn 0.15s ease-out;\n}\n\n.antigravity-agent-badge:hover .antigravity-agent-dropdown-wrapper,\n.antigravity-agent-badge:focus-within .antigravity-agent-dropdown-wrapper,\n.antigravity-agent-dropdown-wrapper:hover {\n  display: block;\n}\n\n.antigravity-agent-dropdown {\n  width: 320px;\n  max-height: 420px;\n  background: #18181b;\n  color: #f4f4f5;\n  border: 1px solid rgba(255, 255, 255, 0.16);\n  border-radius: 12px;\n  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);\n  backdrop-filter: blur(20px);\n  -webkit-backdrop-filter: blur(20px);\n  padding: 10px;\n  display: flex;\n  flex-direction: column;\n  pointer-events: auto;\n}\n\n.agent-dropdown-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 6px 8px 10px 8px;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08);\n  margin-bottom: 6px;\n}\n\n.agent-dropdown-title {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-weight: 600;\n  font-size: 12px;\n  color: #ffffff;\n}\n\n.agent-dropdown-count {\n  font-size: 10px;\n  padding: 2px 6px;\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, 0.08);\n  color: #a1a1aa;\n}\n\n.agent-list-scroll {\n  overflow-y: auto;\n  max-height: 330px;\n  display: flex;\n  flex-direction: column;\n  gap: 3px;\n  padding-right: 2px;\n}\n\n.agent-list-scroll::-webkit-scrollbar {\n  width: 4px;\n}\n\n.agent-list-scroll::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15);\n  border-radius: 4px;\n}\n\n.antigravity-agent-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 8px 10px;\n  border-radius: 8px;\n  cursor: pointer;\n  transition: all 0.12s ease;\n  border: 1px solid transparent;\n}\n\n.antigravity-agent-item:hover {\n  background: rgba(255, 255, 255, 0.07);\n  border-color: rgba(255, 255, 255, 0.1);\n  transform: translateX(1px);\n}\n\n.antigravity-agent-item.selected {\n  background: rgba(56, 189, 248, 0.12);\n  border-color: rgba(56, 189, 248, 0.3);\n}\n\n.agent-item-icon {\n  font-size: 16px;\n  flex-shrink: 0;\n}\n\n.agent-item-details {\n  flex: 1;\n  min-width: 0;\n}\n\n.agent-item-name-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  margin-bottom: 2px;\n}\n\n.agent-item-name {\n  font-size: 12px;\n  font-weight: 600;\n  color: #ffffff;\n}\n\n.agent-item-category {\n  font-size: 9.5px;\n  text-transform: uppercase;\n  color: #71717a;\n  letter-spacing: 0.03em;\n}\n\n.agent-item-role {\n  font-size: 10.5px;\n  color: #a1a1aa;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.agent-check {\n  font-size: 12px;\n  font-weight: bold;\n  color: #38bdf8;\n  width: 14px;\n  text-align: right;\n  flex-shrink: 0;\n}\n\n@keyframes agentFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(-4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
+  }
+
+  /**
+   * Renders the agent badge with the fedora/sunglasses icon and interactive selection dropdown.
+   * @param {Object} context
+   * @returns {{ html: string, css: string }}
+   */
+  render(context = {}) {
+    const iconSvg = renderAgentIconSvg(16);
+    const initialAgentName = 'Lead Architect';
+    const dropdownHtml = renderAgentDropdownHtml('lead-architect');
+
+    const html = `
+      <div id="antigravity-agent-badge" class="antigravity-agent-badge" title="Active Specialist: ${initialAgentName}" tabindex="0">
+        ${iconSvg}
+        <span id="antigravity-active-agent-name" class="agent-label">${initialAgentName}</span>
+        <span class="agent-caret">▼</span>
+        <div class="antigravity-agent-dropdown-wrapper">
+          ${dropdownHtml}
+        </div>
+        <script>
+          if (!window.__selectAntigravityAgent) {
+            window.__selectAntigravityAgent = function(agentId, agentName) {
+              const label = document.getElementById('antigravity-active-agent-name');
+              const badge = document.getElementById('antigravity-agent-badge');
+              if (label) label.textContent = agentName;
+              if (badge) badge.setAttribute('title', 'Active Specialist: ' + agentName);
+              try {
+                localStorage.setItem('__antigravity_selected_agent', JSON.stringify({ id: agentId, name: agentName }));
+              } catch (e) {}
+
+              // Update active tick marks in list
+              const items = document.querySelectorAll('.antigravity-agent-item');
+              items.forEach(el => {
+                const isMatch = el.getAttribute('data-agent-id') === agentId;
+                el.classList.toggle('selected', isMatch);
+                const check = el.querySelector('.agent-check');
+                if (check) check.textContent = isMatch ? '✓' : '';
+              });
+            };
+
+            // Restore saved preference if exists
+            try {
+              const saved = localStorage.getItem('__antigravity_selected_agent');
+              if (saved) {
+                const parsed = JSON.parse(saved);
+                if (parsed && parsed.name) {
+                  window.__selectAntigravityAgent(parsed.id, parsed.name);
+                }
+              }
+            } catch (e) {}
+          }
+        </script>
+      </div>
+    `.trim();
+
+    return {
+      html,
+      css: this.cachedCss
+    };
+  }
+}
+
+
 // ======================= Entrypoint Execution =======================
 async function main() {
   try {
     const host = new ModHost();
     host.registerMod(new ContextTachometerMod());
+    host.registerMod(new AgentSelectorMod());
     await host.dispatch();
   } catch (err) {
     // Fail silently in background hook context
