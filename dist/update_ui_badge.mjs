@@ -831,6 +831,15 @@ class ModLoader {
           });
         };
 
+        window.__switchAgentTab = function(tabId) {
+          document.querySelectorAll('.agent-tab-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.getAttribute('data-tab') === tabId);
+          });
+          document.querySelectorAll('.agent-tab-content').forEach(panel => {
+            panel.classList.toggle('active', panel.getAttribute('data-tab-content') === tabId);
+          });
+        };
+
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
         window.__renderModsManagerPanelHtml = ${renderModsManagerPanelHtml.toString()};
 
@@ -1972,7 +1981,7 @@ class ContextTachometerMod extends AntigravityMod {
       priority: 50
     });
 
-    this.cachedCss = ".antigravity-tachometer-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  height: 28px;\n  box-sizing: border-box;\n  padding: 0 8px 0 6px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;\n  font-size: 11px;\n  line-height: 28px;\n  color: #e4e4e7;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n  flex-shrink: 0;\n}\n\n.antigravity-tachometer-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\n}\n\n.antigravity-tachometer-badge:active {\n  background: rgba(255, 255, 255, 0.14);\n}\n\n/* Responsive compact mode (Speedometer SVG only, hides labels, exact 28x28 circle) */\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) {\n  width: 28px !important;\n  height: 28px !important;\n  min-width: 28px !important;\n  padding: 0 !important;\n  gap: 0 !important;\n  justify-content: center !important;\n  border-radius: 9999px !important;\n  box-sizing: border-box !important;\n}\n\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {\n  display: none !important;\n}\n\n.antigravity-tachometer-badge.open {\n  background: rgba(255, 255, 255, 0.12) !important;\n  border-color: rgba(255, 255, 255, 0.3) !important;\n}\n\n/* Responsive shrinking for narrow screen resolutions */\n@media (max-width: 960px) {\n  .antigravity-tachometer-badge:not(.open):not(.pinned) {\n    width: 28px !important;\n    height: 28px !important;\n    min-width: 28px !important;\n    padding: 0 !important;\n    gap: 0 !important;\n    justify-content: center !important;\n    border-radius: 9999px !important;\n    box-sizing: border-box !important;\n  }\n  .antigravity-tachometer-badge:not(.open):not(.pinned) .tachometer-tokens,\n  .antigravity-tachometer-badge:not(.open):not(.pinned) .tachometer-pct {\n    display: none !important;\n  }\n}\n\n/* Interactive Tachometer Popover Portal (Fixed to Viewport) */\n.antigravity-tachometer-popover-portal {\n  position: fixed !important;\n  z-index: 999999 !important;\n  display: none;\n  animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\n}\n\n.antigravity-tachometer-popover-portal.open {\n  display: block !important;\n}\n\n.antigravity-popover-container {\n  display: none !important;\n}\n\n@keyframes popoverFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(-4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
+    this.cachedCss = ".antigravity-tachometer-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 8px 0 6px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #e4e4e7;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.antigravity-tachometer-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-tachometer-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n/* Responsive compact mode (Speedometer SVG only, hides labels, exact 28x28 circle) */\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) {\r\n  width: 28px !important;\r\n  height: 28px !important;\r\n  min-width: 28px !important;\r\n  padding: 0 !important;\r\n  gap: 0 !important;\r\n  justify-content: center !important;\r\n  border-radius: 9999px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n/* Responsive shrinking for narrow screen resolutions */\r\n@media (max-width: 960px) {\r\n  .antigravity-tachometer-badge:not(.open):not(.pinned) {\r\n    width: 28px !important;\r\n    height: 28px !important;\r\n    min-width: 28px !important;\r\n    padding: 0 !important;\r\n    gap: 0 !important;\r\n    justify-content: center !important;\r\n    border-radius: 9999px !important;\r\n    box-sizing: border-box !important;\r\n  }\r\n  .antigravity-tachometer-badge:not(.open):not(.pinned) .tachometer-tokens,\r\n  .antigravity-tachometer-badge:not(.open):not(.pinned) .tachometer-pct {\r\n    display: none !important;\r\n  }\r\n}\r\n\r\n/* Interactive Tachometer Popover Portal (Fixed to Viewport) */\r\n.antigravity-tachometer-popover-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\r\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\r\n}\r\n\r\n.antigravity-tachometer-popover-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-popover-container {\r\n  display: none !important;\r\n}\r\n\r\n@keyframes popoverFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-4px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n";
   }
 
   /**
@@ -2052,8 +2061,9 @@ function renderAgentIconSvg(size = 16) {
 }
 
 
+
 const PALETTE = [
-  'hsl(199, 89%, 60%)', // Sky / Cyan (Lead Architect)
+  'hsl(199, 89%, 60%)', // Sky / Cyan (Lead Architect - Planner)
   'hsl(271, 91%, 65%)', // Purple (Product Manager)
   'hsl(330, 81%, 60%)', // Rose / Pink (Scrum Master)
   'hsl(158, 64%, 52%)', // Emerald / Mint (Code Reviewer)
@@ -2061,7 +2071,7 @@ const PALETTE = [
   'hsl(38, 92%, 50%)',  // Amber / Gold (DevOps & Cloud)
   'hsl(175, 75%, 45%)', // Teal (UI/UX Pro Max)
   'hsl(250, 85%, 65%)', // Indigo / Violet (Windows RPA)
-  'hsl(215, 90%, 60%)', // Electric Blue (SDD Orchestrator)
+  'hsl(215, 90%, 60%)', // Electric Blue (SDD Orchestrator - Builder)
   'hsl(45, 93%, 58%)',  // Sun Yellow (SDD Explore)
   'hsl(290, 80%, 65%)', // Orchid (SDD Spec)
   'hsl(24, 95%, 55%)',  // Blaze Orange (SDD Apply TDD)
@@ -2070,120 +2080,170 @@ const PALETTE = [
 ];
 
 const AGENT_REGISTRY = [
-  // --- Bóveda de Arquitectura (Gobernanza & Estrategia) ---
+  // =========================================================================
+  // 1. CÚSPIDE (GOBERNANZA GLOBAL & DIRECCIÓN DE OBRA)
+  // =========================================================================
   {
     id: 'lead-architect',
     name: 'Lead Architect',
+    level: 'cuspide',
+    levelLabel: 'PLANNER',
+    levelDesc: 'Estratega (Plano Maestro)',
     role: 'Multi-Agent Orchestrator & Hexagonal Design',
     category: 'Vault Architecture',
     suite: 'Bóveda',
-    icon: '🏛️'
+    iconName: 'layers'
   },
+  {
+    id: 'sdd-orchestrator',
+    name: 'SDD Orchestrator',
+    level: 'cuspide',
+    levelLabel: 'BUILDER',
+    levelDesc: 'Director de Obra (Flujo Táctico)',
+    role: 'Spec-Driven Router & Flow Controller',
+    category: 'Gentleman SDD',
+    suite: 'Gentleman',
+    iconName: 'compass'
+  },
+
+  // =========================================================================
+  // 2. MICRO-ORQUESTADORES (LÍDERES DE DOMINIO & COORDINACIÓN)
+  // =========================================================================
   {
     id: 'product-manager',
     name: 'Product Manager',
+    level: 'micro',
+    levelLabel: 'DISCOVERY',
+    levelDesc: 'Requerimientos & PRD',
     role: 'Business Discovery & PRD Formulation',
     category: 'Discovery',
     suite: 'Bóveda',
-    icon: '📋'
+    iconName: 'clipboard-list'
   },
   {
     id: 'scrum-master',
     name: 'Scrum Master',
+    level: 'micro',
+    levelLabel: 'DELIVERY',
+    levelDesc: 'Epics & Backlog Sprints',
     role: 'Epics, User Stories & Backlog Refinement',
     category: 'Delivery',
     suite: 'Bóveda',
-    icon: '⏱️'
+    iconName: 'timer'
   },
   {
     id: 'code-reviewer',
     name: 'Code Reviewer',
+    level: 'micro',
+    levelLabel: 'QUALITY',
+    levelDesc: 'Invariantes & PR Gates',
     role: 'Clean Architecture Invariants & PR Gates',
     category: 'Quality',
     suite: 'Bóveda',
-    icon: '🔍'
+    iconName: 'git-pull-request'
   },
   {
     id: 'security-engineer',
     name: 'Security Engineer',
+    level: 'micro',
+    levelLabel: 'SECURITY',
+    levelDesc: 'OWASP & Hardening Zero Trust',
     role: 'OWASP Top 10, Zero Trust & Hardening',
     category: 'Quality',
     suite: 'Bóveda',
-    icon: '🛡️'
+    iconName: 'shield-check'
   },
   {
     id: 'devops-cloud',
     name: 'DevOps & Cloud',
+    level: 'micro',
+    levelLabel: 'INFRA',
+    levelDesc: 'CI/CD, Docker & GitOps',
     role: 'Deterministic CI/CD, Docker & GitOps',
     category: 'Delivery',
     suite: 'Bóveda',
-    icon: '🚀'
+    iconName: 'server'
   },
   {
     id: 'ui-ux-pro',
     name: 'UI/UX Pro Max',
+    level: 'micro',
+    levelLabel: 'FRONTEND',
+    levelDesc: 'Design Tokens & A11y',
     role: 'Design Tokens, A11y & Visual Systems',
     category: 'Frontend',
     suite: 'Bóveda',
-    icon: '🎨'
+    iconName: 'palette'
   },
   {
     id: 'rpa-windows',
     name: 'Windows RPA',
+    level: 'micro',
+    levelLabel: 'AUTOMATION',
+    levelDesc: 'PowerShell & Desktop Tasks',
     role: 'PowerShell Automation & Desktop Tasks',
     category: 'Automation',
     suite: 'Bóveda',
-    icon: '🤖'
+    iconName: 'terminal'
   },
 
-  // --- Suite SDD Gentleman Programming (Táctica & Ejecución) ---
-  {
-    id: 'sdd-orchestrator',
-    name: 'SDD Orchestrator',
-    role: 'Spec-Driven Router & Flow Controller',
-    category: 'Gentleman SDD',
-    suite: 'Gentleman',
-    icon: '🧭'
-  },
+  // =========================================================================
+  // 3. NANO-AGENTES (OPERATIVOS & EJECUCIÓN ATÓMICA SDD)
+  // =========================================================================
   {
     id: 'sdd-explore',
     name: 'SDD Explore',
+    level: 'nano',
+    levelLabel: 'EXPLORE',
+    levelDesc: 'Investigación de Código',
     role: 'Codebase Investigator & Pattern Discovery',
     category: 'Gentleman SDD',
     suite: 'Gentleman',
-    icon: '🔎'
+    iconName: 'search'
   },
   {
     id: 'sdd-spec',
     name: 'SDD Spec',
+    level: 'nano',
+    levelLabel: 'SPEC',
+    levelDesc: 'Escenarios BDD Formales',
     role: 'Formal Specifications & BDD Scenarios',
     category: 'Gentleman SDD',
     suite: 'Gentleman',
-    icon: '📝'
+    iconName: 'file-text'
   },
   {
     id: 'sdd-apply',
     name: 'SDD Apply (TDD)',
+    level: 'nano',
+    levelLabel: 'APPLY',
+    levelDesc: 'Implementador Red-Green-Refactor',
     role: 'Strict Red-Green-Refactor Code Implementer',
     category: 'Gentleman SDD',
     suite: 'Gentleman',
-    icon: '⚡'
+    iconName: 'zap'
   },
   {
     id: 'sdd-verify',
     name: 'SDD Verify',
+    level: 'nano',
+    levelLabel: 'VERIFY',
+    levelDesc: 'Gate de Pruebas & Compliance',
     role: 'Scenario Compliance & Test Verification Gate',
     category: 'Gentleman SDD',
     suite: 'Gentleman',
-    icon: '✅'
+    iconName: 'check-circle'
   },
   {
     id: 'gga-review',
     name: 'Guardian Angel (GGA)',
+    level: 'nano',
+    levelLabel: 'GUARD',
+    levelDesc: 'Pre-Commit & Cultura',
     role: 'Git Pre-Commit Standards & Code Culture Guard',
     category: 'Gentleman SDD',
     suite: 'Gentleman',
-    icon: '👼'
+    iconName: 'shield-alert'
   }
 ];
 
@@ -2206,76 +2266,183 @@ function getAgentColor(agentId) {
   return `hsl(${hue}, 85%, 62%)`;
 }
 
+/**
+ * Renders the hierarchical dropdown card markup using Lucide SVG vectors.
+ * @param {string} activeAgentId
+ * @param {Array} dynamicAgents
+ * @returns {string} HTML markup
+ */
 function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynamicAgents = []) {
   const mergedMap = new Map();
-  // 1. Base canonical specialists
   for (const a of AGENT_REGISTRY) {
     mergedMap.set(a.id, a);
   }
-  // 2. Dynamically discovered markdown agents
   if (Array.isArray(dynamicAgents)) {
     for (const a of dynamicAgents) {
       if (a && a.id && !mergedMap.has(a.id)) {
-        mergedMap.set(a.id, a);
+        mergedMap.set(a.id, {
+          ...a,
+          level: 'custom',
+          levelLabel: 'CUSTOM',
+          levelDesc: 'Especialista Markdown',
+          iconName: 'default-custom'
+        });
       }
     }
   }
 
   const allAgents = Array.from(mergedMap.values());
-  const vaultAgents = allAgents.filter(a => a.suite === 'Bóveda');
-  const sddAgents = allAgents.filter(a => a.suite === 'Gentleman' || a.suite === 'Gentleman SDD');
-  const customAgents = allAgents.filter(a => a.suite !== 'Bóveda' && a.suite !== 'Gentleman' && a.suite !== 'Gentleman SDD');
+  const cuspideAgents = allAgents.filter(a => a.level === 'cuspide');
+  const microAgents = allAgents.filter(a => a.level === 'micro');
+  const nanoAgents = allAgents.filter(a => a.level === 'nano');
+  const customAgents = allAgents.filter(a => a.level === 'custom');
 
-  const renderGroup = (title, icon, agents) => {
-    if (!agents.length) return '';
+  // Render a Cúspide Hero card (Planner or Builder)
+  const renderCuspideCard = (agent) => {
+    const isSelected = agent.id === activeAgentId;
+    const color = getAgentColor(agent.id);
+    const safeName = (agent.name || '').replace(/'/g, "\\'");
+    const svgIcon = renderAgentSvg(agent.id, 18, 2, 'cuspide-svg-icon');
+
     return `
-      <div class="agent-section-header">
-        <span>${icon}</span>
-        <span>${title}</span>
-      </div>
-      ${agents.map(agent => {
-        const isSelected = agent.id === activeAgentId;
-        const color = getAgentColor(agent.id);
-        const safeName = (agent.name || '').replace(/'/g, "\\'");
-        return `
-          <div 
-            class="antigravity-agent-item ${isSelected ? 'selected' : ''}" 
-            data-agent-id="${agent.id}"
-            data-agent-name="${safeName}"
-            data-agent-color="${color}"
-            data-agent-icon="${agent.icon || '🤖'}"
-            onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}')"
-          >
-            <span class="agent-color-dot" style="background: ${color}; box-shadow: 0 0 8px ${color}66;"></span>
-            <span class="agent-item-icon">${agent.icon || '🤖'}</span>
-            <div class="agent-item-details">
-              <div class="agent-item-name-row">
-                <span class="agent-item-name">${agent.name}</span>
-                <span class="agent-item-category" style="color: ${color};">${agent.category || 'Specialist'}</span>
-              </div>
-              <div class="agent-item-role">${agent.role || ''}</div>
-            </div>
+      <div 
+        class="antigravity-agent-item cuspide-hero-card ${isSelected ? 'selected' : ''}" 
+        data-agent-id="${agent.id}"
+        data-agent-name="${safeName}"
+        data-agent-color="${color}"
+        style="--agent-theme-color: ${color};"
+        onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}')"
+        title="${agent.name} - ${agent.role}"
+      >
+        <div class="cuspide-top-row">
+          <div class="cuspide-icon-box" style="color: ${color}; background: ${color}1a; border-color: ${color}44;">
+            ${svgIcon}
+          </div>
+          <span class="cuspide-tag" style="background: ${color}26; color: ${color}; border-color: ${color}55;">
+            ${agent.levelLabel}
+          </span>
+        </div>
+        <div class="cuspide-info">
+          <div class="cuspide-name-row">
+            <span class="cuspide-name">${agent.name}</span>
             <span class="agent-check" style="color: ${color};">${isSelected ? '✓' : ''}</span>
           </div>
-        `;
-      }).join('')}
+          <div class="cuspide-desc">${agent.levelDesc}</div>
+        </div>
+      </div>
+    `;
+  };
+
+  // Render compact grid item for Micro or Nano
+  const renderCompactItem = (agent) => {
+    const isSelected = agent.id === activeAgentId;
+    const color = getAgentColor(agent.id);
+    const safeName = (agent.name || '').replace(/'/g, "\\'");
+    const svgIcon = renderAgentSvg(agent.id, 15, 2, 'compact-svg-icon');
+
+    return `
+      <div 
+        class="antigravity-agent-item compact-agent-card ${isSelected ? 'selected' : ''}" 
+        data-agent-id="${agent.id}"
+        data-agent-name="${safeName}"
+        data-agent-color="${color}"
+        style="--agent-theme-color: ${color};"
+        onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}')"
+        title="${agent.name} - ${agent.role}"
+      >
+        <div class="compact-icon-box" style="color: ${color}; background: ${color}18; border-color: ${color}33;">
+          ${svgIcon}
+        </div>
+        <div class="compact-details">
+          <div class="compact-name-row">
+            <span class="compact-name">${agent.name}</span>
+            <span class="agent-check" style="color: ${color};">${isSelected ? '✓' : ''}</span>
+          </div>
+          <div class="compact-sub">${agent.levelDesc || agent.role}</div>
+        </div>
+      </div>
     `;
   };
 
   return `
     <div class="antigravity-agent-dropdown">
+      <!-- HEADER -->
       <div class="agent-dropdown-header">
         <div class="agent-dropdown-title">
-          <span>🕶️</span>
-          <span>Especialistas & Suite SDD</span>
+          <span class="agent-header-icon-box">
+            ${renderAgentSvg('lead-architect', 14, 2)}
+          </span>
+          <div class="agent-header-text">
+            <span class="agent-header-main">Jerarquía de Agentes</span>
+            <span class="agent-header-sub">Control Tower</span>
+          </div>
         </div>
         <span class="agent-dropdown-count">${allAgents.length} Disponibles</span>
       </div>
-      <div class="agent-list-scroll">
-        ${renderGroup('Bóveda de Arquitectura (Gobernanza)', '🏛️', vaultAgents)}
-        ${renderGroup('Suite SDD Gentleman Programming (Táctica)', '⚡', sddAgents)}
-        ${renderGroup('Especialistas Descubiertos (.md)', '📁', customAgents)}
+
+      <!-- 1. CÚSPIDE (GOBERNANZA & ESTRATEGIA) -->
+      <div class="agent-cuspide-section">
+        <div class="agent-section-label">
+          <span>CÚSPIDE · GOBERNANZA & DIRECCIÓN</span>
+        </div>
+        <div class="cuspide-cards-grid">
+          ${cuspideAgents.map(renderCuspideCard).join('')}
+        </div>
       </div>
+
+      <!-- 2. SEGMENTED LEVEL TABS -->
+      <div class="agent-level-tabs">
+        <button 
+          type="button"
+          class="agent-tab-btn active" 
+          data-tab="micro" 
+          onclick="window.__switchAgentTab('micro')"
+        >
+          <span class="tab-icon">${renderAgentSvg('product-manager', 13, 2)}</span>
+          <span>Micro (${microAgents.length})</span>
+        </button>
+        <button 
+          type="button"
+          class="agent-tab-btn" 
+          data-tab="nano" 
+          onclick="window.__switchAgentTab('nano')"
+        >
+          <span class="tab-icon">${renderAgentSvg('sdd-apply', 13, 2)}</span>
+          <span>Nano (${nanoAgents.length})</span>
+        </button>
+        ${customAgents.length > 0 ? `
+          <button 
+            type="button"
+            class="agent-tab-btn" 
+            data-tab="custom" 
+            onclick="window.__switchAgentTab('custom')"
+          >
+            <span class="tab-icon">${renderAgentSvg('default-custom', 13, 2)}</span>
+            <span>Custom (${customAgents.length})</span>
+          </button>
+        ` : ''}
+      </div>
+
+      <!-- 3. TAB CONTENT PANELS -->
+      <div class="agent-tab-content active" data-tab-content="micro">
+        <div class="compact-grid">
+          ${microAgents.map(renderCompactItem).join('')}
+        </div>
+      </div>
+
+      <div class="agent-tab-content" data-tab-content="nano">
+        <div class="compact-grid">
+          ${nanoAgents.map(renderCompactItem).join('')}
+        </div>
+      </div>
+
+      ${customAgents.length > 0 ? `
+        <div class="agent-tab-content" data-tab-content="custom">
+          <div class="compact-grid">
+            ${customAgents.map(renderCompactItem).join('')}
+          </div>
+        </div>
+      ` : ''}
     </div>
   `.trim();
 }
@@ -2302,7 +2469,7 @@ class AgentSelectorMod extends AntigravityMod {
     });
 
     this.discoveryService = options.discoveryService || new AgentDiscoveryService();
-    this.cachedCss = ".antigravity-agent-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  height: 28px;\n  box-sizing: border-box;\n  padding: 0 10px 0 7px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n  font-size: 11px;\n  line-height: 28px;\n  color: #f4f4f5;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n  flex-shrink: 0;\n}\n\n.agent-badge-dot {\n  width: 6px;\n  height: 6px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n  transition: all 0.3s ease;\n}\n\n.agent-color-dot {\n  width: 8px;\n  height: 8px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n}\n\n.antigravity-agent-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\n}\n\n.antigravity-agent-badge:active {\n  background: rgba(255, 255, 255, 0.14);\n}\n\n.antigravity-agent-badge.open {\n  background: rgba(255, 255, 255, 0.12) !important;\n  border-color: rgba(255, 255, 255, 0.3) !important;\n}\n\n.agent-label {\n  font-weight: 500;\n  letter-spacing: -0.01em;\n  color: #e4e4e7;\n  white-space: nowrap;\n}\n\n.agent-caret {\n  font-size: 8px;\n  color: #a1a1aa;\n  margin-left: 1px;\n  transition: transform 0.2s ease;\n}\n\n.antigravity-agent-badge.open .agent-caret {\n  transform: rotate(180deg);\n}\n\n/* Responsive compact mode (Container-driven via ResizeObserver) */\n.antigravity-agent-badge.compact {\n  height: 28px !important;\n  box-sizing: border-box !important;\n  padding: 0 7px !important;\n  gap: 5px !important;\n  border-radius: 9999px !important;\n  justify-content: center !important;\n}\n.antigravity-agent-badge.compact .agent-label,\n.antigravity-agent-badge.compact .agent-caret {\n  display: none !important;\n}\n\n/* Responsive shrinking for narrow screen resolutions */\n@media (max-width: 960px) {\n  .agent-label {\n    display: none !important;\n  }\n  .agent-caret {\n    display: none !important;\n  }\n  .antigravity-agent-badge {\n    height: 28px !important;\n    box-sizing: border-box !important;\n    padding: 0 7px !important;\n    gap: 5px !important;\n    border-radius: 9999px !important;\n    justify-content: center !important;\n  }\n}\n\n/* Interactive Dropdown Portal (Fixed to Viewport, Immune to Clipping & Overflow) */\n.antigravity-agent-dropdown-portal {\n  position: fixed !important;\n  z-index: 999999 !important;\n  display: none;\n  animation: agentFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\n}\n\n.antigravity-agent-dropdown-portal.open {\n  display: block !important;\n}\n\n.antigravity-agent-dropdown-wrapper {\n  display: none !important;\n}\n\n.antigravity-agent-dropdown {\n  width: 320px;\n  max-height: 420px;\n  background: #18181b;\n  color: #f4f4f5;\n  border: 1px solid rgba(255, 255, 255, 0.16);\n  border-radius: 12px;\n  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);\n  backdrop-filter: blur(20px);\n  -webkit-backdrop-filter: blur(20px);\n  padding: 10px;\n  display: flex;\n  flex-direction: column;\n  pointer-events: auto;\n}\n\n.agent-dropdown-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 6px 8px 10px 8px;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08);\n  margin-bottom: 6px;\n}\n\n.agent-section-header {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-size: 10px;\n  font-weight: 700;\n  text-transform: uppercase;\n  letter-spacing: 0.05em;\n  color: #71717a;\n  padding: 8px 8px 4px 8px;\n  border-top: 1px solid rgba(255, 255, 255, 0.05);\n  margin-top: 4px;\n}\n\n.agent-section-header:first-child {\n  border-top: none;\n  margin-top: 0;\n  padding-top: 2px;\n}\n\n.agent-dropdown-title {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-weight: 600;\n  font-size: 12px;\n  color: #ffffff;\n}\n\n.agent-dropdown-count {\n  font-size: 10px;\n  padding: 2px 6px;\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, 0.08);\n  color: #a1a1aa;\n}\n\n.agent-list-scroll {\n  overflow-y: auto;\n  max-height: 330px;\n  display: flex;\n  flex-direction: column;\n  gap: 3px;\n  padding-right: 2px;\n}\n\n.agent-list-scroll::-webkit-scrollbar {\n  width: 4px;\n}\n\n.agent-list-scroll::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15);\n  border-radius: 4px;\n}\n\n.antigravity-agent-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 8px 10px;\n  border-radius: 8px;\n  cursor: pointer;\n  transition: all 0.12s ease;\n  border: 1px solid transparent;\n}\n\n.antigravity-agent-item:hover {\n  background: rgba(255, 255, 255, 0.07);\n  border-color: rgba(255, 255, 255, 0.1);\n  transform: translateX(1px);\n}\n\n.antigravity-agent-item.selected {\n  background: rgba(56, 189, 248, 0.12);\n  border-color: rgba(56, 189, 248, 0.3);\n}\n\n.agent-item-icon {\n  font-size: 16px;\n  flex-shrink: 0;\n}\n\n.agent-item-details {\n  flex: 1;\n  min-width: 0;\n}\n\n.agent-item-name-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  margin-bottom: 2px;\n}\n\n.agent-item-name {\n  font-size: 12px;\n  font-weight: 600;\n  color: #ffffff;\n}\n\n.agent-item-category {\n  font-size: 9.5px;\n  text-transform: uppercase;\n  color: #71717a;\n  letter-spacing: 0.03em;\n}\n\n.agent-item-role {\n  font-size: 10.5px;\n  color: #a1a1aa;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.agent-check {\n  font-size: 12px;\n  font-weight: bold;\n  color: #38bdf8;\n  width: 14px;\n  text-align: right;\n  flex-shrink: 0;\n}\n\n@keyframes agentFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
+    this.cachedCss = "/* =========================================================================\n   ANTIGRAVITY AGENT SELECTOR MOD - STYLES\n   Hierarchical Layout: Cúspide (Planner & Builder), Micro, Nano (Lucide SVGs)\n   ========================================================================= */\n\n.antigravity-agent-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  height: 28px;\n  box-sizing: border-box;\n  padding: 0 10px 0 7px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n  font-size: 11px;\n  line-height: 28px;\n  color: #f4f4f5;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n  flex-shrink: 0;\n}\n\n.agent-badge-dot {\n  width: 6px;\n  height: 6px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n  transition: all 0.3s ease;\n}\n\n.antigravity-agent-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\n}\n\n.antigravity-agent-badge:active {\n  background: rgba(255, 255, 255, 0.14);\n}\n\n.antigravity-agent-badge.open {\n  background: rgba(255, 255, 255, 0.12) !important;\n  border-color: rgba(255, 255, 255, 0.3) !important;\n}\n\n.agent-label {\n  font-weight: 500;\n  letter-spacing: -0.01em;\n  color: #e4e4e7;\n  white-space: nowrap;\n}\n\n.agent-caret {\n  font-size: 8px;\n  color: #a1a1aa;\n  margin-left: 1px;\n  transition: transform 0.2s ease;\n}\n\n.antigravity-agent-badge.open .agent-caret {\n  transform: rotate(180deg);\n}\n\n/* Responsive compact mode */\n.antigravity-agent-badge.compact {\n  height: 28px !important;\n  box-sizing: border-box !important;\n  padding: 0 7px !important;\n  gap: 5px !important;\n  border-radius: 9999px !important;\n  justify-content: center !important;\n}\n.antigravity-agent-badge.compact .agent-label,\n.antigravity-agent-badge.compact .agent-caret {\n  display: none !important;\n}\n\n@media (max-width: 960px) {\n  .agent-label,\n  .agent-caret {\n    display: none !important;\n  }\n  .antigravity-agent-badge {\n    height: 28px !important;\n    box-sizing: border-box !important;\n    padding: 0 7px !important;\n    gap: 5px !important;\n    border-radius: 9999px !important;\n    justify-content: center !important;\n  }\n}\n\n/* =========================================================================\n   DROPDOWN PORTAL (FIXED TO VIEWPORT)\n   ========================================================================= */\n.antigravity-agent-dropdown-portal {\n  position: fixed !important;\n  z-index: 999999 !important;\n  display: none;\n  animation: agentFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\n}\n\n.antigravity-agent-dropdown-portal.open {\n  display: block !important;\n}\n\n.antigravity-agent-dropdown-wrapper {\n  display: none !important;\n}\n\n.antigravity-agent-dropdown {\n  width: 350px;\n  max-height: 480px;\n  background: #14151e;\n  color: #f4f4f5;\n  border: 1px solid rgba(255, 255, 255, 0.14);\n  border-radius: 12px;\n  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.75), 0 2px 8px rgba(0, 0, 0, 0.5);\n  backdrop-filter: blur(24px);\n  -webkit-backdrop-filter: blur(24px);\n  padding: 12px;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  pointer-events: auto;\n  box-sizing: border-box;\n}\n\n/* HEADER */\n.agent-dropdown-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding-bottom: 8px;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08);\n}\n\n.agent-dropdown-title {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.agent-header-icon-box {\n  width: 24px;\n  height: 24px;\n  border-radius: 6px;\n  background: rgba(122, 162, 247, 0.15);\n  color: #7aa2f7;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n}\n\n.agent-header-text {\n  display: flex;\n  flex-direction: column;\n  line-height: 1.2;\n}\n\n.agent-header-main {\n  font-size: 12px;\n  font-weight: 600;\n  color: #ffffff;\n}\n\n.agent-header-sub {\n  font-size: 9.5px;\n  color: #71717a;\n}\n\n.agent-dropdown-count {\n  font-size: 10px;\n  font-weight: 500;\n  padding: 2px 8px;\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, 0.08);\n  color: #a1a1aa;\n  border: 1px solid rgba(255, 255, 255, 0.06);\n}\n\n/* 1. CÚSPIDE (GOBERNANZA & DIRECCIÓN) */\n.agent-cuspide-section {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n\n.agent-section-label {\n  font-size: 9.5px;\n  font-weight: 700;\n  letter-spacing: 0.06em;\n  color: #71717a;\n  text-transform: uppercase;\n}\n\n.cuspide-cards-grid {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: 8px;\n}\n\n.cuspide-hero-card {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n  padding: 8px 10px;\n  background: rgba(255, 255, 255, 0.03);\n  border: 1px solid rgba(255, 255, 255, 0.09);\n  border-radius: 8px;\n  cursor: pointer;\n  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);\n  box-sizing: border-box;\n}\n\n.cuspide-hero-card:hover {\n  background: rgba(255, 255, 255, 0.07);\n  border-color: rgba(255, 255, 255, 0.2);\n  transform: translateY(-1px);\n}\n\n.cuspide-hero-card.selected {\n  background: rgba(255, 255, 255, 0.08);\n  border-color: var(--agent-theme-color, #38bdf8);\n  box-shadow: 0 0 12px rgba(56, 189, 248, 0.2);\n}\n\n.cuspide-top-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n}\n\n.cuspide-icon-box {\n  width: 28px;\n  height: 28px;\n  border-radius: 6px;\n  border: 1px solid transparent;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n}\n\n.cuspide-tag {\n  font-size: 8.5px;\n  font-weight: 700;\n  letter-spacing: 0.05em;\n  padding: 1px 6px;\n  border-radius: 4px;\n  border: 1px solid transparent;\n}\n\n.cuspide-info {\n  display: flex;\n  flex-direction: column;\n  gap: 1px;\n}\n\n.cuspide-name-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n}\n\n.cuspide-name {\n  font-size: 11.5px;\n  font-weight: 600;\n  color: #ffffff;\n}\n\n.cuspide-desc {\n  font-size: 9.5px;\n  color: #a1a1aa;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n/* 2. SEGMENTED LEVEL TABS */\n.agent-level-tabs {\n  display: flex;\n  gap: 4px;\n  padding: 3px;\n  background: rgba(0, 0, 0, 0.28);\n  border: 1px solid rgba(255, 255, 255, 0.07);\n  border-radius: 8px;\n}\n\n.agent-tab-btn {\n  flex: 1;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  gap: 6px;\n  height: 26px;\n  border: none;\n  background: transparent;\n  color: #71717a;\n  font-size: 11px;\n  font-weight: 500;\n  border-radius: 6px;\n  cursor: pointer;\n  transition: all 0.15s ease;\n  user-select: none;\n}\n\n.agent-tab-btn:hover {\n  color: #e4e4e7;\n  background: rgba(255, 255, 255, 0.04);\n}\n\n.agent-tab-btn.active {\n  background: rgba(255, 255, 255, 0.1);\n  color: #ffffff;\n  font-weight: 600;\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);\n}\n\n.tab-icon {\n  display: flex;\n  align-items: center;\n}\n\n/* 3. TAB CONTENT PANELS */\n.agent-tab-content {\n  display: none;\n  max-height: 220px;\n  overflow-y: auto;\n  padding-right: 2px;\n}\n\n.agent-tab-content.active {\n  display: block;\n}\n\n.agent-tab-content::-webkit-scrollbar {\n  width: 4px;\n}\n\n.agent-tab-content::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15);\n  border-radius: 4px;\n}\n\n/* COMPACT GRID */\n.compact-grid {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: 6px;\n}\n\n.compact-agent-card {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  padding: 6px 8px;\n  background: rgba(255, 255, 255, 0.02);\n  border: 1px solid rgba(255, 255, 255, 0.06);\n  border-radius: 6px;\n  cursor: pointer;\n  transition: all 0.12s ease;\n  box-sizing: border-box;\n}\n\n.compact-agent-card:hover {\n  background: rgba(255, 255, 255, 0.06);\n  border-color: rgba(255, 255, 255, 0.14);\n  transform: translateY(-0.5px);\n}\n\n.compact-agent-card.selected {\n  background: rgba(255, 255, 255, 0.08);\n  border-color: var(--agent-theme-color, #38bdf8);\n}\n\n.compact-icon-box {\n  width: 24px;\n  height: 24px;\n  border-radius: 5px;\n  border: 1px solid transparent;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  flex-shrink: 0;\n}\n\n.compact-details {\n  flex: 1;\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n}\n\n.compact-name-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n}\n\n.compact-name {\n  font-size: 11px;\n  font-weight: 600;\n  color: #f1f5f9;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.compact-sub {\n  font-size: 9px;\n  color: #71717a;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.agent-check {\n  font-size: 11px;\n  font-weight: bold;\n  width: 12px;\n  text-align: right;\n  flex-shrink: 0;\n}\n\n@keyframes agentFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
   }
 
   /**
@@ -2468,7 +2635,7 @@ class ModsManagerMod extends AntigravityMod {
       priority: 100
     });
 
-    this.cachedCss = "/* Mods Manager Menu Button in Top Menubar */\n.antigravity-mods-manager-btn {\n  height: 28px !important;\n  padding: 0 10px !important;\n  font-size: 13px !important;\n  font-weight: 500 !important;\n  color: rgba(255, 255, 255, 0.72) !important;\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  transition: all 0.15s ease !important;\n  app-region: no-drag !important;\n  user-select: none !important;\n}\n\n.antigravity-mods-manager-btn:hover {\n  background: rgba(255, 255, 255, 0.08) !important;\n  color: #ffffff !important;\n}\n\n.antigravity-mods-manager-btn.open {\n  background: rgba(255, 255, 255, 0.14) !important;\n  color: #ffffff !important;\n  border-color: rgba(255, 255, 255, 0.2) !important;\n}\n\n.antigravity-mods-manager-btn svg {\n  width: 14px;\n  height: 14px;\n  opacity: 0.85;\n}\n\n/* Floating Portal Panel for Mods Manager */\n.antigravity-mods-manager-portal {\n  position: fixed !important;\n  z-index: 1000000 !important;\n  width: 380px !important;\n  background: #1a1b26 !important;\n  background: linear-gradient(180deg, #1f2335 0%, #1a1b26 100%) !important;\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\n  border-radius: 14px !important;\n  box-shadow: 0 20px 50px -10px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;\n  padding: 16px !important;\n  color: #c0caf5 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  display: none;\n  box-sizing: border-box !important;\n  animation: modManagerPopIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\n}\n\n.antigravity-mods-manager-portal.open {\n  display: block !important;\n}\n\n@keyframes modManagerPopIn {\n  from {\n    opacity: 0;\n    transform: translateY(-6px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n\n/* Header */\n.mods-manager-header {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  margin-bottom: 14px !important;\n  padding-bottom: 10px !important;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\n}\n\n.mods-manager-title-wrap {\n  display: flex !important;\n  align-items: center !important;\n  gap: 8px !important;\n}\n\n.mods-manager-title {\n  font-size: 14px !important;\n  font-weight: 600 !important;\n  color: #ffffff !important;\n  letter-spacing: -0.2px !important;\n  margin: 0 !important;\n}\n\n.mods-manager-badge {\n  font-size: 10px !important;\n  font-weight: 700 !important;\n  text-transform: uppercase !important;\n  padding: 2px 6px !important;\n  border-radius: 9999px !important;\n  background: rgba(122, 162, 247, 0.18) !important;\n  color: #7aa2f7 !important;\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\n}\n\n.mods-manager-close-btn {\n  background: transparent !important;\n  border: none !important;\n  color: rgba(255, 255, 255, 0.5) !important;\n  cursor: pointer !important;\n  padding: 4px !important;\n  border-radius: 4px !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n}\n\n.mods-manager-close-btn:hover {\n  color: #ffffff !important;\n  background: rgba(255, 255, 255, 0.08) !important;\n}\n\n/* Mod Card Item */\n.mod-card {\n  background: rgba(255, 255, 255, 0.03) !important;\n  border: 1px solid rgba(255, 255, 255, 0.07) !important;\n  border-radius: 10px !important;\n  padding: 12px !important;\n  margin-bottom: 10px !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  gap: 12px !important;\n  transition: all 0.15s ease !important;\n}\n\n.mod-card:hover {\n  background: rgba(255, 255, 255, 0.05) !important;\n  border-color: rgba(255, 255, 255, 0.14) !important;\n}\n\n.mod-card.daemon-card {\n  background: rgba(122, 162, 247, 0.04) !important;\n  border-color: rgba(122, 162, 247, 0.22) !important;\n}\n\n.mod-card.daemon-card:hover {\n  background: rgba(122, 162, 247, 0.08) !important;\n  border-color: rgba(122, 162, 247, 0.35) !important;\n}\n\n.mod-info {\n  display: flex !important;\n  align-items: flex-start !important;\n  gap: 10px !important;\n  flex: 1 !important;\n  min-width: 0 !important;\n}\n\n.mod-icon-box {\n  width: 32px !important;\n  height: 32px !important;\n  border-radius: 8px !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n  flex-shrink: 0 !important;\n  background: rgba(255, 255, 255, 0.06) !important;\n  color: #7aa2f7 !important;\n}\n\n.mod-text {\n  flex: 1 !important;\n  min-width: 0 !important;\n}\n\n.mod-title {\n  font-size: 13px !important;\n  font-weight: 600 !important;\n  color: #ffffff !important;\n  margin-bottom: 2px !important;\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n}\n\n.mod-desc {\n  font-size: 11px !important;\n  color: rgba(255, 255, 255, 0.55) !important;\n  line-height: 1.35 !important;\n}\n\n/* Status Pill */\n.mod-status-pill {\n  font-size: 10px !important;\n  font-weight: 600 !important;\n  padding: 1px 6px !important;\n  border-radius: 9999px !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 4px !important;\n}\n\n.mod-status-pill.active {\n  background: rgba(74, 222, 128, 0.15) !important;\n  color: #4ade80 !important;\n  border: 1px solid rgba(74, 222, 128, 0.3) !important;\n}\n\n.mod-status-pill.paused {\n  background: rgba(248, 113, 113, 0.15) !important;\n  color: #f87171 !important;\n  border: 1px solid rgba(248, 113, 113, 0.3) !important;\n}\n\n/* Modern Toggle Switch */\n.mod-switch {\n  position: relative !important;\n  display: inline-block !important;\n  width: 38px !important;\n  height: 20px !important;\n  flex-shrink: 0 !important;\n  cursor: pointer !important;\n}\n\n.mod-switch input {\n  opacity: 0 !important;\n  width: 0 !important;\n  height: 0 !important;\n  position: absolute !important;\n}\n\n.mod-slider {\n  position: absolute !important;\n  top: 0 !important;\n  left: 0 !important;\n  right: 0 !important;\n  bottom: 0 !important;\n  background-color: rgba(255, 255, 255, 0.15) !important;\n  border: 1px solid rgba(255, 255, 255, 0.18) !important;\n  border-radius: 9999px !important;\n  transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1) !important;\n}\n\n.mod-slider:before {\n  position: absolute !important;\n  content: \"\" !important;\n  height: 14px !important;\n  width: 14px !important;\n  left: 2px !important;\n  bottom: 2px !important;\n  background-color: #ffffff !important;\n  border-radius: 50% !important;\n  transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1) !important;\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35) !important;\n}\n\n.mod-switch input:checked + .mod-slider {\n  background-color: #7aa2f7 !important;\n  border-color: #7aa2f7 !important;\n}\n\n.mod-switch input:checked + .mod-slider:before {\n  transform: translateX(18px) !important;\n}\n";
+    this.cachedCss = "/* Mods Manager Menu Button in Top Menubar */\r\n.antigravity-mods-manager-btn {\r\n  height: 28px !important;\r\n  padding: 0 10px !important;\r\n  font-size: 13px !important;\r\n  font-weight: 500 !important;\r\n  color: rgba(255, 255, 255, 0.72) !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  transition: all 0.15s ease !important;\r\n  app-region: no-drag !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn:hover {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn.open {\r\n  background: rgba(255, 255, 255, 0.14) !important;\r\n  color: #ffffff !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn svg {\r\n  width: 14px;\r\n  height: 14px;\r\n  opacity: 0.85;\r\n}\r\n\r\n/* Floating Portal Panel for Mods Manager */\r\n.antigravity-mods-manager-portal {\r\n  position: fixed !important;\r\n  z-index: 1000000 !important;\r\n  width: 380px !important;\r\n  background: #1a1b26 !important;\r\n  background: linear-gradient(180deg, #1f2335 0%, #1a1b26 100%) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 14px !important;\r\n  box-shadow: 0 20px 50px -10px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;\r\n  padding: 16px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: none;\r\n  box-sizing: border-box !important;\r\n  animation: modManagerPopIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n}\r\n\r\n.antigravity-mods-manager-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n@keyframes modManagerPopIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-6px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* Header */\r\n.mods-manager-header {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  margin-bottom: 14px !important;\r\n  padding-bottom: 10px !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.mods-manager-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.mods-manager-title {\r\n  font-size: 14px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n  margin: 0 !important;\r\n}\r\n\r\n.mods-manager-badge {\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(122, 162, 247, 0.18) !important;\r\n  color: #7aa2f7 !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\r\n}\r\n\r\n.mods-manager-close-btn {\r\n  background: transparent !important;\r\n  border: none !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  cursor: pointer !important;\r\n  padding: 4px !important;\r\n  border-radius: 4px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n}\r\n\r\n.mods-manager-close-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n/* Mod Card Item */\r\n.mod-card {\r\n  background: rgba(255, 255, 255, 0.03) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.07) !important;\r\n  border-radius: 10px !important;\r\n  padding: 12px !important;\r\n  margin-bottom: 10px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 12px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.mod-card:hover {\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  border-color: rgba(255, 255, 255, 0.14) !important;\r\n}\r\n\r\n.mod-card.daemon-card {\r\n  background: rgba(122, 162, 247, 0.04) !important;\r\n  border-color: rgba(122, 162, 247, 0.22) !important;\r\n}\r\n\r\n.mod-card.daemon-card:hover {\r\n  background: rgba(122, 162, 247, 0.08) !important;\r\n  border-color: rgba(122, 162, 247, 0.35) !important;\r\n}\r\n\r\n.mod-info {\r\n  display: flex !important;\r\n  align-items: flex-start !important;\r\n  gap: 10px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.mod-icon-box {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  color: #7aa2f7 !important;\r\n}\r\n\r\n.mod-text {\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.mod-title {\r\n  font-size: 13px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  margin-bottom: 2px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.mod-desc {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.55) !important;\r\n  line-height: 1.35 !important;\r\n}\r\n\r\n/* Status Pill */\r\n.mod-status-pill {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.mod-status-pill.active {\r\n  background: rgba(74, 222, 128, 0.15) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(74, 222, 128, 0.3) !important;\r\n}\r\n\r\n.mod-status-pill.paused {\r\n  background: rgba(248, 113, 113, 0.15) !important;\r\n  color: #f87171 !important;\r\n  border: 1px solid rgba(248, 113, 113, 0.3) !important;\r\n}\r\n\r\n/* Modern Toggle Switch */\r\n.mod-switch {\r\n  position: relative !important;\r\n  display: inline-block !important;\r\n  width: 38px !important;\r\n  height: 20px !important;\r\n  flex-shrink: 0 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.mod-switch input {\r\n  opacity: 0 !important;\r\n  width: 0 !important;\r\n  height: 0 !important;\r\n  position: absolute !important;\r\n}\r\n\r\n.mod-slider {\r\n  position: absolute !important;\r\n  top: 0 !important;\r\n  left: 0 !important;\r\n  right: 0 !important;\r\n  bottom: 0 !important;\r\n  background-color: rgba(255, 255, 255, 0.15) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.18) !important;\r\n  border-radius: 9999px !important;\r\n  transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1) !important;\r\n}\r\n\r\n.mod-slider:before {\r\n  position: absolute !important;\r\n  content: \"\" !important;\r\n  height: 14px !important;\r\n  width: 14px !important;\r\n  left: 2px !important;\r\n  bottom: 2px !important;\r\n  background-color: #ffffff !important;\r\n  border-radius: 50% !important;\r\n  transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1) !important;\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35) !important;\r\n}\r\n\r\n.mod-switch input:checked + .mod-slider {\r\n  background-color: #7aa2f7 !important;\r\n  border-color: #7aa2f7 !important;\r\n}\r\n\r\n.mod-switch input:checked + .mod-slider:before {\r\n  transform: translateX(18px) !important;\r\n}\r\n";
   }
 
   /**
