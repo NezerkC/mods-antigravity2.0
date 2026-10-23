@@ -102,3 +102,11 @@ test('ModLoader - generates mods manager panel and visibility synchronization lo
   assert.ok(script.includes('__antigravity_daemon_enabled'));
 });
 
+test('ModLoader - mutation observer traverses parent to prevent self-closest infinite loop', () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({});
+
+  assert.ok(script.includes('parent.closest'), 'Must traverse from parentElement');
+  assert.ok(!script.includes('btn.closest'), 'Must not call btn.closest directly');
+});
+

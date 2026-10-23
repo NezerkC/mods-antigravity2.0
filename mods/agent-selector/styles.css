@@ -38,12 +38,16 @@
 .antigravity-agent-badge:hover {
   background: rgba(255, 255, 255, 0.1);
   border-color: rgba(255, 255, 255, 0.25);
-  transform: translateY(-0.5px);
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
 .antigravity-agent-badge:active {
-  transform: translateY(0.5px);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.antigravity-agent-badge.open {
+  background: rgba(255, 255, 255, 0.12) !important;
+  border-color: rgba(255, 255, 255, 0.3) !important;
 }
 
 .agent-label {
@@ -60,7 +64,7 @@
   transition: transform 0.2s ease;
 }
 
-.antigravity-agent-badge:hover .agent-caret {
+.antigravity-agent-badge.open .agent-caret {
   transform: rotate(180deg);
 }
 
