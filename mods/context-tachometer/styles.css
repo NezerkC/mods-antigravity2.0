@@ -32,7 +32,7 @@
 }
 
 /* Responsive compact mode (Speedometer SVG only, hides labels, exact 28x28 circle) */
-.antigravity-tachometer-badge.compact:not(.pinned) {
+.antigravity-tachometer-badge.compact:not(.open):not(.pinned) {
   width: 28px !important;
   height: 28px !important;
   min-width: 28px !important;
@@ -43,14 +43,19 @@
   box-sizing: border-box !important;
 }
 
-.antigravity-tachometer-badge.compact:not(.pinned) .tachometer-tokens,
-.antigravity-tachometer-badge.compact:not(.pinned) .tachometer-pct {
+.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,
+.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {
   display: none !important;
+}
+
+.antigravity-tachometer-badge.open {
+  background: rgba(255, 255, 255, 0.12) !important;
+  border-color: rgba(255, 255, 255, 0.3) !important;
 }
 
 /* Responsive shrinking for narrow screen resolutions */
 @media (max-width: 960px) {
-  .antigravity-tachometer-badge:not(.pinned) {
+  .antigravity-tachometer-badge:not(.open):not(.pinned) {
     width: 28px !important;
     height: 28px !important;
     min-width: 28px !important;
@@ -60,8 +65,8 @@
     border-radius: 9999px !important;
     box-sizing: border-box !important;
   }
-  .antigravity-tachometer-badge:not(.pinned) .tachometer-tokens,
-  .antigravity-tachometer-badge:not(.pinned) .tachometer-pct {
+  .antigravity-tachometer-badge:not(.open):not(.pinned) .tachometer-tokens,
+  .antigravity-tachometer-badge:not(.open):not(.pinned) .tachometer-pct {
     display: none !important;
   }
 }
