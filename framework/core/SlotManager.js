@@ -80,31 +80,71 @@ export class SlotManager {
         const anchors = Array.from(document.querySelectorAll('${slot.selector}'));
         if (!anchors.length) return;
 
+        // Clean up any misplaced legacy slot containers that were injected directly inside non-flex wrappers
+        document.querySelectorAll('#${containerId}').forEach(el => {
+          if (el.parentElement && !el.parentElement.className.includes('flex')) {
+            el.remove();
+          }
+        });
+
         for (const anchor of anchors) {
-          const parent = anchor.parentElement;
+          // Resolve effective parent and sibling target
+          let targetItem = anchor;
+          let parent = anchor.parentElement;
           if (!parent) continue;
+
+          // For slots targeting buttons inside UI toolbars (like header-actions / model-selector-trigger),
+          // anchor is often wrapped in block-level dropdown trigger divs (e.g. Radix/Base-UI popover trigger).
+          // We walk up from anchor.parentElement to find the flex row container so that the slot container
+          // is placed directly beside the model selector in the same flex row at the same horizontal level.
+          const candidateFlex = anchor.parentElement ? (
+            anchor.parentElement.closest('.flex.items-center.gap-1') || 
+            anchor.parentElement.closest('.flex.items-center') || 
+            anchor.parentElement.closest('.flex')
+          ) : null;
+
+          if (candidateFlex && candidateFlex.contains(anchor)) {
+            let curr = anchor;
+            while (curr.parentElement && curr.parentElement !== candidateFlex) {
+              curr = curr.parentElement;
+            }
+            if (curr.parentElement === candidateFlex) {
+              parent = candidateFlex;
+              targetItem = curr;
+            }
+          }
 
           let container = parent.querySelector('#${containerId}');
           if (!container) {
             container = document.createElement('div');
             container.id = '${containerId}';
-            container.className = 'antigravity-slot-container';
+            container.className = 'antigravity-slot-container ${containerId}';
             container.style.display = 'inline-flex';
             container.style.alignItems = 'center';
-            container.style.gap = '8px';
+            container.style.gap = '6px';
+            container.style.height = '28px';
 
             if ('${slot.strategy}' === 'after') {
-              if (anchor.nextSibling) {
-                parent.insertBefore(container, anchor.nextSibling);
+              if (targetItem.nextSibling) {
+                parent.insertBefore(container, targetItem.nextSibling);
               } else {
                 parent.appendChild(container);
               }
             } else if ('${slot.strategy}' === 'before') {
-              parent.insertBefore(container, anchor);
+              parent.insertBefore(container, targetItem);
             } else if ('${slot.strategy}' === 'prepend') {
-              anchor.prepend(container);
+              parent.prepend(container);
             } else {
-              anchor.appendChild(container);
+              parent.appendChild(container);
+            }
+          } else {
+            // Ensure slot container remains directly in parent flex row, right after targetItem
+            if (container.parentElement !== parent || ('${slot.strategy}' === 'after' && container.previousElementSibling !== targetItem)) {
+              if (targetItem.nextSibling) {
+                parent.insertBefore(container, targetItem.nextSibling);
+              } else {
+                parent.appendChild(container);
+              }
             }
           }
 
@@ -114,6 +154,9 @@ export class SlotManager {
               modNode = document.createElement('div');
               modNode.id = '${modWrapperId}';
               modNode.className = '${modWrapperId}';
+              modNode.style.display = 'inline-flex';
+              modNode.style.alignItems = 'center';
+              modNode.style.height = '28px';
               container.appendChild(modNode);
             }
             modNode.setAttribute('data-version', '2');

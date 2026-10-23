@@ -332,8 +332,9 @@ export class ModLoader {
 
         // 3. Mount individual mods into target slots across all conversations
         function mountAllMods() {
-          // Permanently remove legacy duplicate unmanaged badges
+          // Permanently remove legacy duplicate unmanaged badges & misplaced slot containers
           document.querySelectorAll('.antigravity-context-badge').forEach(el => el.remove());
+          document.querySelectorAll('.min-w-0 > #antigravity-slot-header-actions, .no-focus-agent-input > #antigravity-slot-header-actions').forEach(el => el.remove());
 
           ${mountSnippets.join('\n')}
 
@@ -440,8 +441,8 @@ export class ModLoader {
                 window.__antigravityResizeObserver.observe(slot.parentElement);
               }
             }
-            const parent = slot.parentElement || slot;
-            const isNarrow = parent.offsetWidth < 320 || slot.offsetWidth < 180 || window.innerWidth < 960;
+            const footer = slot.closest('[class*="input-footer"]') || slot.closest('.flex.items-center.justify-between') || slot.parentElement || slot;
+            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
             const tach = slot.querySelector('.antigravity-tachometer-badge');
             if (tach) tach.classList.toggle('compact', isNarrow);
             const agent = slot.querySelector('.antigravity-agent-badge');
@@ -458,15 +459,15 @@ export class ModLoader {
         window.__antigravityResizeObserver = new ResizeObserver((entries) => {
           for (const entry of entries) {
             const container = entry.target;
-            const parent = container.parentElement || container;
-            const isNarrow = parent.offsetWidth < 320 || container.offsetWidth < 180 || window.innerWidth < 960;
+            const footer = container.closest('[class*="input-footer"]') || container.closest('.flex.items-center.justify-between') || container.parentElement || container;
+            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
 
-            const tach = container.querySelector('.antigravity-tachometer-badge') || parent.querySelector('.antigravity-tachometer-badge');
+            const tach = container.querySelector('.antigravity-tachometer-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-tachometer-badge') : null);
             if (tach) {
               tach.classList.toggle('compact', isNarrow);
             }
 
-            const agent = container.querySelector('.antigravity-agent-badge') || parent.querySelector('.antigravity-agent-badge');
+            const agent = container.querySelector('.antigravity-agent-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-agent-badge') : null);
             if (agent) {
               agent.classList.toggle('compact', isNarrow);
             }
@@ -486,7 +487,8 @@ export class ModLoader {
           const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
           let missingSlot = false;
           for (const btn of triggers) {
-            if (btn.parentElement && !btn.parentElement.querySelector('#antigravity-slot-header-actions')) {
+            const row = btn.closest('.flex.items-center') || btn.parentElement;
+            if (!row || !row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')) {
               missingSlot = true;
               break;
             }
