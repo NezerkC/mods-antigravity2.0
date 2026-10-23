@@ -93,4 +93,17 @@ test('AgentSelectorMod - renders Lucide SVG icons and progressive disclosure lay
   assert.ok(rendered.html.includes('data-tab="nano"'));
 });
 
+test('AgentSelectorMod - renders harmonized card architecture with pin buttons and close trigger', () => {
+  const mod = new AgentSelectorMod();
+  const rendered = mod.render({});
 
+  assert.ok(rendered.html.includes('agent-pin-btn'));
+  assert.ok(rendered.html.includes('agent-pin-icon'));
+  assert.ok(rendered.html.includes('agent-close-btn'));
+  assert.ok(rendered.html.includes('id="antigravity-agent-close"'));
+  assert.ok(rendered.html.includes('agent-header-card'));
+  assert.ok(rendered.html.includes('agent-footer-card'));
+  assert.ok(rendered.css.includes('.agent-pin-btn'));
+  assert.ok(rendered.css.includes('.agent-pin-btn.active'));
+  assert.ok(rendered.css.includes('width: 380px'));
+});

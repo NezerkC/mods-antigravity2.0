@@ -150,7 +150,7 @@ export class ModLoader {
 
             const rect = badge.getBoundingClientRect();
             const portalHeight = 390;
-            const portalWidth = 320;
+            const portalWidth = 380;
 
             if (rect.bottom + portalHeight > window.innerHeight && rect.top > portalHeight) {
               portal.style.top = 'auto';
@@ -163,6 +163,15 @@ export class ModLoader {
             const clampedLeft = Math.max(10, Math.min(window.innerWidth - portalWidth - 10, rect.left));
             portal.style.left = clampedLeft + 'px';
             portal.classList.add('open');
+
+            const closeBtn = portal.querySelector('#antigravity-agent-close');
+            if (closeBtn) {
+              closeBtn.onclick = () => {
+                portal.classList.remove('open');
+                portal.__currentBadge = null;
+                badge.classList.remove('open');
+              };
+            }
           }
         };
 
@@ -206,8 +215,10 @@ export class ModLoader {
 
           const portal = document.getElementById('antigravity-agent-dropdown-portal');
           if (portal) {
-            portal.classList.remove('open');
-            portal.__currentBadge = null;
+            const footerText = portal.querySelector('.agent-footer-text');
+            if (footerText) {
+              footerText.textContent = 'Modo ' + agentName + ' activo en tiempo real';
+            }
           }
 
           try {
@@ -223,6 +234,15 @@ export class ModLoader {
             el.classList.toggle('selected', isMatch);
             const check = el.querySelector('.agent-check');
             if (check) check.textContent = isMatch ? '✓' : '';
+            const pinBtn = el.querySelector('.agent-pin-btn');
+            if (pinBtn) {
+              pinBtn.classList.toggle('active', isMatch);
+              pinBtn.setAttribute('title', isMatch ? 'Agente activo (Fijado)' : 'Fijar este agente');
+              const pinIcon = pinBtn.querySelector('.agent-pin-icon');
+              if (pinIcon) {
+                pinIcon.setAttribute('fill', isMatch ? 'currentColor' : 'none');
+              }
+            }
           });
         };
 
@@ -583,7 +603,7 @@ export class ModLoader {
             document.body.appendChild(agentPortal);
           }
           const agentTemplate = document.querySelector('.antigravity-agent-dropdown-template');
-          if (agentTemplate && (!agentPortal.firstElementChild || agentPortal.getAttribute('data-v') !== '2')) {
+          if (agentTemplate) {
             agentPortal.innerHTML = agentTemplate.innerHTML;
             agentPortal.setAttribute('data-v', '2');
           }

@@ -220,6 +220,21 @@ export function getAgentColor(agentId) {
 }
 
 /**
+ * Renders an inline pushpin SVG icon.
+ * @param {boolean} isActive
+ * @param {number} [size=15]
+ * @returns {string}
+ */
+export function renderPinSvg(isActive, size = 15) {
+  return `
+    <svg class="agent-pin-icon" viewBox="0 0 24 24" width="${size}" height="${size}" fill="${isActive ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="12" y1="17" x2="12" y2="22"></line>
+      <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"></path>
+    </svg>
+  `.trim();
+}
+
+/**
  * Renders the hierarchical dropdown card markup using Progressive Disclosure
  * where EVERY text block is enclosed in an explicit card component for clear visual boundaries.
  * 
@@ -265,28 +280,35 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
       onclick="window.__selectAntigravityAgent('default', 'Sin Agente', '${defaultColor}')"
       title="Asistente Antigravity Estándar sin rol especializado"
     >
-      <div class="primary-hero-left">
-        <div class="primary-icon-box" style="color: ${defaultColor}; background: ${defaultColor}1a; border-color: ${defaultColor}33;">
-          ${renderAgentSvg('default', 15, 2)}
+      <div class="agent-card-info">
+        <div class="agent-icon-box" style="color: ${defaultColor}; background: ${defaultColor}1a; border-color: ${defaultColor}33;">
+          ${renderAgentSvg('default', 16, 2)}
         </div>
-        <div class="primary-info">
-          <div class="primary-title-row">
-            <span class="primary-title">Sin Agente</span>
-            <span class="primary-tag" style="background: ${defaultColor}20; color: ${defaultColor};">DEFAULT</span>
+        <div class="agent-text-wrap">
+          <div class="agent-title-row">
+            <span class="agent-title">Sin Agente</span>
+            <span class="agent-tag" style="background: ${defaultColor}20; color: ${defaultColor}; border-color: ${defaultColor}44;">DEFAULT</span>
           </div>
-          <div class="primary-sub">Modo estándar general</div>
+          <div class="agent-subtitle">Modo estándar general</div>
         </div>
       </div>
-      <span class="agent-check" style="color: ${defaultColor};">${isDefaultSelected ? '✓' : ''}</span>
+      <button 
+        type="button" 
+        class="agent-pin-btn ${isDefaultSelected ? 'active' : ''}" 
+        title="${isDefaultSelected ? 'Agente activo (Fijado)' : 'Fijar este modo'}"
+        aria-label="Fijar modo Sin Agente"
+      >
+        ${renderPinSvg(isDefaultSelected, 15)}
+      </button>
     </div>
-  `;
+  `.trim();
 
   // Render a Cúspide Hero card (Planner or Builder)
   const renderCuspideCard = (agent) => {
     const isSelected = agent.id === activeAgentId;
     const color = getAgentColor(agent.id);
     const safeName = (agent.name || '').replace(/'/g, "\\'");
-    const svgIcon = renderAgentSvg(agent.id, 15, 2, 'cuspide-svg-icon');
+    const svgIcon = renderAgentSvg(agent.id, 16, 2, 'cuspide-svg-icon');
 
     return `
       <div 
@@ -298,23 +320,30 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
         onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}')"
         title="${agent.name} - ${agent.role}"
       >
-        <div class="primary-hero-left">
-          <div class="primary-icon-box" style="color: ${color}; background: ${color}1a; border-color: ${color}44;">
+        <div class="agent-card-info">
+          <div class="agent-icon-box" style="color: ${color}; background: ${color}1a; border-color: ${color}44;">
             ${svgIcon}
           </div>
-          <div class="primary-info">
-            <div class="primary-title-row">
-              <span class="primary-title">${agent.name}</span>
-              <span class="primary-tag" style="background: ${color}26; color: ${color}; border-color: ${color}55;">
+          <div class="agent-text-wrap">
+            <div class="agent-title-row">
+              <span class="agent-title">${agent.name}</span>
+              <span class="agent-tag" style="background: ${color}26; color: ${color}; border-color: ${color}55;">
                 ${agent.levelLabel.trim()}
               </span>
             </div>
-            <div class="primary-sub">${agent.levelDesc}</div>
+            <div class="agent-subtitle">${agent.levelDesc}</div>
           </div>
         </div>
-        <span class="agent-check" style="color: ${color};">${isSelected ? '✓' : ''}</span>
+        <button 
+          type="button" 
+          class="agent-pin-btn ${isSelected ? 'active' : ''}" 
+          title="${isSelected ? 'Agente activo (Fijado)' : 'Fijar este agente'}"
+          aria-label="Fijar agente ${agent.name}"
+        >
+          ${renderPinSvg(isSelected, 15)}
+        </button>
       </div>
-    `;
+    `.trim();
   };
 
   // Render compact grid item for Micro or Nano
@@ -322,7 +351,7 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
     const isSelected = agent.id === activeAgentId;
     const color = getAgentColor(agent.id);
     const safeName = (agent.name || '').replace(/'/g, "\\'");
-    const svgIcon = renderAgentSvg(agent.id, 13, 2, 'compact-svg-icon');
+    const svgIcon = renderAgentSvg(agent.id, 14, 2, 'compact-svg-icon');
 
     return `
       <div 
@@ -340,34 +369,44 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
         <div class="compact-details">
           <div class="compact-name-row">
             <span class="compact-name">${agent.name}</span>
-            <span class="agent-check" style="color: ${color};">${isSelected ? '✓' : ''}</span>
           </div>
           <div class="compact-sub">${agent.levelDesc || agent.role}</div>
         </div>
+        <button 
+          type="button" 
+          class="agent-pin-btn compact-pin-btn ${isSelected ? 'active' : ''}" 
+          title="${isSelected ? 'Agente activo (Fijado)' : 'Fijar este agente'}"
+          aria-label="Fijar agente ${agent.name}"
+        >
+          ${renderPinSvg(isSelected, 12)}
+        </button>
       </div>
-    `;
+    `.trim();
   };
 
   return `
     <div class="antigravity-agent-dropdown">
-      <!-- 1. HEADER CARD -->
+      <!-- 1. HEADER CARD (Harmonized with Mods Manager) -->
       <div class="agent-card agent-header-card">
-        <div class="agent-dropdown-title">
-          <span class="agent-header-icon-box">
-            ${renderAgentSvg('lead-architect', 14, 2)}
-          </span>
-          <div class="agent-header-text">
-            <span class="agent-header-main">Agentes Activos</span>
-            <span class="agent-header-sub">Selección Rápida</span>
+        <div class="agent-title-wrap">
+          <div class="agent-header-icon">
+            ${renderAgentSvg('lead-architect', 16, 2)}
+          </div>
+          <div class="agent-title-col">
+            <div class="agent-title-row">
+              <h3 class="agent-main-title">Selector de Agentes</h3>
+              <span class="agent-header-badge">Control Tower</span>
+            </div>
+            <div class="agent-subtitle">Especialistas de Architecture Vault y SDD</div>
           </div>
         </div>
-        <span class="agent-dropdown-count">Control Tower</span>
+        <button class="agent-close-btn" id="antigravity-agent-close" title="Cerrar">✕</button>
       </div>
 
-      <!-- 2. SECCIÓN PRINCIPAL: 3 CARDS DIRECTAS -->
-      <div class="agent-primary-section">
+      <!-- 2. SECCIÓN PRINCIPAL: 3 CARDS DIRECTAS CON PIN -->
+      <div class="agent-primary-section agent-cards-list">
         ${defaultCardHtml}
-        ${cuspideAgents.map(renderCuspideCard).join('')}
+        ${cuspideAgents.map(renderCuspideCard).join('\n')}
       </div>
 
       <!-- 3. TOGGLE ACORDEÓN CARD BUTTON -->
@@ -422,20 +461,20 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
           <!-- TAB CONTENT PANELS -->
           <div class="agent-tab-content active" data-tab-content="micro">
             <div class="compact-grid">
-              ${microAgents.map(renderCompactItem).join('')}
+              ${microAgents.map(renderCompactItem).join('\n')}
             </div>
           </div>
 
           <div class="agent-tab-content" data-tab-content="nano">
             <div class="compact-grid">
-              ${nanoAgents.map(renderCompactItem).join('')}
+              ${nanoAgents.map(renderCompactItem).join('\n')}
             </div>
           </div>
 
           ${customAgents.length > 0 ? `
             <div class="agent-tab-content" data-tab-content="custom">
               <div class="compact-grid">
-                ${customAgents.map(renderCompactItem).join('')}
+                ${customAgents.map(renderCompactItem).join('\n')}
               </div>
             </div>
           ` : ''}
@@ -444,8 +483,14 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
 
       <!-- 5. FOOTER CARD -->
       <div class="agent-card agent-footer-card">
-        <span class="footer-dot"></span>
-        <span class="footer-text">Modo seleccionado activo en tiempo real</span>
+        <div class="agent-footer-icon">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+        </div>
+        <div class="agent-footer-text">
+          Modo seleccionado activo en tiempo real
+        </div>
       </div>
     </div>
   `.trim();
