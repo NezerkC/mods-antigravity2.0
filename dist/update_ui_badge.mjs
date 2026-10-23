@@ -1281,8 +1281,10 @@ class ModLoader {
           const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
           let missingSlot = false;
           for (const btn of triggers) {
-            const row = btn.closest('.flex.items-center') || btn.parentElement;
-            if (!row || !row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')) {
+            const parent = btn.parentElement;
+            if (!parent) continue;
+            const row = parent.closest('.flex.items-center') || parent;
+            if (!row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')) {
               missingSlot = true;
               break;
             }
