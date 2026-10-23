@@ -56,3 +56,36 @@ test('AgentSelectorMod - styles include responsive collapse rules for small reso
   assert.ok(rendered.css.includes('@media'));
   assert.ok(rendered.css.includes('display: none') || rendered.css.includes('display:none'));
 });
+
+test('AgentSelectorMod - categorizes agents into Cúspide (Planner & Builder), Micro, and Nano levels', () => {
+  const cuspide = AGENT_REGISTRY.filter(a => a.level === 'cuspide');
+  const micro = AGENT_REGISTRY.filter(a => a.level === 'micro');
+  const nano = AGENT_REGISTRY.filter(a => a.level === 'nano');
+
+  assert.equal(cuspide.length, 2);
+  assert.equal(micro.length, 7);
+  assert.equal(nano.length, 5);
+
+  const planner = cuspide.find(a => a.id === 'lead-architect');
+  assert.ok(planner);
+  assert.equal(planner.levelLabel, 'PLANNER');
+
+  const builder = cuspide.find(a => a.id === 'sdd-orchestrator');
+  assert.ok(builder);
+  assert.equal(builder.levelLabel, 'BUILDER');
+});
+
+test('AgentSelectorMod - renders Lucide SVG icons and hierarchical layout without emojis', () => {
+  const mod = new AgentSelectorMod();
+  const rendered = mod.render({});
+
+  assert.ok(rendered.html.includes('lucide-agent-icon'));
+  assert.ok(rendered.html.includes('cuspide-hero-card'));
+  assert.ok(rendered.html.includes('agent-level-tabs'));
+  assert.ok(rendered.html.includes('PLANNER'));
+  assert.ok(rendered.html.includes('BUILDER'));
+  assert.ok(rendered.html.includes('compact-agent-card'));
+  assert.ok(rendered.html.includes('data-tab="micro"'));
+  assert.ok(rendered.html.includes('data-tab="nano"'));
+});
+

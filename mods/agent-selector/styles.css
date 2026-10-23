@@ -1,3 +1,8 @@
+/* =========================================================================
+   ANTIGRAVITY AGENT SELECTOR MOD - STYLES
+   Hierarchical Layout: Cúspide (Planner & Builder), Micro, Nano (Lucide SVGs)
+   ========================================================================= */
+
 .antigravity-agent-badge {
   display: inline-flex;
   align-items: center;
@@ -26,13 +31,6 @@
   border-radius: 9999px;
   flex-shrink: 0;
   transition: all 0.3s ease;
-}
-
-.agent-color-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 9999px;
-  flex-shrink: 0;
 }
 
 .antigravity-agent-badge:hover {
@@ -68,7 +66,7 @@
   transform: rotate(180deg);
 }
 
-/* Responsive compact mode (Container-driven via ResizeObserver) */
+/* Responsive compact mode */
 .antigravity-agent-badge.compact {
   height: 28px !important;
   box-sizing: border-box !important;
@@ -82,11 +80,8 @@
   display: none !important;
 }
 
-/* Responsive shrinking for narrow screen resolutions */
 @media (max-width: 960px) {
-  .agent-label {
-    display: none !important;
-  }
+  .agent-label,
   .agent-caret {
     display: none !important;
   }
@@ -100,7 +95,9 @@
   }
 }
 
-/* Interactive Dropdown Portal (Fixed to Viewport, Immune to Clipping & Overflow) */
+/* =========================================================================
+   DROPDOWN PORTAL (FIXED TO VIEWPORT)
+   ========================================================================= */
 .antigravity-agent-dropdown-portal {
   position: fixed !important;
   z-index: 999999 !important;
@@ -118,150 +115,315 @@
 }
 
 .antigravity-agent-dropdown {
-  width: 320px;
-  max-height: 420px;
-  background: #18181b;
+  width: 350px;
+  max-height: 480px;
+  background: #14151e;
   color: #f4f4f5;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 12px;
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  padding: 10px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.75), 0 2px 8px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  padding: 12px;
   display: flex;
   flex-direction: column;
+  gap: 10px;
   pointer-events: auto;
+  box-sizing: border-box;
 }
 
+/* HEADER */
 .agent-dropdown-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 8px 10px 8px;
+  padding-bottom: 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  margin-bottom: 6px;
-}
-
-.agent-section-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #71717a;
-  padding: 8px 8px 4px 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-  margin-top: 4px;
-}
-
-.agent-section-header:first-child {
-  border-top: none;
-  margin-top: 0;
-  padding-top: 2px;
 }
 
 .agent-dropdown-title {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-weight: 600;
+  gap: 8px;
+}
+
+.agent-header-icon-box {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: rgba(122, 162, 247, 0.15);
+  color: #7aa2f7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.agent-header-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.agent-header-main {
   font-size: 12px;
+  font-weight: 600;
   color: #ffffff;
+}
+
+.agent-header-sub {
+  font-size: 9.5px;
+  color: #71717a;
 }
 
 .agent-dropdown-count {
   font-size: 10px;
-  padding: 2px 6px;
+  font-weight: 500;
+  padding: 2px 8px;
   border-radius: 9999px;
   background: rgba(255, 255, 255, 0.08);
   color: #a1a1aa;
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.agent-list-scroll {
-  overflow-y: auto;
-  max-height: 330px;
+/* 1. CÚSPIDE (GOBERNANZA & DIRECCIÓN) */
+.agent-cuspide-section {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding-right: 2px;
+  gap: 6px;
 }
 
-.agent-list-scroll::-webkit-scrollbar {
-  width: 4px;
+.agent-section-label {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #71717a;
+  text-transform: uppercase;
 }
 
-.agent-list-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: 4px;
+.cuspide-cards-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 
-.antigravity-agent-item {
+.cuspide-hero-card {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 6px;
   padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.12s ease;
-  border: 1px solid transparent;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  box-sizing: border-box;
 }
 
-.antigravity-agent-item:hover {
+.cuspide-hero-card:hover {
   background: rgba(255, 255, 255, 0.07);
-  border-color: rgba(255, 255, 255, 0.1);
-  transform: translateX(1px);
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: translateY(-1px);
 }
 
-.antigravity-agent-item.selected {
-  background: rgba(56, 189, 248, 0.12);
-  border-color: rgba(56, 189, 248, 0.3);
+.cuspide-hero-card.selected {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--agent-theme-color, #38bdf8);
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.2);
 }
 
-.agent-item-icon {
-  font-size: 16px;
-  flex-shrink: 0;
-}
-
-.agent-item-details {
-  flex: 1;
-  min-width: 0;
-}
-
-.agent-item-name-row {
+.cuspide-top-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 2px;
 }
 
-.agent-item-name {
-  font-size: 12px;
+.cuspide-icon-box {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cuspide-tag {
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+}
+
+.cuspide-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cuspide-name-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cuspide-name {
+  font-size: 11.5px;
   font-weight: 600;
   color: #ffffff;
 }
 
-.agent-item-category {
+.cuspide-desc {
   font-size: 9.5px;
-  text-transform: uppercase;
-  color: #71717a;
-  letter-spacing: 0.03em;
-}
-
-.agent-item-role {
-  font-size: 10.5px;
   color: #a1a1aa;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* 2. SEGMENTED LEVEL TABS */
+.agent-level-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+}
+
+.agent-tab-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: #71717a;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.agent-tab-btn:hover {
+  color: #e4e4e7;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.agent-tab-btn.active {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.tab-icon {
+  display: flex;
+  align-items: center;
+}
+
+/* 3. TAB CONTENT PANELS */
+.agent-tab-content {
+  display: none;
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.agent-tab-content.active {
+  display: block;
+}
+
+.agent-tab-content::-webkit-scrollbar {
+  width: 4px;
+}
+
+.agent-tab-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+/* COMPACT GRID */
+.compact-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.compact-agent-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  box-sizing: border-box;
+}
+
+.compact-agent-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.14);
+  transform: translateY(-0.5px);
+}
+
+.compact-agent-card.selected {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--agent-theme-color, #38bdf8);
+}
+
+.compact-icon-box {
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.compact-details {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.compact-name-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.compact-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: #f1f5f9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.compact-sub {
+  font-size: 9px;
+  color: #71717a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .agent-check {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: bold;
-  color: #38bdf8;
-  width: 14px;
+  width: 12px;
   text-align: right;
   flex-shrink: 0;
 }
