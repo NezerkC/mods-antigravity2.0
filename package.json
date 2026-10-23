@@ -13,7 +13,11 @@
     "daemon:stop": "node framework/daemon.js --stop",
     "daemon:status": "node framework/daemon.js --status",
     "daemon:install": "node framework/daemon.js --install",
-    "daemon:uninstall": "node framework/daemon.js --uninstall"
+    "daemon:uninstall": "node framework/daemon.js --uninstall",
+    "probe": "node tools/probe.js",
+    "probe:dom": "node tools/probe.js dom",
+    "probe:proc": "node tools/probe.js processes",
+    "probe:cdp": "node tools/probe.js cdp"
   },
   "author": "Victor Manuel Martinez Munoz",
   "license": "MIT"
