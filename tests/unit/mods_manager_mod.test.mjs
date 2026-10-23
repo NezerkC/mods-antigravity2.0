@@ -31,4 +31,9 @@ test('ModsManagerMod - panel renders cards for all mods and daemon switch', () =
   assert.ok(panelHtml.includes('id="mod-toggle-agent-selector"'));
   assert.ok(panelHtml.includes('id="mod-toggle-daemon"'));
   assert.ok(panelHtml.includes('daemon-status-pill'));
+  assert.ok(panelHtml.includes('mods-manager-header-card'));
+  assert.ok(panelHtml.includes('mods-manager-cards-list'));
+  assert.ok(panelHtml.includes('mods-manager-footer-card'));
+  assert.ok(panelHtml.includes('mod-card'));
 });
+

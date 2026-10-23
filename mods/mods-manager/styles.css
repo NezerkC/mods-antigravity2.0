@@ -1,3 +1,8 @@
+/* =========================================================================
+   ANTIGRAVITY MODS MANAGER MOD - STYLES
+   Card Architecture: Every text section enclosed in card components
+   ========================================================================= */
+
 /* Mods Manager Menu Button in Top Menubar */
 .antigravity-mods-manager-btn {
   height: 28px !important;
@@ -39,12 +44,12 @@
   position: fixed !important;
   z-index: 1000000 !important;
   width: 380px !important;
-  background: #1a1b26 !important;
-  background: linear-gradient(180deg, #1f2335 0%, #1a1b26 100%) !important;
+  background: #161822 !important;
+  background: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;
   border: 1px solid rgba(255, 255, 255, 0.12) !important;
   border-radius: 14px !important;
-  box-shadow: 0 20px 50px -10px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;
-  padding: 16px !important;
+  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;
+  padding: 14px !important;
   color: #c0caf5 !important;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
   display: none;
@@ -67,98 +72,146 @@
   }
 }
 
-/* Header */
-.mods-manager-header {
+/* Header Card Component */
+.mods-manager-header,
+.mods-manager-header-card {
+  background: rgba(255, 255, 255, 0.04) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 10px !important;
+  padding: 10px 12px !important;
+  margin-bottom: 12px !important;
   display: flex !important;
   align-items: center !important;
   justify-content: space-between !important;
-  margin-bottom: 14px !important;
-  padding-bottom: 10px !important;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
 }
 
 .mods-manager-title-wrap {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+.mods-manager-header-icon {
+  width: 32px !important;
+  height: 32px !important;
+  border-radius: 8px !important;
+  background: rgba(122, 162, 247, 0.15) !important;
+  color: #7aa2f7 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: 1px solid rgba(122, 162, 247, 0.25) !important;
+  flex-shrink: 0 !important;
+}
+
+.mods-manager-title-col {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+}
+
+.mods-manager-title-row {
   display: flex !important;
   align-items: center !important;
   gap: 8px !important;
 }
 
 .mods-manager-title {
-  font-size: 14px !important;
-  font-weight: 600 !important;
+  font-size: 13.5px !important;
+  font-weight: 700 !important;
   color: #ffffff !important;
   letter-spacing: -0.2px !important;
   margin: 0 !important;
 }
 
 .mods-manager-badge {
-  font-size: 10px !important;
+  font-size: 9.5px !important;
   font-weight: 700 !important;
   text-transform: uppercase !important;
-  padding: 2px 6px !important;
+  padding: 1px 6px !important;
   border-radius: 9999px !important;
   background: rgba(122, 162, 247, 0.18) !important;
   color: #7aa2f7 !important;
   border: 1px solid rgba(122, 162, 247, 0.3) !important;
+  letter-spacing: 0.3px !important;
+}
+
+.mods-manager-subtitle {
+  font-size: 11px !important;
+  color: rgba(255, 255, 255, 0.5) !important;
 }
 
 .mods-manager-close-btn {
   background: transparent !important;
-  border: none !important;
+  border: 1px solid transparent !important;
   color: rgba(255, 255, 255, 0.5) !important;
   cursor: pointer !important;
-  padding: 4px !important;
-  border-radius: 4px !important;
+  width: 24px !important;
+  height: 24px !important;
+  border-radius: 6px !important;
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
+  font-size: 12px !important;
+  transition: all 0.15s ease !important;
 }
 
 .mods-manager-close-btn:hover {
   color: #ffffff !important;
-  background: rgba(255, 255, 255, 0.08) !important;
+  background: rgba(255, 255, 255, 0.1) !important;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+}
+
+/* Mod Cards List */
+.mods-manager-cards-list {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
 }
 
 /* Mod Card Item */
 .mod-card {
-  background: rgba(255, 255, 255, 0.03) !important;
-  border: 1px solid rgba(255, 255, 255, 0.07) !important;
+  background: rgba(255, 255, 255, 0.035) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
   border-radius: 10px !important;
-  padding: 12px !important;
-  margin-bottom: 10px !important;
+  padding: 11px 13px !important;
   display: flex !important;
   align-items: center !important;
   justify-content: space-between !important;
   gap: 12px !important;
-  transition: all 0.15s ease !important;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  box-sizing: border-box !important;
 }
 
 .mod-card:hover {
-  background: rgba(255, 255, 255, 0.05) !important;
-  border-color: rgba(255, 255, 255, 0.14) !important;
+  background: rgba(255, 255, 255, 0.065) !important;
+  border-color: rgba(122, 162, 247, 0.35) !important;
+  transform: translateY(-1px) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;
 }
 
 .mod-card.daemon-card {
-  background: rgba(122, 162, 247, 0.04) !important;
+  background: rgba(122, 162, 247, 0.05) !important;
   border-color: rgba(122, 162, 247, 0.22) !important;
 }
 
 .mod-card.daemon-card:hover {
-  background: rgba(122, 162, 247, 0.08) !important;
-  border-color: rgba(122, 162, 247, 0.35) !important;
+  background: rgba(122, 162, 247, 0.09) !important;
+  border-color: rgba(122, 162, 247, 0.45) !important;
+  box-shadow: 0 4px 18px rgba(122, 162, 247, 0.15) !important;
 }
 
 .mod-info {
   display: flex !important;
-  align-items: flex-start !important;
+  align-items: center !important;
   gap: 10px !important;
   flex: 1 !important;
   min-width: 0 !important;
 }
 
 .mod-icon-box {
-  width: 32px !important;
-  height: 32px !important;
+  width: 34px !important;
+  height: 34px !important;
   border-radius: 8px !important;
   display: flex !important;
   align-items: center !important;
@@ -166,6 +219,24 @@
   flex-shrink: 0 !important;
   background: rgba(255, 255, 255, 0.06) !important;
   color: #7aa2f7 !important;
+}
+
+.mod-icon-box.tach-icon {
+  background: rgba(56, 189, 248, 0.12) !important;
+  color: #38bdf8 !important;
+  border: 1px solid rgba(56, 189, 248, 0.25) !important;
+}
+
+.mod-icon-box.agent-icon {
+  background: rgba(168, 85, 247, 0.12) !important;
+  color: #c084fc !important;
+  border: 1px solid rgba(168, 85, 247, 0.25) !important;
+}
+
+.mod-icon-box.daemon-icon {
+  background: rgba(74, 222, 128, 0.12) !important;
+  color: #4ade80 !important;
+  border: 1px solid rgba(74, 222, 128, 0.25) !important;
 }
 
 .mod-text {
@@ -185,19 +256,21 @@
 
 .mod-desc {
   font-size: 11px !important;
-  color: rgba(255, 255, 255, 0.55) !important;
+  color: rgba(255, 255, 255, 0.6) !important;
   line-height: 1.35 !important;
 }
 
 /* Status Pill */
 .mod-status-pill {
-  font-size: 10px !important;
-  font-weight: 600 !important;
+  font-size: 9.5px !important;
+  font-weight: 700 !important;
   padding: 1px 6px !important;
   border-radius: 9999px !important;
   display: inline-flex !important;
   align-items: center !important;
-  gap: 4px !important;
+  gap: 3px !important;
+  line-height: 14px !important;
+  letter-spacing: 0.2px !important;
 }
 
 .mod-status-pill.active {
@@ -227,6 +300,9 @@
   width: 0 !important;
   height: 0 !important;
   position: absolute !important;
+  margin: 0 !important;
+  pointer-events: none !important;
+  display: none !important;
 }
 
 .mod-slider {
@@ -235,10 +311,10 @@
   left: 0 !important;
   right: 0 !important;
   bottom: 0 !important;
-  background-color: rgba(255, 255, 255, 0.15) !important;
-  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  background-color: rgba(255, 255, 255, 0.16) !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
   border-radius: 9999px !important;
-  transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
 
 .mod-slider:before {
@@ -250,8 +326,8 @@
   bottom: 2px !important;
   background-color: #ffffff !important;
   border-radius: 50% !important;
-  transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1) !important;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35) !important;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4) !important;
 }
 
 .mod-switch input:checked + .mod-slider {
@@ -261,4 +337,31 @@
 
 .mod-switch input:checked + .mod-slider:before {
   transform: translateX(18px) !important;
+}
+
+/* Footer Status Card */
+.mods-manager-footer-card {
+  background: rgba(0, 0, 0, 0.25) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  border-radius: 8px !important;
+  padding: 8px 10px !important;
+  margin-top: 10px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  box-sizing: border-box !important;
+}
+
+.mods-manager-footer-icon {
+  display: flex !important;
+  align-items: center !important;
+  color: #4ade80 !important;
+  flex-shrink: 0 !important;
+}
+
+.mods-manager-footer-text {
+  font-size: 11px !important;
+  color: rgba(255, 255, 255, 0.5) !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.1px !important;
 }
