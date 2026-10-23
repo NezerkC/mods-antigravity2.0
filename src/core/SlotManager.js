@@ -1,6 +1,6 @@
 /**
  * Manages target UI slots in the Antigravity 2.0 DOM and generates
- * collision-free injection payloads for registered mods.
+ * collision-free injection payloads for registered mods across all active chat panels.
  */
 export class SlotManager {
   constructor() {
@@ -62,7 +62,8 @@ export class SlotManager {
   }
 
   /**
-   * Generates browser-executable JavaScript to mount a mod within a target slot.
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * across ALL conversation tabs and split panels matching the selector.
    * @param {Object} params
    * @param {string} params.slotId
    * @param {string} params.modId
@@ -76,35 +77,45 @@ export class SlotManager {
 
     return `
       (() => {
-        const anchor = document.querySelector('${slot.selector}');
-        if (!anchor) return;
+        const anchors = Array.from(document.querySelectorAll('${slot.selector}'));
+        if (!anchors.length) return;
 
-        let container = document.getElementById('${containerId}');
-        if (!container) {
-          container = document.createElement('div');
-          container.id = '${containerId}';
-          container.style.display = 'inline-flex';
-          container.style.alignItems = 'center';
-          container.style.gap = '8px';
+        for (const anchor of anchors) {
+          const parent = anchor.parentElement;
+          if (!parent) continue;
 
-          if ('${slot.strategy}' === 'after') {
-            anchor.insertAdjacentElement('afterend', container);
-          } else if ('${slot.strategy}' === 'before') {
-            anchor.insertAdjacentElement('beforebegin', container);
-          } else if ('${slot.strategy}' === 'prepend') {
-            anchor.prepend(container);
-          } else {
-            anchor.appendChild(container);
+          let container = parent.querySelector('#${containerId}');
+          if (!container) {
+            container = document.createElement('div');
+            container.id = '${containerId}';
+            container.className = 'antigravity-slot-container';
+            container.style.display = 'inline-flex';
+            container.style.alignItems = 'center';
+            container.style.gap = '8px';
+
+            if ('${slot.strategy}' === 'after') {
+              if (anchor.nextSibling) {
+                parent.insertBefore(container, anchor.nextSibling);
+              } else {
+                parent.appendChild(container);
+              }
+            } else if ('${slot.strategy}' === 'before') {
+              parent.insertBefore(container, anchor);
+            } else if ('${slot.strategy}' === 'prepend') {
+              anchor.prepend(container);
+            } else {
+              anchor.appendChild(container);
+            }
           }
-        }
 
-        let modNode = document.getElementById('${modWrapperId}');
-        if (!modNode) {
-          modNode = document.createElement('div');
-          modNode.id = '${modWrapperId}';
-          container.appendChild(modNode);
+          let modNode = container.querySelector('#${modWrapperId}');
+          if (!modNode) {
+            modNode = document.createElement('div');
+            modNode.id = '${modWrapperId}';
+            container.appendChild(modNode);
+          }
+          modNode.innerHTML = ${JSON.stringify(htmlContent)};
         }
-        modNode.innerHTML = ${JSON.stringify(htmlContent)};
       })();
     `;
   }

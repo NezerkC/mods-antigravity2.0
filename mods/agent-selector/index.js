@@ -61,22 +61,25 @@ export class AgentSelectorMod extends AntigravityMod {
         <script>
           if (!window.__selectAntigravityAgent) {
             window.__selectAntigravityAgent = function(agentId, agentName, agentColor) {
-              const label = document.getElementById('antigravity-active-agent-name');
-              const badge = document.getElementById('antigravity-agent-badge');
-              const dot = document.getElementById('antigravity-active-agent-dot');
+              // Synchronize across ALL open chat panels & tabs
+              document.querySelectorAll('#antigravity-active-agent-name').forEach(label => {
+                label.textContent = agentName;
+              });
 
-              if (label) label.textContent = agentName;
-              if (badge) {
+              document.querySelectorAll('#antigravity-agent-badge').forEach(badge => {
                 badge.setAttribute('title', 'Active Specialist: ' + agentName);
                 if (agentColor) {
                   badge.style.borderColor = agentColor + '66';
                   badge.style.boxShadow = '0 0 8px ' + agentColor + '33';
                 }
-              }
-              if (dot && agentColor) {
-                dot.style.background = agentColor;
-                dot.style.boxShadow = '0 0 6px ' + agentColor;
-              }
+              });
+
+              document.querySelectorAll('#antigravity-active-agent-dot').forEach(dot => {
+                if (agentColor) {
+                  dot.style.background = agentColor;
+                  dot.style.boxShadow = '0 0 6px ' + agentColor;
+                }
+              });
 
               try {
                 localStorage.setItem('__antigravity_selected_agent', JSON.stringify({ 
@@ -86,9 +89,8 @@ export class AgentSelectorMod extends AntigravityMod {
                 }));
               } catch (e) {}
 
-              // Update active tick marks and selections in list
-              const items = document.querySelectorAll('.antigravity-agent-item');
-              items.forEach(el => {
+              // Update active checkmarks in all open dropdowns
+              document.querySelectorAll('.antigravity-agent-item').forEach(el => {
                 const isMatch = el.getAttribute('data-agent-id') === agentId;
                 el.classList.toggle('selected', isMatch);
                 const check = el.querySelector('.agent-check');

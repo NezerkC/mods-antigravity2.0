@@ -45,6 +45,7 @@ export class ModLoader {
 
   /**
    * Compiles registered mods and their rendered templates into an executable CDP payload.
+   * Mounts and synchronizes across ALL open chat panels via MutationObserver.
    * @param {Object} context Host context passed to mod render methods.
    * @returns {string} Executable JavaScript.
    */
@@ -90,8 +91,26 @@ export class ModLoader {
         }
         styleTag.textContent = ${JSON.stringify(cssBundle)};
 
-        // 2. Mount individual mods into target slots
-        ${mountSnippets.join('\n')}
+        // 2. Function to mount individual mods into target slots across all conversations
+        function mountAllMods() {
+          ${mountSnippets.join('\n')}
+        }
+
+        mountAllMods();
+
+        // 3. Observe DOM mutations to auto-mount into new or switched chat panels
+        if (window.__antigravityModObserver) {
+          window.__antigravityModObserver.disconnect();
+          window.__antigravityModObserver = null;
+        }
+
+        let mountRaf = null;
+        window.__antigravityModObserver = new MutationObserver(() => {
+          if (mountRaf) cancelAnimationFrame(mountRaf);
+          mountRaf = requestAnimationFrame(mountAllMods);
+        });
+
+        window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
       })();
     `;
   }

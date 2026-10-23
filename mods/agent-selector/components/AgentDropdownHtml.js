@@ -1,20 +1,28 @@
 export const PALETTE = [
-  'hsl(199, 89%, 60%)', // Sky / Cyan
-  'hsl(271, 91%, 65%)', // Purple
-  'hsl(330, 81%, 60%)', // Rose / Pink
-  'hsl(158, 64%, 52%)', // Emerald / Mint
-  'hsl(38, 92%, 50%)',  // Amber / Gold
-  'hsl(12, 88%, 59%)',  // Coral / Red
-  'hsl(250, 85%, 65%)', // Indigo / Violet
-  'hsl(175, 75%, 45%)'  // Teal
+  'hsl(199, 89%, 60%)', // Sky / Cyan (Lead Architect)
+  'hsl(271, 91%, 65%)', // Purple (Product Manager)
+  'hsl(330, 81%, 60%)', // Rose / Pink (Scrum Master)
+  'hsl(158, 64%, 52%)', // Emerald / Mint (Code Reviewer)
+  'hsl(12, 88%, 59%)',  // Coral / Red (Security Engineer)
+  'hsl(38, 92%, 50%)',  // Amber / Gold (DevOps & Cloud)
+  'hsl(175, 75%, 45%)', // Teal (UI/UX Pro Max)
+  'hsl(250, 85%, 65%)', // Indigo / Violet (Windows RPA)
+  'hsl(215, 90%, 60%)', // Electric Blue (SDD Orchestrator)
+  'hsl(45, 93%, 58%)',  // Sun Yellow (SDD Explore)
+  'hsl(290, 80%, 65%)', // Orchid (SDD Spec)
+  'hsl(24, 95%, 55%)',  // Blaze Orange (SDD Apply TDD)
+  'hsl(142, 70%, 45%)', // Bright Green (SDD Verify)
+  'hsl(340, 85%, 65%)'  // Crimson (Gentleman Guardian GGA)
 ];
 
 export const AGENT_REGISTRY = [
+  // --- Bóveda de Arquitectura (Gobernanza & Estrategia) ---
   {
     id: 'lead-architect',
     name: 'Lead Architect',
     role: 'Multi-Agent Orchestrator & Hexagonal Design',
-    category: 'Architecture',
+    category: 'Vault Architecture',
+    suite: 'Bóveda',
     icon: '🏛️'
   },
   {
@@ -22,6 +30,7 @@ export const AGENT_REGISTRY = [
     name: 'Product Manager',
     role: 'Business Discovery & PRD Formulation',
     category: 'Discovery',
+    suite: 'Bóveda',
     icon: '📋'
   },
   {
@@ -29,6 +38,7 @@ export const AGENT_REGISTRY = [
     name: 'Scrum Master',
     role: 'Epics, User Stories & Backlog Refinement',
     category: 'Delivery',
+    suite: 'Bóveda',
     icon: '⏱️'
   },
   {
@@ -36,6 +46,7 @@ export const AGENT_REGISTRY = [
     name: 'Code Reviewer',
     role: 'Clean Architecture Invariants & PR Gates',
     category: 'Quality',
+    suite: 'Bóveda',
     icon: '🔍'
   },
   {
@@ -43,6 +54,7 @@ export const AGENT_REGISTRY = [
     name: 'Security Engineer',
     role: 'OWASP Top 10, Zero Trust & Hardening',
     category: 'Quality',
+    suite: 'Bóveda',
     icon: '🛡️'
   },
   {
@@ -50,6 +62,7 @@ export const AGENT_REGISTRY = [
     name: 'DevOps & Cloud',
     role: 'Deterministic CI/CD, Docker & GitOps',
     category: 'Delivery',
+    suite: 'Bóveda',
     icon: '🚀'
   },
   {
@@ -57,6 +70,7 @@ export const AGENT_REGISTRY = [
     name: 'UI/UX Pro Max',
     role: 'Design Tokens, A11y & Visual Systems',
     category: 'Frontend',
+    suite: 'Bóveda',
     icon: '🎨'
   },
   {
@@ -64,7 +78,58 @@ export const AGENT_REGISTRY = [
     name: 'Windows RPA',
     role: 'PowerShell Automation & Desktop Tasks',
     category: 'Automation',
+    suite: 'Bóveda',
     icon: '🤖'
+  },
+
+  // --- Suite SDD Gentleman Programming (Táctica & Ejecución) ---
+  {
+    id: 'sdd-orchestrator',
+    name: 'SDD Orchestrator',
+    role: 'Spec-Driven Router & Flow Controller',
+    category: 'Gentleman SDD',
+    suite: 'Gentleman',
+    icon: '🧭'
+  },
+  {
+    id: 'sdd-explore',
+    name: 'SDD Explore',
+    role: 'Codebase Investigator & Pattern Discovery',
+    category: 'Gentleman SDD',
+    suite: 'Gentleman',
+    icon: '🔎'
+  },
+  {
+    id: 'sdd-spec',
+    name: 'SDD Spec',
+    role: 'Formal Specifications & BDD Scenarios',
+    category: 'Gentleman SDD',
+    suite: 'Gentleman',
+    icon: '📝'
+  },
+  {
+    id: 'sdd-apply',
+    name: 'SDD Apply (TDD)',
+    role: 'Strict Red-Green-Refactor Code Implementer',
+    category: 'Gentleman SDD',
+    suite: 'Gentleman',
+    icon: '⚡'
+  },
+  {
+    id: 'sdd-verify',
+    name: 'SDD Verify',
+    role: 'Scenario Compliance & Test Verification Gate',
+    category: 'Gentleman SDD',
+    suite: 'Gentleman',
+    icon: '✅'
+  },
+  {
+    id: 'gga-review',
+    name: 'Guardian Angel (GGA)',
+    role: 'Git Pre-Commit Standards & Code Culture Guard',
+    category: 'Gentleman SDD',
+    suite: 'Gentleman',
+    icon: '👼'
   }
 ];
 
@@ -88,44 +153,53 @@ export function getAgentColor(agentId) {
 }
 
 export function renderAgentDropdownHtml(activeAgentId = 'lead-architect') {
-  const itemsHtml = AGENT_REGISTRY.map(agent => {
-    const isSelected = agent.id === activeAgentId;
-    const color = getAgentColor(agent.id);
+  const vaultAgents = AGENT_REGISTRY.filter(a => a.suite === 'Bóveda');
+  const sddAgents = AGENT_REGISTRY.filter(a => a.suite === 'Gentleman');
 
-    return `
-      <div 
-        class="antigravity-agent-item ${isSelected ? 'selected' : ''}" 
-        data-agent-id="${agent.id}"
-        data-agent-name="${agent.name}"
-        data-agent-color="${color}"
-        data-agent-icon="${agent.icon}"
-        onclick="window.__selectAntigravityAgent('${agent.id}', '${agent.name}', '${color}')"
-      >
-        <span class="agent-color-dot" style="background: ${color}; box-shadow: 0 0 8px ${color}66;"></span>
-        <span class="agent-item-icon">${agent.icon}</span>
-        <div class="agent-item-details">
-          <div class="agent-item-name-row">
-            <span class="agent-item-name">${agent.name}</span>
-            <span class="agent-item-category" style="color: ${color};">${agent.category}</span>
+  const renderGroup = (title, icon, agents) => `
+    <div class="agent-section-header">
+      <span>${icon}</span>
+      <span>${title}</span>
+    </div>
+    ${agents.map(agent => {
+      const isSelected = agent.id === activeAgentId;
+      const color = getAgentColor(agent.id);
+      return `
+        <div 
+          class="antigravity-agent-item ${isSelected ? 'selected' : ''}" 
+          data-agent-id="${agent.id}"
+          data-agent-name="${agent.name}"
+          data-agent-color="${color}"
+          data-agent-icon="${agent.icon}"
+          onclick="window.__selectAntigravityAgent('${agent.id}', '${agent.name}', '${color}')"
+        >
+          <span class="agent-color-dot" style="background: ${color}; box-shadow: 0 0 8px ${color}66;"></span>
+          <span class="agent-item-icon">${agent.icon}</span>
+          <div class="agent-item-details">
+            <div class="agent-item-name-row">
+              <span class="agent-item-name">${agent.name}</span>
+              <span class="agent-item-category" style="color: ${color};">${agent.category}</span>
+            </div>
+            <div class="agent-item-role">${agent.role}</div>
           </div>
-          <div class="agent-item-role">${agent.role}</div>
+          <span class="agent-check" style="color: ${color};">${isSelected ? '✓' : ''}</span>
         </div>
-        <span class="agent-check" style="color: ${color};">${isSelected ? '✓' : ''}</span>
-      </div>
-    `;
-  }).join('');
+      `;
+    }).join('')}
+  `;
 
   return `
     <div class="antigravity-agent-dropdown">
       <div class="agent-dropdown-header">
         <div class="agent-dropdown-title">
           <span>🕶️</span>
-          <span>Active Architecture Specialist</span>
+          <span>Especialistas & Suite SDD</span>
         </div>
-        <span class="agent-dropdown-count">${AGENT_REGISTRY.length} Available</span>
+        <span class="agent-dropdown-count">${AGENT_REGISTRY.length} Disponibles</span>
       </div>
       <div class="agent-list-scroll">
-        ${itemsHtml}
+        ${renderGroup('Bóveda de Arquitectura (Gobernanza)', '🏛️', vaultAgents)}
+        ${renderGroup('Suite SDD Gentleman Programming (Táctica)', '⚡', sddAgents)}
       </div>
     </div>
   `.trim();

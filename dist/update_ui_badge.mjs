@@ -180,7 +180,7 @@ class CdpWebSocketClient {
 
 /**
  * Manages target UI slots in the Antigravity 2.0 DOM and generates
- * collision-free injection payloads for registered mods.
+ * collision-free injection payloads for registered mods across all active chat panels.
  */
 class SlotManager {
   constructor() {
@@ -242,7 +242,8 @@ class SlotManager {
   }
 
   /**
-   * Generates browser-executable JavaScript to mount a mod within a target slot.
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * across ALL conversation tabs and split panels matching the selector.
    * @param {Object} params
    * @param {string} params.slotId
    * @param {string} params.modId
@@ -256,35 +257,45 @@ class SlotManager {
 
     return `
       (() => {
-        const anchor = document.querySelector('${slot.selector}');
-        if (!anchor) return;
+        const anchors = Array.from(document.querySelectorAll('${slot.selector}'));
+        if (!anchors.length) return;
 
-        let container = document.getElementById('${containerId}');
-        if (!container) {
-          container = document.createElement('div');
-          container.id = '${containerId}';
-          container.style.display = 'inline-flex';
-          container.style.alignItems = 'center';
-          container.style.gap = '8px';
+        for (const anchor of anchors) {
+          const parent = anchor.parentElement;
+          if (!parent) continue;
 
-          if ('${slot.strategy}' === 'after') {
-            anchor.insertAdjacentElement('afterend', container);
-          } else if ('${slot.strategy}' === 'before') {
-            anchor.insertAdjacentElement('beforebegin', container);
-          } else if ('${slot.strategy}' === 'prepend') {
-            anchor.prepend(container);
-          } else {
-            anchor.appendChild(container);
+          let container = parent.querySelector('#${containerId}');
+          if (!container) {
+            container = document.createElement('div');
+            container.id = '${containerId}';
+            container.className = 'antigravity-slot-container';
+            container.style.display = 'inline-flex';
+            container.style.alignItems = 'center';
+            container.style.gap = '8px';
+
+            if ('${slot.strategy}' === 'after') {
+              if (anchor.nextSibling) {
+                parent.insertBefore(container, anchor.nextSibling);
+              } else {
+                parent.appendChild(container);
+              }
+            } else if ('${slot.strategy}' === 'before') {
+              parent.insertBefore(container, anchor);
+            } else if ('${slot.strategy}' === 'prepend') {
+              anchor.prepend(container);
+            } else {
+              anchor.appendChild(container);
+            }
           }
-        }
 
-        let modNode = document.getElementById('${modWrapperId}');
-        if (!modNode) {
-          modNode = document.createElement('div');
-          modNode.id = '${modWrapperId}';
-          container.appendChild(modNode);
+          let modNode = container.querySelector('#${modWrapperId}');
+          if (!modNode) {
+            modNode = document.createElement('div');
+            modNode.id = '${modWrapperId}';
+            container.appendChild(modNode);
+          }
+          modNode.innerHTML = ${JSON.stringify(htmlContent)};
         }
-        modNode.innerHTML = ${JSON.stringify(htmlContent)};
       })();
     `;
   }
@@ -483,6 +494,7 @@ class ModLoader {
 
   /**
    * Compiles registered mods and their rendered templates into an executable CDP payload.
+   * Mounts and synchronizes across ALL open chat panels via MutationObserver.
    * @param {Object} context Host context passed to mod render methods.
    * @returns {string} Executable JavaScript.
    */
@@ -528,8 +540,26 @@ class ModLoader {
         }
         styleTag.textContent = ${JSON.stringify(cssBundle)};
 
-        // 2. Mount individual mods into target slots
-        ${mountSnippets.join('\n')}
+        // 2. Function to mount individual mods into target slots across all conversations
+        function mountAllMods() {
+          ${mountSnippets.join('\n')}
+        }
+
+        mountAllMods();
+
+        // 3. Observe DOM mutations to auto-mount into new or switched chat panels
+        if (window.__antigravityModObserver) {
+          window.__antigravityModObserver.disconnect();
+          window.__antigravityModObserver = null;
+        }
+
+        let mountRaf = null;
+        window.__antigravityModObserver = new MutationObserver(() => {
+          if (mountRaf) cancelAnimationFrame(mountRaf);
+          mountRaf = requestAnimationFrame(mountAllMods);
+        });
+
+        window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
       })();
     `;
   }
@@ -1088,22 +1118,30 @@ function renderAgentIconSvg(size = 16) {
 
 
 const PALETTE = [
-  'hsl(199, 89%, 60%)', // Sky / Cyan
-  'hsl(271, 91%, 65%)', // Purple
-  'hsl(330, 81%, 60%)', // Rose / Pink
-  'hsl(158, 64%, 52%)', // Emerald / Mint
-  'hsl(38, 92%, 50%)',  // Amber / Gold
-  'hsl(12, 88%, 59%)',  // Coral / Red
-  'hsl(250, 85%, 65%)', // Indigo / Violet
-  'hsl(175, 75%, 45%)'  // Teal
+  'hsl(199, 89%, 60%)', // Sky / Cyan (Lead Architect)
+  'hsl(271, 91%, 65%)', // Purple (Product Manager)
+  'hsl(330, 81%, 60%)', // Rose / Pink (Scrum Master)
+  'hsl(158, 64%, 52%)', // Emerald / Mint (Code Reviewer)
+  'hsl(12, 88%, 59%)',  // Coral / Red (Security Engineer)
+  'hsl(38, 92%, 50%)',  // Amber / Gold (DevOps & Cloud)
+  'hsl(175, 75%, 45%)', // Teal (UI/UX Pro Max)
+  'hsl(250, 85%, 65%)', // Indigo / Violet (Windows RPA)
+  'hsl(215, 90%, 60%)', // Electric Blue (SDD Orchestrator)
+  'hsl(45, 93%, 58%)',  // Sun Yellow (SDD Explore)
+  'hsl(290, 80%, 65%)', // Orchid (SDD Spec)
+  'hsl(24, 95%, 55%)',  // Blaze Orange (SDD Apply TDD)
+  'hsl(142, 70%, 45%)', // Bright Green (SDD Verify)
+  'hsl(340, 85%, 65%)'  // Crimson (Gentleman Guardian GGA)
 ];
 
 const AGENT_REGISTRY = [
+  // --- Bóveda de Arquitectura (Gobernanza & Estrategia) ---
   {
     id: 'lead-architect',
     name: 'Lead Architect',
     role: 'Multi-Agent Orchestrator & Hexagonal Design',
-    category: 'Architecture',
+    category: 'Vault Architecture',
+    suite: 'Bóveda',
     icon: '🏛️'
   },
   {
@@ -1111,6 +1149,7 @@ const AGENT_REGISTRY = [
     name: 'Product Manager',
     role: 'Business Discovery & PRD Formulation',
     category: 'Discovery',
+    suite: 'Bóveda',
     icon: '📋'
   },
   {
@@ -1118,6 +1157,7 @@ const AGENT_REGISTRY = [
     name: 'Scrum Master',
     role: 'Epics, User Stories & Backlog Refinement',
     category: 'Delivery',
+    suite: 'Bóveda',
     icon: '⏱️'
   },
   {
@@ -1125,6 +1165,7 @@ const AGENT_REGISTRY = [
     name: 'Code Reviewer',
     role: 'Clean Architecture Invariants & PR Gates',
     category: 'Quality',
+    suite: 'Bóveda',
     icon: '🔍'
   },
   {
@@ -1132,6 +1173,7 @@ const AGENT_REGISTRY = [
     name: 'Security Engineer',
     role: 'OWASP Top 10, Zero Trust & Hardening',
     category: 'Quality',
+    suite: 'Bóveda',
     icon: '🛡️'
   },
   {
@@ -1139,6 +1181,7 @@ const AGENT_REGISTRY = [
     name: 'DevOps & Cloud',
     role: 'Deterministic CI/CD, Docker & GitOps',
     category: 'Delivery',
+    suite: 'Bóveda',
     icon: '🚀'
   },
   {
@@ -1146,6 +1189,7 @@ const AGENT_REGISTRY = [
     name: 'UI/UX Pro Max',
     role: 'Design Tokens, A11y & Visual Systems',
     category: 'Frontend',
+    suite: 'Bóveda',
     icon: '🎨'
   },
   {
@@ -1153,7 +1197,58 @@ const AGENT_REGISTRY = [
     name: 'Windows RPA',
     role: 'PowerShell Automation & Desktop Tasks',
     category: 'Automation',
+    suite: 'Bóveda',
     icon: '🤖'
+  },
+
+  // --- Suite SDD Gentleman Programming (Táctica & Ejecución) ---
+  {
+    id: 'sdd-orchestrator',
+    name: 'SDD Orchestrator',
+    role: 'Spec-Driven Router & Flow Controller',
+    category: 'Gentleman SDD',
+    suite: 'Gentleman',
+    icon: '🧭'
+  },
+  {
+    id: 'sdd-explore',
+    name: 'SDD Explore',
+    role: 'Codebase Investigator & Pattern Discovery',
+    category: 'Gentleman SDD',
+    suite: 'Gentleman',
+    icon: '🔎'
+  },
+  {
+    id: 'sdd-spec',
+    name: 'SDD Spec',
+    role: 'Formal Specifications & BDD Scenarios',
+    category: 'Gentleman SDD',
+    suite: 'Gentleman',
+    icon: '📝'
+  },
+  {
+    id: 'sdd-apply',
+    name: 'SDD Apply (TDD)',
+    role: 'Strict Red-Green-Refactor Code Implementer',
+    category: 'Gentleman SDD',
+    suite: 'Gentleman',
+    icon: '⚡'
+  },
+  {
+    id: 'sdd-verify',
+    name: 'SDD Verify',
+    role: 'Scenario Compliance & Test Verification Gate',
+    category: 'Gentleman SDD',
+    suite: 'Gentleman',
+    icon: '✅'
+  },
+  {
+    id: 'gga-review',
+    name: 'Guardian Angel (GGA)',
+    role: 'Git Pre-Commit Standards & Code Culture Guard',
+    category: 'Gentleman SDD',
+    suite: 'Gentleman',
+    icon: '👼'
   }
 ];
 
@@ -1177,44 +1272,53 @@ function getAgentColor(agentId) {
 }
 
 function renderAgentDropdownHtml(activeAgentId = 'lead-architect') {
-  const itemsHtml = AGENT_REGISTRY.map(agent => {
-    const isSelected = agent.id === activeAgentId;
-    const color = getAgentColor(agent.id);
+  const vaultAgents = AGENT_REGISTRY.filter(a => a.suite === 'Bóveda');
+  const sddAgents = AGENT_REGISTRY.filter(a => a.suite === 'Gentleman');
 
-    return `
-      <div 
-        class="antigravity-agent-item ${isSelected ? 'selected' : ''}" 
-        data-agent-id="${agent.id}"
-        data-agent-name="${agent.name}"
-        data-agent-color="${color}"
-        data-agent-icon="${agent.icon}"
-        onclick="window.__selectAntigravityAgent('${agent.id}', '${agent.name}', '${color}')"
-      >
-        <span class="agent-color-dot" style="background: ${color}; box-shadow: 0 0 8px ${color}66;"></span>
-        <span class="agent-item-icon">${agent.icon}</span>
-        <div class="agent-item-details">
-          <div class="agent-item-name-row">
-            <span class="agent-item-name">${agent.name}</span>
-            <span class="agent-item-category" style="color: ${color};">${agent.category}</span>
+  const renderGroup = (title, icon, agents) => `
+    <div class="agent-section-header">
+      <span>${icon}</span>
+      <span>${title}</span>
+    </div>
+    ${agents.map(agent => {
+      const isSelected = agent.id === activeAgentId;
+      const color = getAgentColor(agent.id);
+      return `
+        <div 
+          class="antigravity-agent-item ${isSelected ? 'selected' : ''}" 
+          data-agent-id="${agent.id}"
+          data-agent-name="${agent.name}"
+          data-agent-color="${color}"
+          data-agent-icon="${agent.icon}"
+          onclick="window.__selectAntigravityAgent('${agent.id}', '${agent.name}', '${color}')"
+        >
+          <span class="agent-color-dot" style="background: ${color}; box-shadow: 0 0 8px ${color}66;"></span>
+          <span class="agent-item-icon">${agent.icon}</span>
+          <div class="agent-item-details">
+            <div class="agent-item-name-row">
+              <span class="agent-item-name">${agent.name}</span>
+              <span class="agent-item-category" style="color: ${color};">${agent.category}</span>
+            </div>
+            <div class="agent-item-role">${agent.role}</div>
           </div>
-          <div class="agent-item-role">${agent.role}</div>
+          <span class="agent-check" style="color: ${color};">${isSelected ? '✓' : ''}</span>
         </div>
-        <span class="agent-check" style="color: ${color};">${isSelected ? '✓' : ''}</span>
-      </div>
-    `;
-  }).join('');
+      `;
+    }).join('')}
+  `;
 
   return `
     <div class="antigravity-agent-dropdown">
       <div class="agent-dropdown-header">
         <div class="agent-dropdown-title">
           <span>🕶️</span>
-          <span>Active Architecture Specialist</span>
+          <span>Especialistas & Suite SDD</span>
         </div>
-        <span class="agent-dropdown-count">${AGENT_REGISTRY.length} Available</span>
+        <span class="agent-dropdown-count">${AGENT_REGISTRY.length} Disponibles</span>
       </div>
       <div class="agent-list-scroll">
-        ${itemsHtml}
+        ${renderGroup('Bóveda de Arquitectura (Gobernanza)', '🏛️', vaultAgents)}
+        ${renderGroup('Suite SDD Gentleman Programming (Táctica)', '⚡', sddAgents)}
       </div>
     </div>
   `.trim();
@@ -1240,7 +1344,7 @@ class AgentSelectorMod extends AntigravityMod {
       priority: 45
     });
 
-    this.cachedCss = ".antigravity-agent-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  padding: 4px 10px 4px 7px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n  font-size: 11px;\n  line-height: 1;\n  color: #f4f4f5;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n}\n\n.agent-badge-dot {\n  width: 6px;\n  height: 6px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n  transition: all 0.3s ease;\n}\n\n.agent-color-dot {\n  width: 8px;\n  height: 8px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n}\n\n.antigravity-agent-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  transform: translateY(-0.5px);\n  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);\n}\n\n.antigravity-agent-badge:active {\n  transform: translateY(0.5px);\n}\n\n.agent-label {\n  font-weight: 500;\n  letter-spacing: -0.01em;\n  color: #e4e4e7;\n  white-space: nowrap;\n}\n\n.agent-caret {\n  font-size: 8px;\n  color: #a1a1aa;\n  margin-left: 1px;\n  transition: transform 0.2s ease;\n}\n\n.antigravity-agent-badge:hover .agent-caret {\n  transform: rotate(180deg);\n}\n\n/* Responsive shrinking for narrow resolutions */\n@media (max-width: 960px) {\n  .agent-label {\n    display: none;\n  }\n  .agent-caret {\n    display: none;\n  }\n  .antigravity-agent-badge {\n    padding: 4px 6px;\n  }\n}\n\n/* Interactive Dropdown Popover */\n.antigravity-agent-dropdown-wrapper {\n  position: absolute;\n  top: calc(100% + 8px);\n  left: 0;\n  z-index: 99999;\n  display: none;\n  animation: agentFadeIn 0.15s ease-out;\n}\n\n.antigravity-agent-badge:hover .antigravity-agent-dropdown-wrapper,\n.antigravity-agent-badge:focus-within .antigravity-agent-dropdown-wrapper,\n.antigravity-agent-dropdown-wrapper:hover {\n  display: block;\n}\n\n.antigravity-agent-dropdown {\n  width: 320px;\n  max-height: 420px;\n  background: #18181b;\n  color: #f4f4f5;\n  border: 1px solid rgba(255, 255, 255, 0.16);\n  border-radius: 12px;\n  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);\n  backdrop-filter: blur(20px);\n  -webkit-backdrop-filter: blur(20px);\n  padding: 10px;\n  display: flex;\n  flex-direction: column;\n  pointer-events: auto;\n}\n\n.agent-dropdown-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 6px 8px 10px 8px;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08);\n  margin-bottom: 6px;\n}\n\n.agent-dropdown-title {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-weight: 600;\n  font-size: 12px;\n  color: #ffffff;\n}\n\n.agent-dropdown-count {\n  font-size: 10px;\n  padding: 2px 6px;\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, 0.08);\n  color: #a1a1aa;\n}\n\n.agent-list-scroll {\n  overflow-y: auto;\n  max-height: 330px;\n  display: flex;\n  flex-direction: column;\n  gap: 3px;\n  padding-right: 2px;\n}\n\n.agent-list-scroll::-webkit-scrollbar {\n  width: 4px;\n}\n\n.agent-list-scroll::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15);\n  border-radius: 4px;\n}\n\n.antigravity-agent-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 8px 10px;\n  border-radius: 8px;\n  cursor: pointer;\n  transition: all 0.12s ease;\n  border: 1px solid transparent;\n}\n\n.antigravity-agent-item:hover {\n  background: rgba(255, 255, 255, 0.07);\n  border-color: rgba(255, 255, 255, 0.1);\n  transform: translateX(1px);\n}\n\n.antigravity-agent-item.selected {\n  background: rgba(56, 189, 248, 0.12);\n  border-color: rgba(56, 189, 248, 0.3);\n}\n\n.agent-item-icon {\n  font-size: 16px;\n  flex-shrink: 0;\n}\n\n.agent-item-details {\n  flex: 1;\n  min-width: 0;\n}\n\n.agent-item-name-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  margin-bottom: 2px;\n}\n\n.agent-item-name {\n  font-size: 12px;\n  font-weight: 600;\n  color: #ffffff;\n}\n\n.agent-item-category {\n  font-size: 9.5px;\n  text-transform: uppercase;\n  color: #71717a;\n  letter-spacing: 0.03em;\n}\n\n.agent-item-role {\n  font-size: 10.5px;\n  color: #a1a1aa;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.agent-check {\n  font-size: 12px;\n  font-weight: bold;\n  color: #38bdf8;\n  width: 14px;\n  text-align: right;\n  flex-shrink: 0;\n}\n\n@keyframes agentFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(-4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
+    this.cachedCss = ".antigravity-agent-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  padding: 4px 10px 4px 7px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n  font-size: 11px;\n  line-height: 1;\n  color: #f4f4f5;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n}\n\n.agent-badge-dot {\n  width: 6px;\n  height: 6px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n  transition: all 0.3s ease;\n}\n\n.agent-color-dot {\n  width: 8px;\n  height: 8px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n}\n\n.antigravity-agent-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  transform: translateY(-0.5px);\n  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);\n}\n\n.antigravity-agent-badge:active {\n  transform: translateY(0.5px);\n}\n\n.agent-label {\n  font-weight: 500;\n  letter-spacing: -0.01em;\n  color: #e4e4e7;\n  white-space: nowrap;\n}\n\n.agent-caret {\n  font-size: 8px;\n  color: #a1a1aa;\n  margin-left: 1px;\n  transition: transform 0.2s ease;\n}\n\n.antigravity-agent-badge:hover .agent-caret {\n  transform: rotate(180deg);\n}\n\n/* Responsive compact mode (Container-driven via ResizeObserver) */\n.antigravity-agent-badge.compact {\n  padding: 4px 6px !important;\n  gap: 0 !important;\n}\n.antigravity-agent-badge.compact .agent-label,\n.antigravity-agent-badge.compact .agent-caret {\n  display: none !important;\n}\n\n/* Responsive shrinking for narrow screen resolutions */\n@media (max-width: 960px) {\n  .agent-label {\n    display: none;\n  }\n  .agent-caret {\n    display: none;\n  }\n  .antigravity-agent-badge {\n    padding: 4px 6px;\n  }\n}\n\n/* Interactive Dropdown Popover (opens upward above bottom prompt bar) */\n.antigravity-agent-dropdown-wrapper {\n  position: absolute;\n  bottom: calc(100% + 10px);\n  left: 0;\n  z-index: 99999;\n  display: none;\n  animation: agentFadeIn 0.15s ease-out;\n}\n\n.antigravity-agent-badge:hover .antigravity-agent-dropdown-wrapper,\n.antigravity-agent-badge:focus-within .antigravity-agent-dropdown-wrapper,\n.antigravity-agent-dropdown-wrapper:hover {\n  display: block;\n}\n\n.antigravity-agent-dropdown {\n  width: 320px;\n  max-height: 420px;\n  background: #18181b;\n  color: #f4f4f5;\n  border: 1px solid rgba(255, 255, 255, 0.16);\n  border-radius: 12px;\n  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);\n  backdrop-filter: blur(20px);\n  -webkit-backdrop-filter: blur(20px);\n  padding: 10px;\n  display: flex;\n  flex-direction: column;\n  pointer-events: auto;\n}\n\n.agent-dropdown-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 6px 8px 10px 8px;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08);\n  margin-bottom: 6px;\n}\n\n.agent-section-header {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-size: 10px;\n  font-weight: 700;\n  text-transform: uppercase;\n  letter-spacing: 0.05em;\n  color: #71717a;\n  padding: 8px 8px 4px 8px;\n  border-top: 1px solid rgba(255, 255, 255, 0.05);\n  margin-top: 4px;\n}\n\n.agent-section-header:first-child {\n  border-top: none;\n  margin-top: 0;\n  padding-top: 2px;\n}\n\n.agent-dropdown-title {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-weight: 600;\n  font-size: 12px;\n  color: #ffffff;\n}\n\n.agent-dropdown-count {\n  font-size: 10px;\n  padding: 2px 6px;\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, 0.08);\n  color: #a1a1aa;\n}\n\n.agent-list-scroll {\n  overflow-y: auto;\n  max-height: 330px;\n  display: flex;\n  flex-direction: column;\n  gap: 3px;\n  padding-right: 2px;\n}\n\n.agent-list-scroll::-webkit-scrollbar {\n  width: 4px;\n}\n\n.agent-list-scroll::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15);\n  border-radius: 4px;\n}\n\n.antigravity-agent-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 8px 10px;\n  border-radius: 8px;\n  cursor: pointer;\n  transition: all 0.12s ease;\n  border: 1px solid transparent;\n}\n\n.antigravity-agent-item:hover {\n  background: rgba(255, 255, 255, 0.07);\n  border-color: rgba(255, 255, 255, 0.1);\n  transform: translateX(1px);\n}\n\n.antigravity-agent-item.selected {\n  background: rgba(56, 189, 248, 0.12);\n  border-color: rgba(56, 189, 248, 0.3);\n}\n\n.agent-item-icon {\n  font-size: 16px;\n  flex-shrink: 0;\n}\n\n.agent-item-details {\n  flex: 1;\n  min-width: 0;\n}\n\n.agent-item-name-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  margin-bottom: 2px;\n}\n\n.agent-item-name {\n  font-size: 12px;\n  font-weight: 600;\n  color: #ffffff;\n}\n\n.agent-item-category {\n  font-size: 9.5px;\n  text-transform: uppercase;\n  color: #71717a;\n  letter-spacing: 0.03em;\n}\n\n.agent-item-role {\n  font-size: 10.5px;\n  color: #a1a1aa;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.agent-check {\n  font-size: 12px;\n  font-weight: bold;\n  color: #38bdf8;\n  width: 14px;\n  text-align: right;\n  flex-shrink: 0;\n}\n\n@keyframes agentFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
   }
 
   /**
@@ -1277,22 +1381,25 @@ class AgentSelectorMod extends AntigravityMod {
         <script>
           if (!window.__selectAntigravityAgent) {
             window.__selectAntigravityAgent = function(agentId, agentName, agentColor) {
-              const label = document.getElementById('antigravity-active-agent-name');
-              const badge = document.getElementById('antigravity-agent-badge');
-              const dot = document.getElementById('antigravity-active-agent-dot');
+              // Synchronize across ALL open chat panels & tabs
+              document.querySelectorAll('#antigravity-active-agent-name').forEach(label => {
+                label.textContent = agentName;
+              });
 
-              if (label) label.textContent = agentName;
-              if (badge) {
+              document.querySelectorAll('#antigravity-agent-badge').forEach(badge => {
                 badge.setAttribute('title', 'Active Specialist: ' + agentName);
                 if (agentColor) {
                   badge.style.borderColor = agentColor + '66';
                   badge.style.boxShadow = '0 0 8px ' + agentColor + '33';
                 }
-              }
-              if (dot && agentColor) {
-                dot.style.background = agentColor;
-                dot.style.boxShadow = '0 0 6px ' + agentColor;
-              }
+              });
+
+              document.querySelectorAll('#antigravity-active-agent-dot').forEach(dot => {
+                if (agentColor) {
+                  dot.style.background = agentColor;
+                  dot.style.boxShadow = '0 0 6px ' + agentColor;
+                }
+              });
 
               try {
                 localStorage.setItem('__antigravity_selected_agent', JSON.stringify({ 
@@ -1302,9 +1409,8 @@ class AgentSelectorMod extends AntigravityMod {
                 }));
               } catch (e) {}
 
-              // Update active tick marks and selections in list
-              const items = document.querySelectorAll('.antigravity-agent-item');
-              items.forEach(el => {
+              // Update active checkmarks in all open dropdowns
+              document.querySelectorAll('.antigravity-agent-item').forEach(el => {
                 const isMatch = el.getAttribute('data-agent-id') === agentId;
                 el.classList.toggle('selected', isMatch);
                 const check = el.querySelector('.agent-check');

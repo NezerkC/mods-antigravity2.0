@@ -33,7 +33,7 @@ test('SlotManager - generates slot container element id', () => {
   assert.equal(manager.getContainerId('header-actions'), 'antigravity-slot-header-actions');
 });
 
-test('SlotManager - generates mounting snippet for slot and mod', () => {
+test('SlotManager - generates mounting snippet for slot and mod targeting all matching conversation anchors', () => {
   const manager = new SlotManager();
   const snippet = manager.generateMountCode({
     slotId: 'header-actions',
@@ -41,6 +41,7 @@ test('SlotManager - generates mounting snippet for slot and mod', () => {
     htmlContent: '<div id="test-tachometer">Tachometer</div>'
   });
 
+  assert.ok(snippet.includes('document.querySelectorAll'));
   assert.ok(snippet.includes('antigravity-slot-header-actions'));
   assert.ok(snippet.includes('antigravity-mod-tachometer'));
   assert.ok(snippet.includes('test-tachometer'));
