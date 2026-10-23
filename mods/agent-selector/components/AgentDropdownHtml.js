@@ -17,6 +17,18 @@ export const PALETTE = [
   'hsl(340, 85%, 65%)'  // Crimson (Gentleman Guardian GGA)
 ];
 
+export const DEFAULT_AGENT = {
+  id: 'default',
+  name: 'Sin Agente (Default)',
+  level: 'default',
+  levelLabel: 'DEFAULT',
+  levelDesc: 'Asistente Antigravity Estándar',
+  role: 'Modo general sin rol especializado',
+  category: 'Standard',
+  suite: 'Standard',
+  iconName: 'default'
+};
+
 export const AGENT_REGISTRY = [
   // =========================================================================
   // 1. CÚSPIDE (GOBERNANZA GLOBAL & DIRECCIÓN DE OBRA)
@@ -191,6 +203,9 @@ export const AGENT_REGISTRY = [
  * @returns {string} HSL color string
  */
 export function getAgentColor(agentId) {
+  if (agentId === 'default') {
+    return 'hsl(215, 16%, 65%)';
+  }
   const index = AGENT_REGISTRY.findIndex(a => a.id === agentId);
   if (index !== -1 && index < PALETTE.length) {
     return PALETTE[index];
@@ -205,7 +220,10 @@ export function getAgentColor(agentId) {
 }
 
 /**
- * Renders the hierarchical dropdown card markup using Lucide SVG vectors.
+ * Renders the hierarchical dropdown card markup using Progressive Disclosure:
+ * Initial view: Default mode + Top 2 Orchestrators (Planner & Builder).
+ * Secondary catalog (Micro & Nano) collapsed behind an expandable trigger.
+ * 
  * @param {string} activeAgentId
  * @param {Array} dynamicAgents
  * @returns {string} HTML markup
@@ -235,16 +253,45 @@ export function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynami
   const nanoAgents = allAgents.filter(a => a.level === 'nano');
   const customAgents = allAgents.filter(a => a.level === 'custom');
 
+  // Render Default (Vanilla) card
+  const isDefaultSelected = activeAgentId === 'default';
+  const defaultColor = getAgentColor('default');
+  const defaultCardHtml = `
+    <div 
+      class="antigravity-agent-item primary-hero-card default-mode-card ${isDefaultSelected ? 'selected' : ''}" 
+      data-agent-id="default"
+      data-agent-name="Sin Agente (Default)"
+      data-agent-color="${defaultColor}"
+      style="--agent-theme-color: ${defaultColor};"
+      onclick="window.__selectAntigravityAgent('default', 'Sin Agente (Default)', '${defaultColor}')"
+      title="Asistente Antigravity Estándar sin rol especializado"
+    >
+      <div class="primary-hero-left">
+        <div class="primary-icon-box" style="color: ${defaultColor}; background: ${defaultColor}1a; border-color: ${defaultColor}33;">
+          ${renderAgentSvg('default', 16, 2)}
+        </div>
+        <div class="primary-info">
+          <div class="primary-title-row">
+            <span class="primary-title">Sin Agente</span>
+            <span class="primary-tag" style="background: ${defaultColor}20; color: ${defaultColor};">DEFAULT</span>
+          </div>
+          <div class="primary-sub">Modo estándar general</div>
+        </div>
+      </div>
+      <span class="agent-check" style="color: ${defaultColor};">${isDefaultSelected ? '✓' : ''}</span>
+    </div>
+  `;
+
   // Render a Cúspide Hero card (Planner or Builder)
   const renderCuspideCard = (agent) => {
     const isSelected = agent.id === activeAgentId;
     const color = getAgentColor(agent.id);
     const safeName = (agent.name || '').replace(/'/g, "\\'");
-    const svgIcon = renderAgentSvg(agent.id, 18, 2, 'cuspide-svg-icon');
+    const svgIcon = renderAgentSvg(agent.id, 16, 2, 'cuspide-svg-icon');
 
     return `
       <div 
-        class="antigravity-agent-item cuspide-hero-card ${isSelected ? 'selected' : ''}" 
+        class="antigravity-agent-item primary-hero-card cuspide-card ${isSelected ? 'selected' : ''}" 
         data-agent-id="${agent.id}"
         data-agent-name="${safeName}"
         data-agent-color="${color}"
@@ -252,21 +299,21 @@ export function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynami
         onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}')"
         title="${agent.name} - ${agent.role}"
       >
-        <div class="cuspide-top-row">
-          <div class="cuspide-icon-box" style="color: ${color}; background: ${color}1a; border-color: ${color}44;">
+        <div class="primary-hero-left">
+          <div class="primary-icon-box" style="color: ${color}; background: ${color}1a; border-color: ${color}44;">
             ${svgIcon}
           </div>
-          <span class="cuspide-tag" style="background: ${color}26; color: ${color}; border-color: ${color}55;">
-            ${agent.levelLabel}
-          </span>
-        </div>
-        <div class="cuspide-info">
-          <div class="cuspide-name-row">
-            <span class="cuspide-name">${agent.name}</span>
-            <span class="agent-check" style="color: ${color};">${isSelected ? '✓' : ''}</span>
+          <div class="primary-info">
+            <div class="primary-title-row">
+              <span class="primary-title">${agent.name}</span>
+              <span class="primary-tag" style="background: ${color}26; color: ${color}; border-color: ${color}55;">
+                ${agent.levelLabel}
+              </span>
+            </div>
+            <div class="primary-sub">${agent.levelDesc}</div>
           </div>
-          <div class="cuspide-desc">${agent.levelDesc}</div>
         </div>
+        <span class="agent-check" style="color: ${color};">${isSelected ? '✓' : ''}</span>
       </div>
     `;
   };
@@ -276,7 +323,7 @@ export function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynami
     const isSelected = agent.id === activeAgentId;
     const color = getAgentColor(agent.id);
     const safeName = (agent.name || '').replace(/'/g, "\\'");
-    const svgIcon = renderAgentSvg(agent.id, 15, 2, 'compact-svg-icon');
+    const svgIcon = renderAgentSvg(agent.id, 14, 2, 'compact-svg-icon');
 
     return `
       <div 
@@ -311,76 +358,86 @@ export function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynami
             ${renderAgentSvg('lead-architect', 14, 2)}
           </span>
           <div class="agent-header-text">
-            <span class="agent-header-main">Jerarquía de Agentes</span>
-            <span class="agent-header-sub">Control Tower</span>
+            <span class="agent-header-main">Agentes Activos</span>
+            <span class="agent-header-sub">Selección Rápida</span>
           </div>
         </div>
-        <span class="agent-dropdown-count">${allAgents.length} Disponibles</span>
+        <span class="agent-dropdown-count">${allAgents.length + 1} Modos</span>
       </div>
 
-      <!-- 1. CÚSPIDE (GOBERNANZA & ESTRATEGIA) -->
-      <div class="agent-cuspide-section">
-        <div class="agent-section-label">
-          <span>CÚSPIDE · GOBERNANZA & DIRECCIÓN</span>
-        </div>
-        <div class="cuspide-cards-grid">
-          ${cuspideAgents.map(renderCuspideCard).join('')}
-        </div>
+      <!-- SECCIÓN PRINCIPAL VISIBLE: 3 OPCIONES CLAVE -->
+      <div class="agent-primary-section">
+        ${defaultCardHtml}
+        ${cuspideAgents.map(renderCuspideCard).join('')}
       </div>
 
-      <!-- 2. SEGMENTED LEVEL TABS -->
-      <div class="agent-level-tabs">
-        <button 
-          type="button"
-          class="agent-tab-btn active" 
-          data-tab="micro" 
-          onclick="window.__switchAgentTab('micro')"
-        >
-          <span class="tab-icon">${renderAgentSvg('product-manager', 13, 2)}</span>
-          <span>Micro (${microAgents.length})</span>
-        </button>
-        <button 
-          type="button"
-          class="agent-tab-btn" 
-          data-tab="nano" 
-          onclick="window.__switchAgentTab('nano')"
-        >
-          <span class="tab-icon">${renderAgentSvg('sdd-apply', 13, 2)}</span>
-          <span>Nano (${nanoAgents.length})</span>
-        </button>
-        ${customAgents.length > 0 ? `
+      <!-- BOTÓN ACORDEÓN / TOGGLE DE CATÁLOGO EXTENDIDO -->
+      <button 
+        type="button" 
+        class="agent-catalog-toggle-btn" 
+        id="antigravity-agent-catalog-toggle"
+        onclick="window.__toggleAgentCatalog()"
+      >
+        <span class="catalog-toggle-text">▾ Ver Especialistas (Micro & Nano)</span>
+        <span class="catalog-toggle-count">${microAgents.length + nanoAgents.length}</span>
+      </button>
+
+      <!-- DRAWER / CATÁLOGO EXTENDIDO (COLAPSADO POR DEFECTO) -->
+      <div class="agent-catalog-drawer collapsed" id="antigravity-agent-catalog-drawer">
+        <!-- SEGMENTED LEVEL TABS -->
+        <div class="agent-level-tabs">
+          <button 
+            type="button"
+            class="agent-tab-btn active" 
+            data-tab="micro" 
+            onclick="window.__switchAgentTab('micro')"
+          >
+            <span class="tab-icon">${renderAgentSvg('product-manager', 13, 2)}</span>
+            <span>Micro (${microAgents.length})</span>
+          </button>
           <button 
             type="button"
             class="agent-tab-btn" 
-            data-tab="custom" 
-            onclick="window.__switchAgentTab('custom')"
+            data-tab="nano" 
+            onclick="window.__switchAgentTab('nano')"
           >
-            <span class="tab-icon">${renderAgentSvg('default-custom', 13, 2)}</span>
-            <span>Custom (${customAgents.length})</span>
+            <span class="tab-icon">${renderAgentSvg('sdd-apply', 13, 2)}</span>
+            <span>Nano (${nanoAgents.length})</span>
           </button>
-        ` : ''}
-      </div>
-
-      <!-- 3. TAB CONTENT PANELS -->
-      <div class="agent-tab-content active" data-tab-content="micro">
-        <div class="compact-grid">
-          ${microAgents.map(renderCompactItem).join('')}
+          ${customAgents.length > 0 ? `
+            <button 
+              type="button"
+              class="agent-tab-btn" 
+              data-tab="custom" 
+              onclick="window.__switchAgentTab('custom')"
+            >
+              <span class="tab-icon">${renderAgentSvg('default-custom', 13, 2)}</span>
+              <span>Custom (${customAgents.length})</span>
+            </button>
+          ` : ''}
         </div>
-      </div>
 
-      <div class="agent-tab-content" data-tab-content="nano">
-        <div class="compact-grid">
-          ${nanoAgents.map(renderCompactItem).join('')}
-        </div>
-      </div>
-
-      ${customAgents.length > 0 ? `
-        <div class="agent-tab-content" data-tab-content="custom">
+        <!-- TAB CONTENT PANELS -->
+        <div class="agent-tab-content active" data-tab-content="micro">
           <div class="compact-grid">
-            ${customAgents.map(renderCompactItem).join('')}
+            ${microAgents.map(renderCompactItem).join('')}
           </div>
         </div>
-      ` : ''}
+
+        <div class="agent-tab-content" data-tab-content="nano">
+          <div class="compact-grid">
+            ${nanoAgents.map(renderCompactItem).join('')}
+          </div>
+        </div>
+
+        ${customAgents.length > 0 ? `
+          <div class="agent-tab-content" data-tab-content="custom">
+            <div class="compact-grid">
+              ${customAgents.map(renderCompactItem).join('')}
+            </div>
+          </div>
+        ` : ''}
+      </div>
     </div>
   `.trim();
 }

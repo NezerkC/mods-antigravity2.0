@@ -75,17 +75,21 @@ test('AgentSelectorMod - categorizes agents into Cúspide (Planner & Builder), M
   assert.equal(builder.levelLabel, 'BUILDER');
 });
 
-test('AgentSelectorMod - renders Lucide SVG icons and hierarchical layout without emojis', () => {
+test('AgentSelectorMod - renders Lucide SVG icons and progressive disclosure layout without emojis', () => {
   const mod = new AgentSelectorMod();
   const rendered = mod.render({});
 
   assert.ok(rendered.html.includes('lucide-agent-icon'));
-  assert.ok(rendered.html.includes('cuspide-hero-card'));
-  assert.ok(rendered.html.includes('agent-level-tabs'));
+  assert.ok(rendered.html.includes('default-mode-card'));
+  assert.ok(rendered.html.includes('Sin Agente'));
+  assert.ok(rendered.html.includes('Lead Architect'));
+  assert.ok(rendered.html.includes('SDD Orchestrator'));
   assert.ok(rendered.html.includes('PLANNER'));
   assert.ok(rendered.html.includes('BUILDER'));
-  assert.ok(rendered.html.includes('compact-agent-card'));
+  assert.ok(rendered.html.includes('agent-catalog-toggle-btn'));
+  assert.ok(rendered.html.includes('agent-catalog-drawer collapsed'));
   assert.ok(rendered.html.includes('data-tab="micro"'));
   assert.ok(rendered.html.includes('data-tab="nano"'));
 });
+
 

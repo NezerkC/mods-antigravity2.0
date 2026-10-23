@@ -1,6 +1,6 @@
 /* =========================================================================
    ANTIGRAVITY AGENT SELECTOR MOD - STYLES
-   Hierarchical Layout: Cúspide (Planner & Builder), Micro, Nano (Lucide SVGs)
+   Progressive Disclosure: Default Mode + Planner/Builder, Collapsible Catalog
    ========================================================================= */
 
 .antigravity-agent-badge {
@@ -115,8 +115,7 @@
 }
 
 .antigravity-agent-dropdown {
-  width: 350px;
-  max-height: 480px;
+  width: 320px;
   background: #14151e;
   color: #f4f4f5;
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -124,10 +123,10 @@
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.75), 0 2px 8px rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  padding: 12px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   pointer-events: auto;
   box-sizing: border-box;
 }
@@ -137,7 +136,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: 8px;
+  padding-bottom: 6px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -148,9 +147,9 @@
 }
 
 .agent-header-icon-box {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
   background: rgba(122, 162, 247, 0.15);
   color: #7aa2f7;
   display: flex;
@@ -161,135 +160,170 @@
 .agent-header-text {
   display: flex;
   flex-direction: column;
-  line-height: 1.2;
+  line-height: 1.15;
 }
 
 .agent-header-main {
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
   color: #ffffff;
 }
 
 .agent-header-sub {
-  font-size: 9.5px;
+  font-size: 9px;
   color: #71717a;
 }
 
 .agent-dropdown-count {
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 500;
-  padding: 2px 8px;
+  padding: 2px 7px;
   border-radius: 9999px;
   background: rgba(255, 255, 255, 0.08);
   color: #a1a1aa;
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-/* 1. CÚSPIDE (GOBERNANZA & DIRECCIÓN) */
-.agent-cuspide-section {
+/* SECCIÓN PRINCIPAL: 3 OPCIONES VISIBLES */
+.agent-primary-section {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 
-.agent-section-label {
-  font-size: 9.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  color: #71717a;
-  text-transform: uppercase;
-}
-
-.cuspide-cards-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.cuspide-hero-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
-  box-sizing: border-box;
-}
-
-.cuspide-hero-card:hover {
-  background: rgba(255, 255, 255, 0.07);
-  border-color: rgba(255, 255, 255, 0.2);
-  transform: translateY(-1px);
-}
-
-.cuspide-hero-card.selected {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: var(--agent-theme-color, #38bdf8);
-  box-shadow: 0 0 12px rgba(56, 189, 248, 0.2);
-}
-
-.cuspide-top-row {
+.primary-hero-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 7px 9px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: all 0.14s ease;
+  box-sizing: border-box;
 }
 
-.cuspide-icon-box {
-  width: 28px;
-  height: 28px;
+.primary-hero-card:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.18);
+  transform: translateX(1px);
+}
+
+.primary-hero-card.selected {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--agent-theme-color, #38bdf8);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
+}
+
+.primary-hero-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.primary-icon-box {
+  width: 26px;
+  height: 26px;
   border-radius: 6px;
   border: 1px solid transparent;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
-.cuspide-tag {
-  font-size: 8.5px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  padding: 1px 6px;
-  border-radius: 4px;
-  border: 1px solid transparent;
-}
-
-.cuspide-info {
+.primary-info {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  line-height: 1.2;
+  min-width: 0;
 }
 
-.cuspide-name-row {
+.primary-title-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
 }
 
-.cuspide-name {
+.primary-title {
   font-size: 11.5px;
   font-weight: 600;
   color: #ffffff;
+  white-space: nowrap;
 }
 
-.cuspide-desc {
-  font-size: 9.5px;
+.primary-tag {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+}
+
+.primary-sub {
+  font-size: 9px;
   color: #a1a1aa;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* 2. SEGMENTED LEVEL TABS */
+/* TOGGLE ACORDEÓN PARA CATÁLOGO EXTENDIDO */
+.agent-catalog-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 9px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  color: #a1a1aa;
+  font-size: 10.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.agent-catalog-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #e4e4e7;
+}
+
+.catalog-toggle-count {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #71717a;
+}
+
+/* DRAWER COLAPSABLE */
+.agent-catalog-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.agent-catalog-drawer.collapsed {
+  display: none !important;
+}
+
+/* LEVEL TABS EN EL DRAWER */
 .agent-level-tabs {
   display: flex;
   gap: 4px;
   padding: 3px;
   background: rgba(0, 0, 0, 0.28);
   border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 8px;
+  border-radius: 6px;
 }
 
 .agent-tab-btn {
@@ -297,14 +331,14 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  height: 26px;
+  gap: 5px;
+  height: 24px;
   border: none;
   background: transparent;
   color: #71717a;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 500;
-  border-radius: 6px;
+  border-radius: 5px;
   cursor: pointer;
   transition: all 0.15s ease;
   user-select: none;
@@ -319,7 +353,6 @@
   background: rgba(255, 255, 255, 0.1);
   color: #ffffff;
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
 .tab-icon {
@@ -327,10 +360,10 @@
   align-items: center;
 }
 
-/* 3. TAB CONTENT PANELS */
+/* TAB PANELS */
 .agent-tab-content {
   display: none;
-  max-height: 220px;
+  max-height: 190px;
   overflow-y: auto;
   padding-right: 2px;
 }
@@ -352,14 +385,14 @@
 .compact-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px;
+  gap: 5px;
 }
 
 .compact-agent-card {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  gap: 6px;
+  padding: 5px 7px;
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 6px;
@@ -371,7 +404,6 @@
 .compact-agent-card:hover {
   background: rgba(255, 255, 255, 0.06);
   border-color: rgba(255, 255, 255, 0.14);
-  transform: translateY(-0.5px);
 }
 
 .compact-agent-card.selected {
@@ -380,9 +412,9 @@
 }
 
 .compact-icon-box {
-  width: 24px;
-  height: 24px;
-  border-radius: 5px;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
   border: 1px solid transparent;
   display: flex;
   align-items: center;
@@ -404,7 +436,7 @@
 }
 
 .compact-name {
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
   color: #f1f5f9;
   white-space: nowrap;
@@ -413,7 +445,7 @@
 }
 
 .compact-sub {
-  font-size: 9px;
+  font-size: 8.5px;
   color: #71717a;
   white-space: nowrap;
   overflow: hidden;
