@@ -220,15 +220,14 @@ export function getAgentColor(agentId) {
 }
 
 /**
- * Renders the hierarchical dropdown card markup using Progressive Disclosure:
- * Initial view: Default mode + Top 2 Orchestrators (Planner & Builder).
- * Secondary catalog (Micro & Nano) collapsed behind an expandable trigger.
+ * Renders the hierarchical dropdown card markup using Progressive Disclosure
+ * where EVERY text block is enclosed in an explicit card component for clear visual boundaries.
  * 
  * @param {string} activeAgentId
  * @param {Array} dynamicAgents
  * @returns {string} HTML markup
  */
-export function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynamicAgents = []) {
+export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) {
   const mergedMap = new Map();
   for (const a of AGENT_REGISTRY) {
     mergedMap.set(a.id, a);
@@ -258,17 +257,17 @@ export function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynami
   const defaultColor = getAgentColor('default');
   const defaultCardHtml = `
     <div 
-      class="antigravity-agent-item primary-hero-card default-mode-card ${isDefaultSelected ? 'selected' : ''}" 
+      class="antigravity-agent-item agent-card primary-hero-card default-mode-card ${isDefaultSelected ? 'selected' : ''}" 
       data-agent-id="default"
-      data-agent-name="Sin Agente (Default)"
+      data-agent-name="Sin Agente"
       data-agent-color="${defaultColor}"
       style="--agent-theme-color: ${defaultColor};"
-      onclick="window.__selectAntigravityAgent('default', 'Sin Agente (Default)', '${defaultColor}')"
+      onclick="window.__selectAntigravityAgent('default', 'Sin Agente', '${defaultColor}')"
       title="Asistente Antigravity Estándar sin rol especializado"
     >
       <div class="primary-hero-left">
         <div class="primary-icon-box" style="color: ${defaultColor}; background: ${defaultColor}1a; border-color: ${defaultColor}33;">
-          ${renderAgentSvg('default', 16, 2)}
+          ${renderAgentSvg('default', 15, 2)}
         </div>
         <div class="primary-info">
           <div class="primary-title-row">
@@ -287,11 +286,11 @@ export function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynami
     const isSelected = agent.id === activeAgentId;
     const color = getAgentColor(agent.id);
     const safeName = (agent.name || '').replace(/'/g, "\\'");
-    const svgIcon = renderAgentSvg(agent.id, 16, 2, 'cuspide-svg-icon');
+    const svgIcon = renderAgentSvg(agent.id, 15, 2, 'cuspide-svg-icon');
 
     return `
       <div 
-        class="antigravity-agent-item primary-hero-card cuspide-card ${isSelected ? 'selected' : ''}" 
+        class="antigravity-agent-item agent-card primary-hero-card cuspide-card ${isSelected ? 'selected' : ''}" 
         data-agent-id="${agent.id}"
         data-agent-name="${safeName}"
         data-agent-color="${color}"
@@ -307,7 +306,7 @@ export function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynami
             <div class="primary-title-row">
               <span class="primary-title">${agent.name}</span>
               <span class="primary-tag" style="background: ${color}26; color: ${color}; border-color: ${color}55;">
-                ${agent.levelLabel}
+                ${agent.levelLabel.trim()}
               </span>
             </div>
             <div class="primary-sub">${agent.levelDesc}</div>
@@ -323,11 +322,11 @@ export function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynami
     const isSelected = agent.id === activeAgentId;
     const color = getAgentColor(agent.id);
     const safeName = (agent.name || '').replace(/'/g, "\\'");
-    const svgIcon = renderAgentSvg(agent.id, 14, 2, 'compact-svg-icon');
+    const svgIcon = renderAgentSvg(agent.id, 13, 2, 'compact-svg-icon');
 
     return `
       <div 
-        class="antigravity-agent-item compact-agent-card ${isSelected ? 'selected' : ''}" 
+        class="antigravity-agent-item agent-card compact-agent-card ${isSelected ? 'selected' : ''}" 
         data-agent-id="${agent.id}"
         data-agent-name="${safeName}"
         data-agent-color="${color}"
@@ -351,8 +350,8 @@ export function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynami
 
   return `
     <div class="antigravity-agent-dropdown">
-      <!-- HEADER -->
-      <div class="agent-dropdown-header">
+      <!-- 1. HEADER CARD -->
+      <div class="agent-card agent-header-card">
         <div class="agent-dropdown-title">
           <span class="agent-header-icon-box">
             ${renderAgentSvg('lead-architect', 14, 2)}
@@ -365,78 +364,88 @@ export function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynami
         <span class="agent-dropdown-count">Control Tower</span>
       </div>
 
-      <!-- SECCIÓN PRINCIPAL VISIBLE: 3 OPCIONES CLAVE -->
+      <!-- 2. SECCIÓN PRINCIPAL: 3 CARDS DIRECTAS -->
       <div class="agent-primary-section">
         ${defaultCardHtml}
         ${cuspideAgents.map(renderCuspideCard).join('')}
       </div>
 
-      <!-- BOTÓN ACORDEÓN / TOGGLE DE CATÁLOGO EXTENDIDO -->
-      <button 
-        type="button" 
-        class="agent-catalog-toggle-btn" 
-        id="antigravity-agent-catalog-toggle"
-        onclick="window.__toggleAgentCatalog()"
-      >
-        <span class="catalog-toggle-text">▾ Ver Especialistas (Micro & Nano)</span>
-        <span class="catalog-toggle-count">${microAgents.length + nanoAgents.length}</span>
-      </button>
+      <!-- 3. TOGGLE ACORDEÓN CARD BUTTON -->
+      <div class="agent-card agent-toggle-card">
+        <button 
+          type="button" 
+          class="agent-catalog-toggle-btn" 
+          id="antigravity-agent-catalog-toggle"
+          onclick="window.__toggleAgentCatalog()"
+        >
+          <span class="catalog-toggle-text">▾ Ver Especialistas (Micro & Nano)</span>
+          <span class="catalog-toggle-count">${microAgents.length + nanoAgents.length}</span>
+        </button>
+      </div>
 
-      <!-- DRAWER / CATÁLOGO EXTENDIDO (COLAPSADO POR DEFECTO) -->
+      <!-- 4. DRAWER CONTAINER CARD (COLAPSADO POR DEFECTO) -->
       <div class="agent-catalog-drawer collapsed" id="antigravity-agent-catalog-drawer">
-        <!-- SEGMENTED LEVEL TABS -->
-        <div class="agent-level-tabs">
-          <button 
-            type="button"
-            class="agent-tab-btn active" 
-            data-tab="micro" 
-            onclick="window.__switchAgentTab('micro')"
-          >
-            <span class="tab-icon">${renderAgentSvg('product-manager', 13, 2)}</span>
-            <span>Micro (${microAgents.length})</span>
-          </button>
-          <button 
-            type="button"
-            class="agent-tab-btn" 
-            data-tab="nano" 
-            onclick="window.__switchAgentTab('nano')"
-          >
-            <span class="tab-icon">${renderAgentSvg('sdd-apply', 13, 2)}</span>
-            <span>Nano (${nanoAgents.length})</span>
-          </button>
-          ${customAgents.length > 0 ? `
+        <div class="agent-card agent-drawer-card">
+          <!-- SEGMENTED LEVEL TABS -->
+          <div class="agent-level-tabs">
+            <button 
+              type="button"
+              class="agent-tab-btn active" 
+              data-tab="micro" 
+              onclick="window.__switchAgentTab('micro')"
+            >
+              <span class="tab-icon">${renderAgentSvg('product-manager', 12, 2)}</span>
+              <span>Micro (${microAgents.length})</span>
+            </button>
             <button 
               type="button"
               class="agent-tab-btn" 
-              data-tab="custom" 
-              onclick="window.__switchAgentTab('custom')"
+              data-tab="nano" 
+              onclick="window.__switchAgentTab('nano')"
             >
-              <span class="tab-icon">${renderAgentSvg('default-custom', 13, 2)}</span>
-              <span>Custom (${customAgents.length})</span>
+              <span class="tab-icon">${renderAgentSvg('sdd-apply', 12, 2)}</span>
+              <span>Nano (${nanoAgents.length})</span>
             </button>
-          ` : ''}
-        </div>
-
-        <!-- TAB CONTENT PANELS -->
-        <div class="agent-tab-content active" data-tab-content="micro">
-          <div class="compact-grid">
-            ${microAgents.map(renderCompactItem).join('')}
+            ${customAgents.length > 0 ? `
+              <button 
+                type="button"
+                class="agent-tab-btn" 
+                data-tab="custom" 
+                onclick="window.__switchAgentTab('custom')"
+              >
+                <span class="tab-icon">${renderAgentSvg('default-custom', 12, 2)}</span>
+                <span>Custom (${customAgents.length})</span>
+              </button>
+            ` : ''}
           </div>
-        </div>
 
-        <div class="agent-tab-content" data-tab-content="nano">
-          <div class="compact-grid">
-            ${nanoAgents.map(renderCompactItem).join('')}
-          </div>
-        </div>
-
-        ${customAgents.length > 0 ? `
-          <div class="agent-tab-content" data-tab-content="custom">
+          <!-- TAB CONTENT PANELS -->
+          <div class="agent-tab-content active" data-tab-content="micro">
             <div class="compact-grid">
-              ${customAgents.map(renderCompactItem).join('')}
+              ${microAgents.map(renderCompactItem).join('')}
             </div>
           </div>
-        ` : ''}
+
+          <div class="agent-tab-content" data-tab-content="nano">
+            <div class="compact-grid">
+              ${nanoAgents.map(renderCompactItem).join('')}
+            </div>
+          </div>
+
+          ${customAgents.length > 0 ? `
+            <div class="agent-tab-content" data-tab-content="custom">
+              <div class="compact-grid">
+                ${customAgents.map(renderCompactItem).join('')}
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      </div>
+
+      <!-- 5. FOOTER CARD -->
+      <div class="agent-card agent-footer-card">
+        <span class="footer-dot"></span>
+        <span class="footer-text">Modo seleccionado activo en tiempo real</span>
       </div>
     </div>
   `.trim();

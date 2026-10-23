@@ -1,6 +1,6 @@
 /* =========================================================================
    ANTIGRAVITY AGENT SELECTOR MOD - STYLES
-   Progressive Disclosure: Default Mode + Planner/Builder, Collapsible Catalog
+   Card Architecture: Every text section enclosed in card components
    ========================================================================= */
 
 .antigravity-agent-badge {
@@ -126,18 +126,30 @@
   padding: 10px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
   pointer-events: auto;
   box-sizing: border-box;
 }
 
-/* HEADER */
-.agent-dropdown-header {
+/* =========================================================================
+   CARD COMPONENT SYSTEM
+   ========================================================================= */
+.agent-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  box-sizing: border-box;
+  transition: all 0.14s ease;
+}
+
+/* 1. HEADER CARD */
+.agent-header-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-bottom: 6px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 7px 9px;
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 
 .agent-dropdown-title {
@@ -176,15 +188,15 @@
 
 .agent-dropdown-count {
   font-size: 9.5px;
-  font-weight: 500;
+  font-weight: 600;
   padding: 2px 7px;
   border-radius: 9999px;
   background: rgba(255, 255, 255, 0.08);
   color: #a1a1aa;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-/* SECCIÓN PRINCIPAL: 3 OPCIONES VISIBLES */
+/* 2. PRIMARY SECTION: 3 CARDS DIRECTAS */
 .agent-primary-section {
   display: flex;
   flex-direction: column;
@@ -196,24 +208,19 @@
   align-items: center;
   justify-content: space-between;
   padding: 7px 9px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 7px;
   cursor: pointer;
-  transition: all 0.14s ease;
-  box-sizing: border-box;
 }
 
 .primary-hero-card:hover {
   background: rgba(255, 255, 255, 0.07);
-  border-color: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.2);
   transform: translateX(1px);
 }
 
 .primary-hero-card.selected {
   background: rgba(255, 255, 255, 0.08);
   border-color: var(--agent-theme-color, #38bdf8);
-  box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.18);
 }
 
 .primary-hero-left {
@@ -272,57 +279,72 @@
   text-overflow: ellipsis;
 }
 
-/* TOGGLE ACORDEÓN PARA CATÁLOGO EXTENDIDO */
+/* 3. TOGGLE ACORDEÓN CARD */
+.agent-toggle-card {
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
 .agent-catalog-toggle-btn {
   display: flex;
   align-items: center;
   justify-content: space-between;
   width: 100%;
   padding: 6px 9px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px dashed rgba(255, 255, 255, 0.14);
-  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 7px;
   color: #a1a1aa;
   font-size: 10.5px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;
   user-select: none;
+  box-sizing: border-box;
 }
 
 .agent-catalog-toggle-btn:hover {
   background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.25);
-  color: #e4e4e7;
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
 }
 
 .catalog-toggle-count {
   font-size: 9px;
+  font-weight: 600;
   padding: 1px 5px;
   border-radius: 9999px;
   background: rgba(255, 255, 255, 0.08);
   color: #71717a;
 }
 
-/* DRAWER COLAPSABLE */
+/* 4. DRAWER CONTAINER CARD */
 .agent-catalog-drawer {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .agent-catalog-drawer.collapsed {
   display: none !important;
 }
 
-/* LEVEL TABS EN EL DRAWER */
+.agent-drawer-card {
+  padding: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  background: rgba(0, 0, 0, 0.35);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* LEVEL TABS DENTRO DEL DRAWER */
 .agent-level-tabs {
   display: flex;
   gap: 4px;
-  padding: 3px;
-  background: rgba(0, 0, 0, 0.28);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  padding: 2px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 6px;
 }
 
@@ -393,21 +415,18 @@
   align-items: center;
   gap: 6px;
   padding: 5px 7px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 6px;
   cursor: pointer;
-  transition: all 0.12s ease;
-  box-sizing: border-box;
 }
 
 .compact-agent-card:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.18);
+  transform: translateY(-0.5px);
 }
 
 .compact-agent-card.selected {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.09);
   border-color: var(--agent-theme-color, #38bdf8);
 }
 
@@ -450,6 +469,31 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 5. FOOTER CARD */
+.agent-footer-card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.footer-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: #38bdf8;
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.6);
+  flex-shrink: 0;
+}
+
+.footer-text {
+  font-size: 9px;
+  color: #71717a;
+  white-space: nowrap;
 }
 
 .agent-check {
