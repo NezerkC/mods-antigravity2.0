@@ -41,11 +41,19 @@ mods-antigravity2.0/
 │   │   │   └── PopoverHtml.js       # Detailed telemetry breakdown card
 │   │   ├── manifest.json
 │   │   └── styles.css
+│   ├── mods-manager/                # Top menubar panel & stealth kill-switch manager
+│   │   ├── components/
+│   │   │   └── ModsManagerHtml.js   # Slide-out modal with toggle switches
+│   │   ├── manifest.json
+│   │   └── styles.css
 │   └── template/                    # Starter template for new mods
 ├── dist/                            # Bundled distributions ready for deployment
 │   └── antigravity_mod_loader.mjs
-├── tests/                           # Unit and live CDP integration test suite
+├── tests/                           # Unit and live CDP integration test suite (58 tests)
+├── tools/                           # Live probing and diagnostic CLI utilities
+│   └── probe.js                     # DOM, process, and CDP probe
 ├── build.js                         # Bundler deploying to ~/.gemini/config/mods/
+├── start-daemon.bat                 # Interactive Windows launcher & System Tray daemon
 └── package.json
 ```
 
@@ -53,22 +61,28 @@ mods-antigravity2.0/
 
 ## Features
 
-### 1. Accurate Per-Chat Context Tachometer
+### 1. Accurate Per-Chat Context Tachometer (v2.0.0)
 - Reads `.system_generated/logs/transcript_full.jsonl` matching the conversation ID in `data-cascade-id` and `/c/<id>` in real-time.
 - Displays accurate token count, percentage against the 1M ceiling, and dynamic color-coded needle (Green $\rightarrow$ Yellow $\rightarrow$ Orange $\rightarrow$ Red).
-- Floating popover portal auto-flips upwards when anchored in the bottom chat footer.
+- Floating popover portal with click-to-toggle activation and responsive auto-flip.
 
-### 2. Dynamic Agent Discovery (`*.md`)
+### 2. Dynamic Agent Discovery & Selector (v2.0.0)
 - `AgentDiscoveryService` automatically discovers all agent definitions from:
   - Local workspace (`./agents/*.md`, `**/*.agent.md`, `agent.md`)
   - Shared Architecture Vault (`~/.gemini/antigravity/scratch/architecture-vault/`)
   - Global Skills (`~/.gemini/config/skills/**/SKILL.md`)
 - Parses YAML frontmatter or Markdown headers to extract name, description, role, icon, and suite.
-- Merges discovered agents with the canonical Architecture Vault & SDD Gentleman Programming specialists.
+- Fedora hat + sunglasses SVG icon with searchable agent list.
 
-### 3. Floating Portals & Zero-DOM-Thrashing
-- Menus attach directly to `document.body` (`position: fixed; z-index: 999999;`).
-- Non-destructive `MutationObserver` checks slot existence before mounting; eliminates DOM rebuilding and click cancellation.
+### 3. Mods Manager & Stealth Kill-Switch (v2.0.0)
+- Header menubar trigger button mounting cleanly in `.bg-sidebar`.
+- Slide-out management panel allowing real-time activation/deactivation of mods.
+- Global persistence kill-switch (`localStorage.__antigravity_daemon_enabled`).
+
+### 4. Background Mod Daemon & Windows System Tray
+- Autonomous `ModDaemon` monitoring Antigravity Electron lifecycle via active CDP HTTP probing (`127.0.0.1:53908`, `9222`, etc.).
+- Auto-reinjects mods on window navigation, reload, or app restart without DOM thrashing.
+- Interactive launcher (`start-daemon.bat`) with persistent PowerShell System Tray icon and context menu.
 
 ---
 
@@ -80,7 +94,7 @@ To bundle and deploy the latest framework and mods directly to Antigravity's glo
 npm run build
 ```
 
-To run the unit test suite (33 tests):
+To run the full unit test suite (58 tests):
 
 ```bash
 npm test

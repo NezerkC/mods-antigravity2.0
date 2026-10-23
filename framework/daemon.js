@@ -35,12 +35,14 @@ async function handleCli() {
     } else {
       console.log('ℹ No startup launcher was found.');
     }
+    windowsService.stopRunningTray();
     windowsService.stopRunningDaemon();
     return;
   }
 
   if (args.includes('--stop')) {
-    console.log('⚡ Stopping background Mod Daemon...');
+    console.log('⚡ Stopping background Mod Daemon and System Tray...');
+    windowsService.stopRunningTray();
     const stopped = windowsService.stopRunningDaemon();
     if (stopped) {
       console.log('✅ Background daemon terminated.');
@@ -54,37 +56,42 @@ async function handleCli() {
     const installed = windowsService.isInstalled();
     const pid = windowsService.readPid();
     const running = windowsService.isProcessRunning(pid);
+    const trayPid = windowsService.readTrayPid();
+    const trayRunning = windowsService.isProcessRunning(trayPid);
 
     console.log('📊 Antigravity Mod Daemon Status:');
     console.log(`   - Windows Startup Persistence: ${installed ? 'Installed (Active)' : 'Not installed'}`);
     console.log(`   - Launcher Path: ${windowsService.getLauncherPath()}`);
-    console.log(`   - Background Process: ${running ? `Running (PID: ${pid})` : 'Inactive'}`);
+    console.log(`   - Background Daemon: ${running ? `Running (PID: ${pid})` : 'Inactive'}`);
+    console.log(`   - System Tray Icon: ${trayRunning ? `Running (PID: ${trayPid})` : 'Inactive'}`);
     return;
   }
 
   if (args.includes('--start')) {
     const currentPid = windowsService.readPid();
-    if (windowsService.isProcessRunning(currentPid)) {
-      console.log(`ℹ Daemon already running in background (PID: ${currentPid}).`);
+    const currentTrayPid = windowsService.readTrayPid();
+    const isDaemonRunning = windowsService.isProcessRunning(currentPid);
+    const isTrayRunning = windowsService.isProcessRunning(currentTrayPid);
+
+    if (isDaemonRunning && isTrayRunning) {
+      console.log(`ℹ Daemon and System Tray already running in background (PID: ${currentPid}, Tray: ${currentTrayPid}).`);
       return;
     }
 
-    // Ensure VBS launcher is installed
+    // Ensure VBS launcher and tray runner are installed
     windowsService.install(__filename);
 
-    console.log('🚀 Spawning Antigravity Mod Daemon in background...');
-    const vbsPath = windowsService.getLauncherPath();
-    spawn('wscript.exe', [vbsPath], { detached: true, stdio: 'ignore' }).unref();
+    console.log('🚀 Spawning Antigravity Mod Daemon with System Tray in background...');
+    const trayPath = windowsService.getTrayPath();
+    const launchCmd = `Start-Process powershell.exe -ArgumentList '-WindowStyle Hidden -ExecutionPolicy Bypass -NoProfile -File "${trayPath}"'`;
+    spawn('powershell.exe', ['-NoProfile', '-Command', launchCmd], { stdio: 'ignore' });
 
-    // Give it a brief moment to initialize and save PID
-    await new Promise(r => setTimeout(r, 800));
+    // Give it a brief moment to initialize and save PIDs
+    await new Promise(r => setTimeout(r, 1200));
 
     const newPid = windowsService.readPid();
-    if (windowsService.isProcessRunning(newPid)) {
-      console.log(`✅ Daemon started detached in background with PID: ${newPid}`);
-    } else {
-      console.log('✅ Daemon background startup command dispatched.');
-    }
+    const newTrayPid = windowsService.readTrayPid();
+    console.log(`✅ Daemon started with System Tray (Daemon PID: ${newPid || 'initializing'}, Tray PID: ${newTrayPid || 'active'}).`);
     return;
   }
 
