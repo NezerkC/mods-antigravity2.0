@@ -7,6 +7,7 @@
   "scripts": {
     "build": "node build.js",
     "deploy": "node build.js",
+    "package": "node tools/package_release.mjs",
     "test": "node --test tests/unit/*.test.mjs",
     "daemon": "node framework/daemon.js",
     "daemon:start": "node framework/daemon.js --start",
