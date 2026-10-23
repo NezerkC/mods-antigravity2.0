@@ -1,6 +1,7 @@
 import { ModHost } from './core/ModHost.js';
 import { ContextTachometerMod } from '../mods/context-tachometer/index.js';
 import { AgentSelectorMod } from '../mods/agent-selector/index.js';
+import { ModsManagerMod } from '../mods/mods-manager/index.js';
 
 /**
  * Standard host entrypoint for Antigravity Mod Framework.
@@ -11,6 +12,7 @@ export async function runModLoader() {
     // Register default first-party mods
     host.registerMod(new ContextTachometerMod());
     host.registerMod(new AgentSelectorMod());
+    host.registerMod(new ModsManagerMod());
 
     await host.dispatch();
   } catch (err) {

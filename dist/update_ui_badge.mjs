@@ -295,6 +295,10 @@ class SlotManager {
         selector: 'header, [role="banner"]',
         strategy: 'append'
       }],
+      ['menubar-actions', {
+        selector: '.shrink-0 > .bg-sidebar',
+        strategy: 'append'
+      }],
       ['status-bar', {
         selector: 'footer, [data-testid="status-bar"]',
         strategy: 'append'
@@ -369,29 +373,30 @@ class SlotManager {
         });
 
         for (const anchor of anchors) {
-          // Resolve effective parent and sibling target
+          let parent;
           let targetItem = anchor;
-          let parent = anchor.parentElement;
-          if (!parent) continue;
 
-          // For slots targeting buttons inside UI toolbars (like header-actions / model-selector-trigger),
-          // anchor is often wrapped in block-level dropdown trigger divs (e.g. Radix/Base-UI popover trigger).
-          // We walk up from anchor.parentElement to find the flex row container so that the slot container
-          // is placed directly beside the model selector in the same flex row at the same horizontal level.
-          const candidateFlex = anchor.parentElement ? (
-            anchor.parentElement.closest('.flex.items-center.gap-1') || 
-            anchor.parentElement.closest('.flex.items-center') || 
-            anchor.parentElement.closest('.flex')
-          ) : null;
+          if ('${slot.strategy}' === 'append' || '${slot.strategy}' === 'prepend') {
+            parent = anchor;
+          } else {
+            parent = anchor.parentElement;
+            if (!parent) continue;
 
-          if (candidateFlex && candidateFlex.contains(anchor)) {
-            let curr = anchor;
-            while (curr.parentElement && curr.parentElement !== candidateFlex) {
-              curr = curr.parentElement;
-            }
-            if (curr.parentElement === candidateFlex) {
-              parent = candidateFlex;
-              targetItem = curr;
+            const candidateFlex = anchor.parentElement ? (
+              anchor.parentElement.closest('.flex.items-center.gap-1') || 
+              anchor.parentElement.closest('.flex.items-center') || 
+              anchor.parentElement.closest('.flex')
+            ) : null;
+
+            if (candidateFlex && candidateFlex.contains(anchor)) {
+              let curr = anchor;
+              while (curr.parentElement && curr.parentElement !== candidateFlex) {
+                curr = curr.parentElement;
+              }
+              if (curr.parentElement === candidateFlex) {
+                parent = candidateFlex;
+                targetItem = curr;
+              }
             }
           }
 
@@ -403,7 +408,8 @@ class SlotManager {
             container.style.display = 'inline-flex';
             container.style.alignItems = 'center';
             container.style.gap = '6px';
-            container.style.height = '28px';
+            container.style.height = '100%';
+            container.style.setProperty('app-region', 'no-drag');
 
             if ('${slot.strategy}' === 'after') {
               if (targetItem.nextSibling) {
@@ -420,12 +426,14 @@ class SlotManager {
             }
           } else {
             // Ensure slot container remains directly in parent flex row, right after targetItem
-            if (container.parentElement !== parent || ('${slot.strategy}' === 'after' && container.previousElementSibling !== targetItem)) {
+            if ('${slot.strategy}' === 'after' && (container.parentElement !== parent || container.previousElementSibling !== targetItem)) {
               if (targetItem.nextSibling) {
                 parent.insertBefore(container, targetItem.nextSibling);
               } else {
                 parent.appendChild(container);
               }
+            } else if (('${slot.strategy}' === 'append' || '${slot.strategy}' === 'prepend') && container.parentElement !== parent) {
+              parent.appendChild(container);
             }
           }
 
@@ -614,6 +622,7 @@ class AntigravityMod {
 
 
 
+
 /**
  * Discovers, registers, and compiles UI mods into coordinated injection scripts.
  */
@@ -738,13 +747,20 @@ class ModLoader {
 
           const isCurrentOpen = portal.classList.contains('open') && portal.__currentBadge === badge;
 
-          // Close Tachometer popover if open
+          // Close other popovers if open
           const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
           if (tachPortal) {
             tachPortal.classList.remove('open');
             tachPortal.__currentBadge = null;
           }
           document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+          const mPortal = document.getElementById('antigravity-mods-manager-portal');
+          if (mPortal) {
+            mPortal.classList.remove('open');
+            mPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
 
           document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
           portal.classList.remove('open');
@@ -816,6 +832,124 @@ class ModLoader {
         };
 
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
+        window.__renderModsManagerPanelHtml = ${renderModsManagerPanelHtml.toString()};
+
+        window.__applyModsVisibility = function() {
+          const tachEnabled = localStorage.getItem('__antigravity_mod_enabled_context-tachometer') !== 'false';
+          const agentEnabled = localStorage.getItem('__antigravity_mod_enabled_agent-selector') !== 'false';
+
+          document.querySelectorAll('.antigravity-tachometer-badge').forEach(b => {
+            b.style.display = tachEnabled ? 'inline-flex' : 'none';
+          });
+          document.querySelectorAll('.antigravity-agent-badge').forEach(b => {
+            b.style.display = agentEnabled ? 'inline-flex' : 'none';
+          });
+        };
+
+        window.__toggleModsManagerPanel = function(e, btnEl) {
+          if (e) {
+            e.stopPropagation();
+            e.preventDefault();
+          }
+          const btn = btnEl || (e ? e.currentTarget : document.querySelector('.antigravity-mods-manager-btn'));
+          if (!btn) return;
+
+          // Close other popovers
+          const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
+          if (aPortal) {
+            aPortal.classList.remove('open');
+            aPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+
+          const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+          if (tachPortal) {
+            tachPortal.classList.remove('open');
+            tachPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+          let portal = document.getElementById('antigravity-mods-manager-portal');
+          if (!portal) {
+            portal = document.createElement('div');
+            portal.id = 'antigravity-mods-manager-portal';
+            portal.className = 'antigravity-mods-manager-portal';
+            document.body.appendChild(portal);
+          }
+
+          const isCurrentOpen = portal.classList.contains('open') && portal.__currentBtn === btn;
+
+          document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+          portal.classList.remove('open');
+          portal.__currentBtn = null;
+
+          if (!isCurrentOpen) {
+            btn.classList.add('open');
+            portal.__currentBtn = btn;
+
+            if (window.__renderModsManagerPanelHtml) {
+              portal.innerHTML = window.__renderModsManagerPanelHtml();
+            }
+
+            // Sync switches with current localStorage state
+            const tachEnabled = localStorage.getItem('__antigravity_mod_enabled_context-tachometer') !== 'false';
+            const agentEnabled = localStorage.getItem('__antigravity_mod_enabled_agent-selector') !== 'false';
+            const daemonEnabled = localStorage.getItem('__antigravity_daemon_enabled') !== 'false';
+
+            const tachInput = portal.querySelector('#mod-toggle-context-tachometer');
+            if (tachInput) {
+              tachInput.checked = tachEnabled;
+              tachInput.onchange = (ev) => {
+                localStorage.setItem('__antigravity_mod_enabled_context-tachometer', ev.target.checked);
+                window.__applyModsVisibility();
+              };
+            }
+
+            const agentInput = portal.querySelector('#mod-toggle-agent-selector');
+            if (agentInput) {
+              agentInput.checked = agentEnabled;
+              agentInput.onchange = (ev) => {
+                localStorage.setItem('__antigravity_mod_enabled_agent-selector', ev.target.checked);
+                window.__applyModsVisibility();
+              };
+            }
+
+            const daemonInput = portal.querySelector('#mod-toggle-daemon');
+            const daemonPill = portal.querySelector('#daemon-status-pill');
+            if (daemonInput) {
+              daemonInput.checked = daemonEnabled;
+              if (daemonPill) {
+                daemonPill.textContent = daemonEnabled ? 'Activo' : 'En Pausa';
+                daemonPill.className = 'mod-status-pill ' + (daemonEnabled ? 'active' : 'paused');
+              }
+              daemonInput.onchange = (ev) => {
+                const isChecked = ev.target.checked;
+                localStorage.setItem('__antigravity_daemon_enabled', isChecked);
+                if (daemonPill) {
+                  daemonPill.textContent = isChecked ? 'Activo' : 'En Pausa';
+                  daemonPill.className = 'mod-status-pill ' + (isChecked ? 'active' : 'paused');
+                }
+              };
+            }
+
+            const closeBtn = portal.querySelector('#antigravity-mods-manager-close');
+            if (closeBtn) {
+              closeBtn.onclick = () => {
+                portal.classList.remove('open');
+                portal.__currentBtn = null;
+                btn.classList.remove('open');
+              };
+            }
+
+            // Position below the button
+            const rect = btn.getBoundingClientRect();
+            portal.style.top = (rect.bottom + 6) + 'px';
+            const portalWidth = 380;
+            const clampedLeft = Math.max(10, Math.min(window.innerWidth - portalWidth - 10, rect.left));
+            portal.style.left = clampedLeft + 'px';
+            portal.classList.add('open');
+          }
+        };
 
         window.__toggleTachometerPopover = function(e, badgeEl) {
           if (e) {
@@ -832,6 +966,15 @@ class ModLoader {
             agentPortal.__currentBadge = null;
           }
           document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+
+          // Close Mods Manager if open
+          const mPortal = document.getElementById('antigravity-mods-manager-portal');
+          if (mPortal) {
+            mPortal.classList.remove('open');
+            mPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+
 
           let portal = document.getElementById('antigravity-tachometer-popover-portal');
           if (!portal) {
@@ -966,6 +1109,17 @@ class ModLoader {
               }
               document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
             }
+
+            const isModsBtn = e.target.closest('.antigravity-mods-manager-btn');
+            const isModsPortal = e.target.closest('#antigravity-mods-manager-portal');
+            if (!isModsBtn && !isModsPortal) {
+              const mPortal = document.getElementById('antigravity-mods-manager-portal');
+              if (mPortal) {
+                mPortal.classList.remove('open');
+                mPortal.__currentBtn = null;
+              }
+              document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+            }
           }, true);
 
           document.addEventListener('keydown', (e) => {
@@ -983,6 +1137,13 @@ class ModLoader {
                 tachPortal.__currentBadge = null;
               }
               document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+              const mPortal = document.getElementById('antigravity-mods-manager-portal');
+              if (mPortal) {
+                mPortal.classList.remove('open');
+                mPortal.__currentBtn = null;
+              }
+              document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
             }
           });
         }
@@ -1039,6 +1200,18 @@ class ModLoader {
               window.__toggleTachometerPopover(e, badge);
             });
           });
+
+          // Bind Mods Manager click handler
+          document.querySelectorAll('.antigravity-mods-manager-btn').forEach(btn => {
+            if (btn.__modsClickBound) return;
+            btn.__modsClickBound = true;
+            btn.addEventListener('click', (e) => {
+              window.__toggleModsManagerPanel(e, btn);
+            });
+          });
+
+          // Restore saved mod visibility states
+          window.__applyModsVisibility();
 
           // Restore saved agent selection across all mounted badges
           try {
@@ -2173,12 +2346,150 @@ class AgentSelectorMod extends AntigravityMod {
 }
 
 
+// ===================== Mods Manager Mod =====================
+/**
+ * Generates HTML markup for the top menubar "Mods" button.
+ * @returns {string}
+ */
+function renderModsManagerButton() {
+  return `
+    <button class="antigravity-mods-manager-btn" id="antigravity-mods-manager-trigger" title="Gestión de Mods y Persistencia">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7"></rect>
+        <rect x="14" y="3" width="7" height="7"></rect>
+        <rect x="14" y="14" width="7" height="7"></rect>
+        <rect x="3" y="14" width="7" height="7"></rect>
+      </svg>
+      <span>Mods</span>
+    </button>
+  `.trim();
+}
+
+/**
+ * Generates HTML markup for the floating Mods Management portal panel.
+ * @returns {string}
+ */
+function renderModsManagerPanelHtml() {
+  return `
+    <div class="mods-manager-header">
+      <div class="mods-manager-title-wrap">
+        <h3 class="mods-manager-title">Antigravity Mods</h3>
+        <span class="mods-manager-badge">v2.0</span>
+      </div>
+      <button class="mods-manager-close-btn" id="antigravity-mods-manager-close" title="Cerrar">✕</button>
+    </div>
+
+    <!-- Mod Card: Context Tachometer -->
+    <div class="mod-card">
+      <div class="mod-info">
+        <div class="mod-icon-box">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/>
+            <path d="M12 6v6l4 2"/>
+          </svg>
+        </div>
+        <div class="mod-text">
+          <div class="mod-title">Tacómetro de Contexto</div>
+          <div class="mod-desc">Visualizador de tokens, pasos y tamaño de ventana en el chatbox.</div>
+        </div>
+      </div>
+      <label class="mod-switch">
+        <input type="checkbox" id="mod-toggle-context-tachometer" data-mod="context-tachometer" checked>
+        <span class="mod-slider"></span>
+      </label>
+    </div>
+
+    <!-- Mod Card: Agent Selector -->
+    <div class="mod-card">
+      <div class="mod-info">
+        <div class="mod-icon-box">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+        </div>
+        <div class="mod-text">
+          <div class="mod-title">Selector de Agentes</div>
+          <div class="mod-desc">Especialistas de Architecture Vault y SDD Suite en un clic.</div>
+        </div>
+      </div>
+      <label class="mod-switch">
+        <input type="checkbox" id="mod-toggle-agent-selector" data-mod="agent-selector" checked>
+        <span class="mod-slider"></span>
+      </label>
+    </div>
+
+    <!-- Mod Card: Background Persistence (Daemon Kill-Switch) -->
+    <div class="mod-card daemon-card">
+      <div class="mod-info">
+        <div class="mod-icon-box" style="background: rgba(122, 162, 247, 0.15); color: #7aa2f7;">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+        </div>
+        <div class="mod-text">
+          <div class="mod-title">
+            <span>Auto-Inyección en Background</span>
+            <span class="mod-status-pill active" id="daemon-status-pill">Activo</span>
+          </div>
+          <div class="mod-desc">Persistencia continua vía CDP. Apágalo para suspender toda inyección.</div>
+        </div>
+      </div>
+      <label class="mod-switch">
+        <input type="checkbox" id="mod-toggle-daemon" data-action="toggle-daemon" checked>
+        <span class="mod-slider"></span>
+      </label>
+    </div>
+  `.trim();
+}
+
+
+
+
+
+
+
+
+
+
+/**
+ * First-party Mod providing a top menubar control center to enable/disable
+ * individual mods and toggle background daemon auto-injection persistence.
+ */
+class ModsManagerMod extends AntigravityMod {
+  constructor() {
+    super({
+      id: 'mods-manager',
+      name: 'Mods Manager & Persistence Control',
+      version: '1.0.0',
+      slot: 'menubar-actions',
+      priority: 100
+    });
+
+    this.cachedCss = "/* Mods Manager Menu Button in Top Menubar */\n.antigravity-mods-manager-btn {\n  height: 28px !important;\n  padding: 0 10px !important;\n  font-size: 13px !important;\n  font-weight: 500 !important;\n  color: rgba(255, 255, 255, 0.72) !important;\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  transition: all 0.15s ease !important;\n  app-region: no-drag !important;\n  user-select: none !important;\n}\n\n.antigravity-mods-manager-btn:hover {\n  background: rgba(255, 255, 255, 0.08) !important;\n  color: #ffffff !important;\n}\n\n.antigravity-mods-manager-btn.open {\n  background: rgba(255, 255, 255, 0.14) !important;\n  color: #ffffff !important;\n  border-color: rgba(255, 255, 255, 0.2) !important;\n}\n\n.antigravity-mods-manager-btn svg {\n  width: 14px;\n  height: 14px;\n  opacity: 0.85;\n}\n\n/* Floating Portal Panel for Mods Manager */\n.antigravity-mods-manager-portal {\n  position: fixed !important;\n  z-index: 1000000 !important;\n  width: 380px !important;\n  background: #1a1b26 !important;\n  background: linear-gradient(180deg, #1f2335 0%, #1a1b26 100%) !important;\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\n  border-radius: 14px !important;\n  box-shadow: 0 20px 50px -10px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;\n  padding: 16px !important;\n  color: #c0caf5 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  display: none;\n  box-sizing: border-box !important;\n  animation: modManagerPopIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\n}\n\n.antigravity-mods-manager-portal.open {\n  display: block !important;\n}\n\n@keyframes modManagerPopIn {\n  from {\n    opacity: 0;\n    transform: translateY(-6px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n\n/* Header */\n.mods-manager-header {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  margin-bottom: 14px !important;\n  padding-bottom: 10px !important;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\n}\n\n.mods-manager-title-wrap {\n  display: flex !important;\n  align-items: center !important;\n  gap: 8px !important;\n}\n\n.mods-manager-title {\n  font-size: 14px !important;\n  font-weight: 600 !important;\n  color: #ffffff !important;\n  letter-spacing: -0.2px !important;\n  margin: 0 !important;\n}\n\n.mods-manager-badge {\n  font-size: 10px !important;\n  font-weight: 700 !important;\n  text-transform: uppercase !important;\n  padding: 2px 6px !important;\n  border-radius: 9999px !important;\n  background: rgba(122, 162, 247, 0.18) !important;\n  color: #7aa2f7 !important;\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\n}\n\n.mods-manager-close-btn {\n  background: transparent !important;\n  border: none !important;\n  color: rgba(255, 255, 255, 0.5) !important;\n  cursor: pointer !important;\n  padding: 4px !important;\n  border-radius: 4px !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n}\n\n.mods-manager-close-btn:hover {\n  color: #ffffff !important;\n  background: rgba(255, 255, 255, 0.08) !important;\n}\n\n/* Mod Card Item */\n.mod-card {\n  background: rgba(255, 255, 255, 0.03) !important;\n  border: 1px solid rgba(255, 255, 255, 0.07) !important;\n  border-radius: 10px !important;\n  padding: 12px !important;\n  margin-bottom: 10px !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  gap: 12px !important;\n  transition: all 0.15s ease !important;\n}\n\n.mod-card:hover {\n  background: rgba(255, 255, 255, 0.05) !important;\n  border-color: rgba(255, 255, 255, 0.14) !important;\n}\n\n.mod-card.daemon-card {\n  background: rgba(122, 162, 247, 0.04) !important;\n  border-color: rgba(122, 162, 247, 0.22) !important;\n}\n\n.mod-card.daemon-card:hover {\n  background: rgba(122, 162, 247, 0.08) !important;\n  border-color: rgba(122, 162, 247, 0.35) !important;\n}\n\n.mod-info {\n  display: flex !important;\n  align-items: flex-start !important;\n  gap: 10px !important;\n  flex: 1 !important;\n  min-width: 0 !important;\n}\n\n.mod-icon-box {\n  width: 32px !important;\n  height: 32px !important;\n  border-radius: 8px !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n  flex-shrink: 0 !important;\n  background: rgba(255, 255, 255, 0.06) !important;\n  color: #7aa2f7 !important;\n}\n\n.mod-text {\n  flex: 1 !important;\n  min-width: 0 !important;\n}\n\n.mod-title {\n  font-size: 13px !important;\n  font-weight: 600 !important;\n  color: #ffffff !important;\n  margin-bottom: 2px !important;\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n}\n\n.mod-desc {\n  font-size: 11px !important;\n  color: rgba(255, 255, 255, 0.55) !important;\n  line-height: 1.35 !important;\n}\n\n/* Status Pill */\n.mod-status-pill {\n  font-size: 10px !important;\n  font-weight: 600 !important;\n  padding: 1px 6px !important;\n  border-radius: 9999px !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 4px !important;\n}\n\n.mod-status-pill.active {\n  background: rgba(74, 222, 128, 0.15) !important;\n  color: #4ade80 !important;\n  border: 1px solid rgba(74, 222, 128, 0.3) !important;\n}\n\n.mod-status-pill.paused {\n  background: rgba(248, 113, 113, 0.15) !important;\n  color: #f87171 !important;\n  border: 1px solid rgba(248, 113, 113, 0.3) !important;\n}\n\n/* Modern Toggle Switch */\n.mod-switch {\n  position: relative !important;\n  display: inline-block !important;\n  width: 38px !important;\n  height: 20px !important;\n  flex-shrink: 0 !important;\n  cursor: pointer !important;\n}\n\n.mod-switch input {\n  opacity: 0 !important;\n  width: 0 !important;\n  height: 0 !important;\n  position: absolute !important;\n}\n\n.mod-slider {\n  position: absolute !important;\n  top: 0 !important;\n  left: 0 !important;\n  right: 0 !important;\n  bottom: 0 !important;\n  background-color: rgba(255, 255, 255, 0.15) !important;\n  border: 1px solid rgba(255, 255, 255, 0.18) !important;\n  border-radius: 9999px !important;\n  transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1) !important;\n}\n\n.mod-slider:before {\n  position: absolute !important;\n  content: \"\" !important;\n  height: 14px !important;\n  width: 14px !important;\n  left: 2px !important;\n  bottom: 2px !important;\n  background-color: #ffffff !important;\n  border-radius: 50% !important;\n  transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1) !important;\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35) !important;\n}\n\n.mod-switch input:checked + .mod-slider {\n  background-color: #7aa2f7 !important;\n  border-color: #7aa2f7 !important;\n}\n\n.mod-switch input:checked + .mod-slider:before {\n  transform: translateX(18px) !important;\n}\n";
+  }
+
+  /**
+   * Renders the top menubar button and styles for the Mods Manager.
+   * @param {Object} [context]
+   * @returns {{ html: string, css: string }}
+   */
+  render(context = {}) {
+    return {
+      html: renderModsManagerButton(),
+      css: this.cachedCss
+    };
+  }
+}
+
+
 // ======================= Entrypoint Execution =======================
 async function main() {
   try {
     const host = new ModHost();
     host.registerMod(new ContextTachometerMod());
     host.registerMod(new AgentSelectorMod());
+    host.registerMod(new ModsManagerMod());
     await host.dispatch();
   } catch (err) {
     // Fail silently in background hook context
