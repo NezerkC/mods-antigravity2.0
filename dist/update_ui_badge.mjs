@@ -738,11 +738,9 @@ class ModLoader {
             document.body.appendChild(portal);
           }
 
-          if (!portal.firstElementChild) {
-            const template = document.querySelector('.antigravity-agent-dropdown-template');
-            if (template) {
-              portal.innerHTML = template.innerHTML;
-            }
+          const template = document.querySelector('.antigravity-agent-dropdown-template');
+          if (template) {
+            portal.innerHTML = template.innerHTML;
           }
 
           const isCurrentOpen = portal.classList.contains('open') && portal.__currentBadge === badge;
@@ -793,8 +791,25 @@ class ModLoader {
             label.textContent = agentName;
           });
 
+          // Sync Lucide SVG icon into active badge
+          const item = document.querySelector('.antigravity-agent-item[data-agent-id="' + agentId + '"]');
+          if (item) {
+            const svg = item.querySelector('svg');
+            if (svg) {
+              const svgMarkup = svg.outerHTML;
+              document.querySelectorAll('.antigravity-active-agent-icon, #antigravity-active-agent-icon').forEach(iconWrap => {
+                iconWrap.innerHTML = svgMarkup;
+                const innerSvg = iconWrap.querySelector('svg');
+                if (innerSvg) {
+                  innerSvg.setAttribute('width', '14');
+                  innerSvg.setAttribute('height', '14');
+                }
+              });
+            }
+          }
+
           document.querySelectorAll('.antigravity-agent-badge, #antigravity-agent-badge').forEach(badge => {
-            badge.setAttribute('title', 'Active Specialist: ' + agentName);
+            badge.setAttribute('title', 'Modo Activo: ' + agentName);
             badge.classList.remove('open');
             if (agentColor) {
               badge.style.borderColor = agentColor + '66';
@@ -2499,7 +2514,7 @@ function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynamicAgents
             <span class="agent-header-sub">Selección Rápida</span>
           </div>
         </div>
-        <span class="agent-dropdown-count">${allAgents.length + 1} Modos</span>
+        <span class="agent-dropdown-count">Control Tower</span>
       </div>
 
       <!-- SECCIÓN PRINCIPAL VISIBLE: 3 OPCIONES CLAVE -->
@@ -2605,15 +2620,15 @@ class AgentSelectorMod extends AntigravityMod {
   }
 
   /**
-   * Renders the agent badge with the fedora/sunglasses icon and interactive selection dropdown.
+   * Renders the agent badge with the dynamic Lucide icon and interactive selection dropdown.
    * @param {Object} context
    * @returns {{ html: string, css: string }}
    */
   render(context = {}) {
-    const iconSvg = renderAgentIconSvg(16);
-    const initialAgentId = 'lead-architect';
-    const initialAgentName = 'Lead Architect';
+    const initialAgentId = 'default';
+    const initialAgentName = 'Sin Agente';
     const initialColor = getAgentColor(initialAgentId);
+    const iconSvg = `<span id="antigravity-active-agent-icon" class="antigravity-active-agent-icon" style="display: inline-flex; align-items: center; pointer-events: none;">${renderAgentSvg(initialAgentId, 14)}</span>`;
     const discoveredAgents = this.discoveryService.discoverAgents();
     const dropdownHtml = renderAgentDropdownHtml(initialAgentId, discoveredAgents);
 
@@ -2621,7 +2636,7 @@ class AgentSelectorMod extends AntigravityMod {
       <div 
         id="antigravity-agent-badge" 
         class="antigravity-agent-badge" 
-        title="Active Specialist: ${initialAgentName}" 
+        title="Modo Activo: ${initialAgentName}" 
         style="border-color: ${initialColor}55; box-shadow: 0 0 8px ${initialColor}22;"
         tabindex="0"
       >
