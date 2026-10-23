@@ -37,3 +37,11 @@ test('ContextTachometerMod - renders SVG gauge and popover markup with provided 
   assert.ok(rendered.html.includes('42.0k'));
   assert.ok(rendered.html.includes('<svg'));
 });
+
+test('ContextTachometerMod - styles include responsive collapse and compact rules', () => {
+  const mod = new ContextTachometerMod();
+  const rendered = mod.render({});
+  assert.ok(rendered.css.includes('.compact'));
+  assert.ok(rendered.css.includes('@media'));
+  assert.ok(rendered.css.includes('display: none') || rendered.css.includes('display:none'));
+});

@@ -431,7 +431,47 @@ export class ModLoader {
 
           // Apply current telemetry
           window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})});
+
+          // Observe all slot containers for responsive auto-collapse
+          document.querySelectorAll('.antigravity-slot-container').forEach(slot => {
+            if (window.__antigravityResizeObserver) {
+              window.__antigravityResizeObserver.observe(slot);
+              if (slot.parentElement) {
+                window.__antigravityResizeObserver.observe(slot.parentElement);
+              }
+            }
+            const parent = slot.parentElement || slot;
+            const isNarrow = parent.offsetWidth < 320 || slot.offsetWidth < 180 || window.innerWidth < 960;
+            const tach = slot.querySelector('.antigravity-tachometer-badge');
+            if (tach) tach.classList.toggle('compact', isNarrow);
+            const agent = slot.querySelector('.antigravity-agent-badge');
+            if (agent) agent.classList.toggle('compact', isNarrow);
+          });
         }
+
+        // Initialize ResizeObserver for responsive auto-collapse
+        if (window.__antigravityResizeObserver) {
+          window.__antigravityResizeObserver.disconnect();
+          window.__antigravityResizeObserver = null;
+        }
+
+        window.__antigravityResizeObserver = new ResizeObserver((entries) => {
+          for (const entry of entries) {
+            const container = entry.target;
+            const parent = container.parentElement || container;
+            const isNarrow = parent.offsetWidth < 320 || container.offsetWidth < 180 || window.innerWidth < 960;
+
+            const tach = container.querySelector('.antigravity-tachometer-badge') || parent.querySelector('.antigravity-tachometer-badge');
+            if (tach) {
+              tach.classList.toggle('compact', isNarrow);
+            }
+
+            const agent = container.querySelector('.antigravity-agent-badge') || parent.querySelector('.antigravity-agent-badge');
+            if (agent) {
+              agent.classList.toggle('compact', isNarrow);
+            }
+          }
+        });
 
         mountAllMods();
 

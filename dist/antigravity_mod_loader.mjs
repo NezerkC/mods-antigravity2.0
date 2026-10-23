@@ -899,7 +899,47 @@ class ModLoader {
 
           // Apply current telemetry
           window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})});
+
+          // Observe all slot containers for responsive auto-collapse
+          document.querySelectorAll('.antigravity-slot-container').forEach(slot => {
+            if (window.__antigravityResizeObserver) {
+              window.__antigravityResizeObserver.observe(slot);
+              if (slot.parentElement) {
+                window.__antigravityResizeObserver.observe(slot.parentElement);
+              }
+            }
+            const parent = slot.parentElement || slot;
+            const isNarrow = parent.offsetWidth < 320 || slot.offsetWidth < 180 || window.innerWidth < 960;
+            const tach = slot.querySelector('.antigravity-tachometer-badge');
+            if (tach) tach.classList.toggle('compact', isNarrow);
+            const agent = slot.querySelector('.antigravity-agent-badge');
+            if (agent) agent.classList.toggle('compact', isNarrow);
+          });
         }
+
+        // Initialize ResizeObserver for responsive auto-collapse
+        if (window.__antigravityResizeObserver) {
+          window.__antigravityResizeObserver.disconnect();
+          window.__antigravityResizeObserver = null;
+        }
+
+        window.__antigravityResizeObserver = new ResizeObserver((entries) => {
+          for (const entry of entries) {
+            const container = entry.target;
+            const parent = container.parentElement || container;
+            const isNarrow = parent.offsetWidth < 320 || container.offsetWidth < 180 || window.innerWidth < 960;
+
+            const tach = container.querySelector('.antigravity-tachometer-badge') || parent.querySelector('.antigravity-tachometer-badge');
+            if (tach) {
+              tach.classList.toggle('compact', isNarrow);
+            }
+
+            const agent = container.querySelector('.antigravity-agent-badge') || parent.querySelector('.antigravity-agent-badge');
+            if (agent) {
+              agent.classList.toggle('compact', isNarrow);
+            }
+          }
+        });
 
         mountAllMods();
 
@@ -1602,7 +1642,7 @@ class ContextTachometerMod extends AntigravityMod {
       priority: 50
     });
 
-    this.cachedCss = ".antigravity-tachometer-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 7px;\n  padding: 3px 9px 3px 6px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;\n  font-size: 11px;\n  line-height: 1;\n  color: #e4e4e7;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n}\n\n.antigravity-tachometer-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  transform: translateY(-0.5px);\n  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);\n}\n\n.antigravity-tachometer-badge:active {\n  transform: translateY(0.5px);\n}\n\n/* Interactive Tachometer Popover Portal (Fixed to Viewport) */\n.antigravity-tachometer-popover-portal {\n  position: fixed !important;\n  z-index: 999999 !important;\n  display: none;\n  animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\n}\n\n.antigravity-tachometer-popover-portal.open {\n  display: block !important;\n}\n\n.antigravity-popover-container {\n  display: none !important;\n}\n\n@keyframes popoverFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(-4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
+    this.cachedCss = ".antigravity-tachometer-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 7px;\n  padding: 3px 9px 3px 6px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;\n  font-size: 11px;\n  line-height: 1;\n  color: #e4e4e7;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n}\n\n.antigravity-tachometer-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  transform: translateY(-0.5px);\n  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);\n}\n\n.antigravity-tachometer-badge:active {\n  transform: translateY(0.5px);\n}\n\n/* Responsive compact mode (Speedometer SVG only, hides labels) */\n.antigravity-tachometer-badge.compact:not(.pinned) {\n  padding: 3px 6px !important;\n  gap: 0 !important;\n}\n\n.antigravity-tachometer-badge.compact:not(.pinned) .tachometer-tokens,\n.antigravity-tachometer-badge.compact:not(.pinned) .tachometer-pct {\n  display: none !important;\n}\n\n/* Responsive shrinking for narrow screen resolutions */\n@media (max-width: 960px) {\n  .antigravity-tachometer-badge:not(.pinned) {\n    padding: 3px 6px;\n    gap: 0;\n  }\n  .antigravity-tachometer-badge:not(.pinned) .tachometer-tokens,\n  .antigravity-tachometer-badge:not(.pinned) .tachometer-pct {\n    display: none;\n  }\n}\n\n/* Interactive Tachometer Popover Portal (Fixed to Viewport) */\n.antigravity-tachometer-popover-portal {\n  position: fixed !important;\n  z-index: 999999 !important;\n  display: none;\n  animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\n}\n\n.antigravity-tachometer-popover-portal.open {\n  display: block !important;\n}\n\n.antigravity-popover-container {\n  display: none !important;\n}\n\n@keyframes popoverFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(-4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
   }
 
   /**

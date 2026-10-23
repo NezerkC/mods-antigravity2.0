@@ -28,6 +28,29 @@
   transform: translateY(0.5px);
 }
 
+/* Responsive compact mode (Speedometer SVG only, hides labels) */
+.antigravity-tachometer-badge.compact:not(.pinned) {
+  padding: 3px 6px !important;
+  gap: 0 !important;
+}
+
+.antigravity-tachometer-badge.compact:not(.pinned) .tachometer-tokens,
+.antigravity-tachometer-badge.compact:not(.pinned) .tachometer-pct {
+  display: none !important;
+}
+
+/* Responsive shrinking for narrow screen resolutions */
+@media (max-width: 960px) {
+  .antigravity-tachometer-badge:not(.pinned) {
+    padding: 3px 6px;
+    gap: 0;
+  }
+  .antigravity-tachometer-badge:not(.pinned) .tachometer-tokens,
+  .antigravity-tachometer-badge:not(.pinned) .tachometer-pct {
+    display: none;
+  }
+}
+
 /* Interactive Tachometer Popover Portal (Fixed to Viewport) */
 .antigravity-tachometer-popover-portal {
   position: fixed !important;
