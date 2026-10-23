@@ -118,11 +118,9 @@ export class ModLoader {
             document.body.appendChild(portal);
           }
 
-          if (!portal.firstElementChild) {
-            const template = document.querySelector('.antigravity-agent-dropdown-template');
-            if (template) {
-              portal.innerHTML = template.innerHTML;
-            }
+          const template = document.querySelector('.antigravity-agent-dropdown-template');
+          if (template) {
+            portal.innerHTML = template.innerHTML;
           }
 
           const isCurrentOpen = portal.classList.contains('open') && portal.__currentBadge === badge;
@@ -173,8 +171,25 @@ export class ModLoader {
             label.textContent = agentName;
           });
 
+          // Sync Lucide SVG icon into active badge
+          const item = document.querySelector('.antigravity-agent-item[data-agent-id="' + agentId + '"]');
+          if (item) {
+            const svg = item.querySelector('svg');
+            if (svg) {
+              const svgMarkup = svg.outerHTML;
+              document.querySelectorAll('.antigravity-active-agent-icon, #antigravity-active-agent-icon').forEach(iconWrap => {
+                iconWrap.innerHTML = svgMarkup;
+                const innerSvg = iconWrap.querySelector('svg');
+                if (innerSvg) {
+                  innerSvg.setAttribute('width', '14');
+                  innerSvg.setAttribute('height', '14');
+                }
+              });
+            }
+          }
+
           document.querySelectorAll('.antigravity-agent-badge, #antigravity-agent-badge').forEach(badge => {
-            badge.setAttribute('title', 'Active Specialist: ' + agentName);
+            badge.setAttribute('title', 'Modo Activo: ' + agentName);
             badge.classList.remove('open');
             if (agentColor) {
               badge.style.borderColor = agentColor + '66';
