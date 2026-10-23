@@ -110,13 +110,16 @@ test('ModLoader - mutation observer traverses parent to prevent self-closest inf
   assert.ok(!script.includes('btn.closest'), 'Must not call btn.closest directly');
 });
 
-test('ModLoader - generates agent tab switcher window.__switchAgentTab', () => {
+test('ModLoader - generates agent tab switcher and catalog toggle functions', () => {
   const loader = new ModLoader();
   const script = loader.buildInjectionPayload({});
 
   assert.ok(script.includes('window.__switchAgentTab'));
+  assert.ok(script.includes('window.__toggleAgentCatalog'));
   assert.ok(script.includes('.agent-tab-btn'));
   assert.ok(script.includes('.agent-tab-content'));
+  assert.ok(script.includes('antigravity-agent-catalog-drawer'));
 });
+
 
 

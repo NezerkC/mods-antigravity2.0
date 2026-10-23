@@ -220,6 +220,20 @@ export class ModLoader {
           });
         };
 
+        window.__toggleAgentCatalog = function() {
+          const drawer = document.getElementById('antigravity-agent-catalog-drawer');
+          const btn = document.getElementById('antigravity-agent-catalog-toggle');
+          if (!drawer) return;
+          const isCollapsed = drawer.classList.contains('collapsed');
+          drawer.classList.toggle('collapsed', !isCollapsed);
+          if (btn) {
+            const textSpan = btn.querySelector('.catalog-toggle-text');
+            if (textSpan) {
+              textSpan.textContent = isCollapsed ? '▴ Ocultar Especialistas' : '▾ Ver Especialistas (Micro & Nano)';
+            }
+          }
+        };
+
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
         window.__renderModsManagerPanelHtml = ${renderModsManagerPanelHtml.toString()};
 
