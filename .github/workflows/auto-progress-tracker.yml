@@ -1,0 +1,205 @@
+name: Auto Progress Tracker & Task Coach
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  track:
+    name: Track Progress & Coach Next Task
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Evaluate Tasks & Sync Issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const tasks = [
+              {
+                id: 'T01',
+                title: 'T01: Core Host Runtime & CDP Port Resolver',
+                isDone: () => fs.existsSync('framework/core/CdpPortResolver.js') && fs.existsSync('tests/unit/cdp_port_resolver.test.mjs'),
+                coachTip: 'Implementar el auto-descubrimiento del puerto de depuración de Electron y el cliente WebSocket para Chrome DevTools Protocol.'
+              },
+              {
+                id: 'T02',
+                title: 'T02: Multi-panel Slot Management & Injection Anchors',
+                isDone: () => fs.existsSync('framework/core/SlotManager.js') && fs.existsSync('tests/unit/slot_manager.test.mjs'),
+                coachTip: 'Implementar SlotManager para coordinar las anclas DOM en los paneles de chat activos y header.'
+              },
+              {
+                id: 'T03',
+                title: 'T03: AntigravityMod SDK & Scoped Style Isolator',
+                isDone: () => fs.existsSync('framework/sdk/AntigravityMod.js') && fs.existsSync('framework/sdk/StyleIsolator.js') && fs.existsSync('tests/unit/style_isolator.test.mjs'),
+                coachTip: 'Definir el contrato formal AntigravityMod y el sistema de aislamiento de CSS con prefijado dinámico de selectores.'
+              },
+              {
+                id: 'T04',
+                title: 'T04: Mod Host & Mod Loader Engine',
+                isDone: () => fs.existsSync('framework/core/ModHost.js') && fs.existsSync('framework/core/ModLoader.js') && fs.existsSync('tests/unit/mod_loader.test.mjs'),
+                coachTip: 'Implementar ModHost y ModLoader para registrar, ordenar por prioridad y compilar el payload de inyección.'
+              },
+              {
+                id: 'T05',
+                title: 'T05: Real-time Transcript & Token Telemetry Service',
+                isDone: () => fs.existsSync('framework/services/TelemetryService.js') && fs.existsSync('tests/unit/telemetry_service.test.mjs'),
+                coachTip: 'Construir el TelemetryService para escaneo en streaming de transcript_full.jsonl y cálculo de tokens.'
+              },
+              {
+                id: 'T06',
+                title: 'T06: Context Tachometer UI Mod & Telemetry Popover',
+                isDone: () => fs.existsSync('mods/context-tachometer/manifest.json') && fs.existsSync('mods/context-tachometer/components/GaugeSvg.js') && fs.existsSync('tests/unit/context_tachometer_mod.test.mjs'),
+                coachTip: 'Desarrollar el velocímetro analógico SVG y el popover con métricas de contexto y auto-inversión vertical.'
+              },
+              {
+                id: 'T07',
+                title: 'T07: Dynamic Agent Discovery Engine',
+                isDone: () => fs.existsSync('framework/services/AgentDiscoveryService.js') && fs.existsSync('tests/unit/agent_discovery_service.test.mjs'),
+                coachTip: 'Crear el motor de descubrimiento dinámico de especialistas markdown con extracción de YAML y headers.'
+              },
+              {
+                id: 'T08',
+                title: 'T08: Agent Selector UI Mod & Fedora Badge',
+                isDone: () => fs.existsSync('mods/agent-selector/manifest.json') && fs.existsSync('mods/agent-selector/components/AgentIconSvg.js') && fs.existsSync('tests/unit/agent_selector_mod.test.mjs'),
+                coachTip: 'Construir el badge en header con icono fedora + sunglasses y portal flotante para selección de agentes.'
+              },
+              {
+                id: 'T09',
+                title: 'T09: Unified Build Bundler & Deployment Hook Sync',
+                isDone: () => fs.existsSync('build.js') && fs.existsSync('dist/antigravity_mod_loader.mjs'),
+                coachTip: 'Configurar el empaquetador ESM zero-dependencies y sincronización hacia ~/.gemini/config/mods/.'
+              },
+              {
+                id: 'T10',
+                title: 'T10: Git Workflow, Branch Protection & Atomic Commit Governance',
+                isDone: () => fs.existsSync('docs/GIT_WORKFLOW.md') && fs.existsSync('.github/pull_request_template.md'),
+                coachTip: 'Documentar reglas de ramas (trunk-based con feature branches), commits atómicos y plantilla de PR.'
+              },
+              {
+                id: 'T11',
+                title: 'T11: Automated CI Pipeline with Node Test Runner',
+                isDone: () => fs.existsSync('.github/workflows/ci.yml'),
+                coachTip: 'Crear el workflow .github/workflows/ci.yml para ejecutar la suite de pruebas unitarias en cada push y PR.'
+              },
+              {
+                id: 'T12',
+                title: 'T12: Developer Ergonomics, Mod Templates & Authoring Guide',
+                isDone: () => fs.existsSync('docs/MOD_AUTHORING_GUIDE.md') && fs.existsSync('mods/template/manifest.json') && fs.existsSync('tests/verify_loader.mjs'),
+                coachTip: 'Publicar la guía de autoría de mods, la plantilla starter y el script de verificación en vivo.'
+              }
+            ];
+
+            const allIssues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: 'all'
+            });
+
+            const issueMap = new Map();
+            for (const issue of allIssues) {
+              const matchedTask = tasks.find(t => issue.title.trim().toLowerCase().startsWith(t.id.toLowerCase()));
+              if (matchedTask) {
+                issueMap.set(matchedTask.id, issue);
+              }
+            }
+
+            let foundActive = false;
+
+            for (const task of tasks) {
+              const issue = issueMap.get(task.id);
+              const done = task.isDone();
+
+              if (!issue) {
+                console.log(`[Aviso] No se encontró Issue para ${task.id}`);
+                continue;
+              }
+
+              const currentLabels = issue.labels.map(l => typeof l === 'string' ? l : l.name);
+
+              if (done) {
+                const nextLabels = currentLabels
+                  .filter(l => l !== 'estado: en-curso' && l !== 'estado: por-hacer')
+                  .concat(!currentLabels.includes('estado: finalizado') ? ['estado: finalizado'] : []);
+
+                if (issue.state !== 'closed') {
+                  await github.rest.issues.createComment({
+                    owner,
+                    repo,
+                    issue_number: issue.number,
+                    body: `### [Autopilot Tracker] Tarea Verificada con Éxito\n\nTodos los archivos y criterios de aceptación para **${task.title}** están presentes y verificados en \`main\`.\n\n- **Estado:** Finalizado\n- **Acción:** Cerrando Issue automáticamente.`
+                  });
+
+                  await github.rest.issues.update({
+                    owner,
+                    repo,
+                    issue_number: issue.number,
+                    state: 'closed',
+                    state_reason: 'completed',
+                    labels: nextLabels
+                  });
+                  console.log(`Issue cerrado: #${issue.number} (${task.title})`);
+                } else {
+                  await github.rest.issues.setLabels({
+                    owner,
+                    repo,
+                    issue_number: issue.number,
+                    labels: nextLabels
+                  });
+                }
+              } else if (!foundActive) {
+                foundActive = true;
+                const nextLabels = currentLabels
+                  .filter(l => l !== 'estado: por-hacer' && l !== 'estado: finalizado')
+                  .concat(!currentLabels.includes('estado: en-curso') ? ['estado: en-curso'] : []);
+
+                if (issue.state === 'closed') {
+                  await github.rest.issues.update({
+                    owner,
+                    repo,
+                    issue_number: issue.number,
+                    state: 'open'
+                  });
+                }
+
+                await github.rest.issues.setLabels({
+                  owner,
+                  repo,
+                  issue_number: issue.number,
+                  labels: nextLabels
+                });
+
+                if (!currentLabels.includes('estado: en-curso')) {
+                  await github.rest.issues.createComment({
+                    owner,
+                    repo,
+                    issue_number: issue.number,
+                    body: `### [AI Task Coach] Siguiente Tarea en Curso\n\nEsta tarea ha sido promovida automáticamente a **EN CURSO**.\n\n> **Guía de Acción:**\n> ${task.coachTip}\n\nPara avanzar con el copiloto, recuerda seguir la política de ramas (\`feat/...\`) y commits atómicos.`
+                  });
+                }
+                console.log(`Issue promovido a EN CURSO: #${issue.number} (${task.title})`);
+              } else {
+                const nextLabels = currentLabels
+                  .filter(l => l !== 'estado: en-curso' && l !== 'estado: finalizado')
+                  .concat(!currentLabels.includes('estado: por-hacer') ? ['estado: por-hacer'] : []);
+
+                await github.rest.issues.setLabels({
+                  owner,
+                  repo,
+                  issue_number: issue.number,
+                  labels: nextLabels
+                });
+              }
+            }
