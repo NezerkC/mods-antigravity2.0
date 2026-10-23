@@ -1,0 +1,9 @@
+{
+  "id": "mods-manager",
+  "name": "Mods Manager",
+  "version": "2.0.0",
+  "description": "Panel de control y switches para activar o desactivar mods y persistencia en Antigravity.",
+  "slot": "menubar-actions",
+  "priority": 100,
+  "author": "Victor Manuel Martinez Munoz"
+}
