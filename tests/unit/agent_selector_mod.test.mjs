@@ -10,7 +10,7 @@ test('AgentSelectorMod - loads correct manifest metadata', () => {
   assert.equal(mod.manifest.priority, 45);
 });
 
-test('AgentSelectorMod - renders badge with fedora sunglasses icon and agent dropdown', () => {
+test('AgentSelectorMod - renders badge with dynamic Lucide icon and agent dropdown', () => {
   const mod = new AgentSelectorMod();
   const rendered = mod.render({});
 
@@ -18,7 +18,8 @@ test('AgentSelectorMod - renders badge with fedora sunglasses icon and agent dro
   assert.ok(rendered.css);
   assert.ok(rendered.html.includes('antigravity-agent-badge'));
   assert.ok(rendered.html.includes('antigravity-agent-dropdown'));
-  assert.ok(rendered.html.includes('antigravity-agent-icon'));
+  assert.ok(rendered.html.includes('antigravity-active-agent-icon'));
+  assert.ok(rendered.html.includes('Sin Agente'));
   assert.ok(rendered.html.includes('Lead Architect'));
   assert.ok(rendered.html.includes('SDD Apply (TDD)'));
   assert.ok(rendered.html.includes('SDD Verify'));

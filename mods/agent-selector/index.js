@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AntigravityMod } from '../../framework/sdk/AntigravityMod.js';
 import { AgentDiscoveryService } from '../../framework/services/AgentDiscoveryService.js';
-import { renderAgentIconSvg } from './components/AgentIconSvg.js';
+import { renderAgentSvg } from './components/AgentIcons.js';
 import { renderAgentDropdownHtml, getAgentColor } from './components/AgentDropdownHtml.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -30,15 +30,15 @@ export class AgentSelectorMod extends AntigravityMod {
   }
 
   /**
-   * Renders the agent badge with the fedora/sunglasses icon and interactive selection dropdown.
+   * Renders the agent badge with the dynamic Lucide icon and interactive selection dropdown.
    * @param {Object} context
    * @returns {{ html: string, css: string }}
    */
   render(context = {}) {
-    const iconSvg = renderAgentIconSvg(16);
-    const initialAgentId = 'lead-architect';
-    const initialAgentName = 'Lead Architect';
+    const initialAgentId = 'default';
+    const initialAgentName = 'Sin Agente';
     const initialColor = getAgentColor(initialAgentId);
+    const iconSvg = `<span id="antigravity-active-agent-icon" class="antigravity-active-agent-icon" style="display: inline-flex; align-items: center; pointer-events: none;">${renderAgentSvg(initialAgentId, 14)}</span>`;
     const discoveredAgents = this.discoveryService.discoverAgents();
     const dropdownHtml = renderAgentDropdownHtml(initialAgentId, discoveredAgents);
 
@@ -46,7 +46,7 @@ export class AgentSelectorMod extends AntigravityMod {
       <div 
         id="antigravity-agent-badge" 
         class="antigravity-agent-badge" 
-        title="Active Specialist: ${initialAgentName}" 
+        title="Modo Activo: ${initialAgentName}" 
         style="border-color: ${initialColor}55; box-shadow: 0 0 8px ${initialColor}22;"
         tabindex="0"
       >

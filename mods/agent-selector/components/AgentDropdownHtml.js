@@ -362,7 +362,7 @@ export function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynami
             <span class="agent-header-sub">Selección Rápida</span>
           </div>
         </div>
-        <span class="agent-dropdown-count">${allAgents.length + 1} Modos</span>
+        <span class="agent-dropdown-count">Control Tower</span>
       </div>
 
       <!-- SECCIÓN PRINCIPAL VISIBLE: 3 OPCIONES CLAVE -->
