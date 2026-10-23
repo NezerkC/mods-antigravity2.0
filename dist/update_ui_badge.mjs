@@ -361,31 +361,71 @@ class SlotManager {
         const anchors = Array.from(document.querySelectorAll('${slot.selector}'));
         if (!anchors.length) return;
 
+        // Clean up any misplaced legacy slot containers that were injected directly inside non-flex wrappers
+        document.querySelectorAll('#${containerId}').forEach(el => {
+          if (el.parentElement && !el.parentElement.className.includes('flex')) {
+            el.remove();
+          }
+        });
+
         for (const anchor of anchors) {
-          const parent = anchor.parentElement;
+          // Resolve effective parent and sibling target
+          let targetItem = anchor;
+          let parent = anchor.parentElement;
           if (!parent) continue;
+
+          // For slots targeting buttons inside UI toolbars (like header-actions / model-selector-trigger),
+          // anchor is often wrapped in block-level dropdown trigger divs (e.g. Radix/Base-UI popover trigger).
+          // We walk up from anchor.parentElement to find the flex row container so that the slot container
+          // is placed directly beside the model selector in the same flex row at the same horizontal level.
+          const candidateFlex = anchor.parentElement ? (
+            anchor.parentElement.closest('.flex.items-center.gap-1') || 
+            anchor.parentElement.closest('.flex.items-center') || 
+            anchor.parentElement.closest('.flex')
+          ) : null;
+
+          if (candidateFlex && candidateFlex.contains(anchor)) {
+            let curr = anchor;
+            while (curr.parentElement && curr.parentElement !== candidateFlex) {
+              curr = curr.parentElement;
+            }
+            if (curr.parentElement === candidateFlex) {
+              parent = candidateFlex;
+              targetItem = curr;
+            }
+          }
 
           let container = parent.querySelector('#${containerId}');
           if (!container) {
             container = document.createElement('div');
             container.id = '${containerId}';
-            container.className = 'antigravity-slot-container';
+            container.className = 'antigravity-slot-container ${containerId}';
             container.style.display = 'inline-flex';
             container.style.alignItems = 'center';
-            container.style.gap = '8px';
+            container.style.gap = '6px';
+            container.style.height = '28px';
 
             if ('${slot.strategy}' === 'after') {
-              if (anchor.nextSibling) {
-                parent.insertBefore(container, anchor.nextSibling);
+              if (targetItem.nextSibling) {
+                parent.insertBefore(container, targetItem.nextSibling);
               } else {
                 parent.appendChild(container);
               }
             } else if ('${slot.strategy}' === 'before') {
-              parent.insertBefore(container, anchor);
+              parent.insertBefore(container, targetItem);
             } else if ('${slot.strategy}' === 'prepend') {
-              anchor.prepend(container);
+              parent.prepend(container);
             } else {
-              anchor.appendChild(container);
+              parent.appendChild(container);
+            }
+          } else {
+            // Ensure slot container remains directly in parent flex row, right after targetItem
+            if (container.parentElement !== parent || ('${slot.strategy}' === 'after' && container.previousElementSibling !== targetItem)) {
+              if (targetItem.nextSibling) {
+                parent.insertBefore(container, targetItem.nextSibling);
+              } else {
+                parent.appendChild(container);
+              }
             }
           }
 
@@ -395,6 +435,9 @@ class SlotManager {
               modNode = document.createElement('div');
               modNode.id = '${modWrapperId}';
               modNode.className = '${modWrapperId}';
+              modNode.style.display = 'inline-flex';
+              modNode.style.alignItems = 'center';
+              modNode.style.height = '28px';
               container.appendChild(modNode);
             }
             modNode.setAttribute('data-version', '2');
@@ -901,8 +944,9 @@ class ModLoader {
 
         // 3. Mount individual mods into target slots across all conversations
         function mountAllMods() {
-          // Permanently remove legacy duplicate unmanaged badges
+          // Permanently remove legacy duplicate unmanaged badges & misplaced slot containers
           document.querySelectorAll('.antigravity-context-badge').forEach(el => el.remove());
+          document.querySelectorAll('.min-w-0 > #antigravity-slot-header-actions, .no-focus-agent-input > #antigravity-slot-header-actions').forEach(el => el.remove());
 
           ${mountSnippets.join('\n')}
 
@@ -1009,8 +1053,8 @@ class ModLoader {
                 window.__antigravityResizeObserver.observe(slot.parentElement);
               }
             }
-            const parent = slot.parentElement || slot;
-            const isNarrow = parent.offsetWidth < 320 || slot.offsetWidth < 180 || window.innerWidth < 960;
+            const footer = slot.closest('[class*="input-footer"]') || slot.closest('.flex.items-center.justify-between') || slot.parentElement || slot;
+            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
             const tach = slot.querySelector('.antigravity-tachometer-badge');
             if (tach) tach.classList.toggle('compact', isNarrow);
             const agent = slot.querySelector('.antigravity-agent-badge');
@@ -1027,15 +1071,15 @@ class ModLoader {
         window.__antigravityResizeObserver = new ResizeObserver((entries) => {
           for (const entry of entries) {
             const container = entry.target;
-            const parent = container.parentElement || container;
-            const isNarrow = parent.offsetWidth < 320 || container.offsetWidth < 180 || window.innerWidth < 960;
+            const footer = container.closest('[class*="input-footer"]') || container.closest('.flex.items-center.justify-between') || container.parentElement || container;
+            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
 
-            const tach = container.querySelector('.antigravity-tachometer-badge') || parent.querySelector('.antigravity-tachometer-badge');
+            const tach = container.querySelector('.antigravity-tachometer-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-tachometer-badge') : null);
             if (tach) {
               tach.classList.toggle('compact', isNarrow);
             }
 
-            const agent = container.querySelector('.antigravity-agent-badge') || parent.querySelector('.antigravity-agent-badge');
+            const agent = container.querySelector('.antigravity-agent-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-agent-badge') : null);
             if (agent) {
               agent.classList.toggle('compact', isNarrow);
             }
@@ -1055,7 +1099,8 @@ class ModLoader {
           const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
           let missingSlot = false;
           for (const btn of triggers) {
-            if (btn.parentElement && !btn.parentElement.querySelector('#antigravity-slot-header-actions')) {
+            const row = btn.closest('.flex.items-center') || btn.parentElement;
+            if (!row || !row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')) {
               missingSlot = true;
               break;
             }
@@ -1743,7 +1788,7 @@ class ContextTachometerMod extends AntigravityMod {
       priority: 50
     });
 
-    this.cachedCss = ".antigravity-tachometer-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 7px;\n  padding: 3px 9px 3px 6px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;\n  font-size: 11px;\n  line-height: 1;\n  color: #e4e4e7;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n}\n\n.antigravity-tachometer-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  transform: translateY(-0.5px);\n  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);\n}\n\n.antigravity-tachometer-badge:active {\n  transform: translateY(0.5px);\n}\n\n/* Responsive compact mode (Speedometer SVG only, hides labels) */\n.antigravity-tachometer-badge.compact:not(.pinned) {\n  padding: 3px 6px !important;\n  gap: 0 !important;\n}\n\n.antigravity-tachometer-badge.compact:not(.pinned) .tachometer-tokens,\n.antigravity-tachometer-badge.compact:not(.pinned) .tachometer-pct {\n  display: none !important;\n}\n\n/* Responsive shrinking for narrow screen resolutions */\n@media (max-width: 960px) {\n  .antigravity-tachometer-badge:not(.pinned) {\n    padding: 3px 6px;\n    gap: 0;\n  }\n  .antigravity-tachometer-badge:not(.pinned) .tachometer-tokens,\n  .antigravity-tachometer-badge:not(.pinned) .tachometer-pct {\n    display: none;\n  }\n}\n\n/* Interactive Tachometer Popover Portal (Fixed to Viewport) */\n.antigravity-tachometer-popover-portal {\n  position: fixed !important;\n  z-index: 999999 !important;\n  display: none;\n  animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\n}\n\n.antigravity-tachometer-popover-portal.open {\n  display: block !important;\n}\n\n.antigravity-popover-container {\n  display: none !important;\n}\n\n@keyframes popoverFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(-4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
+    this.cachedCss = ".antigravity-tachometer-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  height: 28px;\n  box-sizing: border-box;\n  padding: 0 8px 0 6px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;\n  font-size: 11px;\n  line-height: 28px;\n  color: #e4e4e7;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n  flex-shrink: 0;\n}\n\n.antigravity-tachometer-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  transform: translateY(-0.5px);\n  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);\n}\n\n.antigravity-tachometer-badge:active {\n  transform: translateY(0.5px);\n}\n\n/* Responsive compact mode (Speedometer SVG only, hides labels, exact 28x28 circle) */\n.antigravity-tachometer-badge.compact:not(.pinned) {\n  width: 28px !important;\n  height: 28px !important;\n  min-width: 28px !important;\n  padding: 0 !important;\n  gap: 0 !important;\n  justify-content: center !important;\n  border-radius: 9999px !important;\n  box-sizing: border-box !important;\n}\n\n.antigravity-tachometer-badge.compact:not(.pinned) .tachometer-tokens,\n.antigravity-tachometer-badge.compact:not(.pinned) .tachometer-pct {\n  display: none !important;\n}\n\n/* Responsive shrinking for narrow screen resolutions */\n@media (max-width: 960px) {\n  .antigravity-tachometer-badge:not(.pinned) {\n    width: 28px !important;\n    height: 28px !important;\n    min-width: 28px !important;\n    padding: 0 !important;\n    gap: 0 !important;\n    justify-content: center !important;\n    border-radius: 9999px !important;\n    box-sizing: border-box !important;\n  }\n  .antigravity-tachometer-badge:not(.pinned) .tachometer-tokens,\n  .antigravity-tachometer-badge:not(.pinned) .tachometer-pct {\n    display: none !important;\n  }\n}\n\n/* Interactive Tachometer Popover Portal (Fixed to Viewport) */\n.antigravity-tachometer-popover-portal {\n  position: fixed !important;\n  z-index: 999999 !important;\n  display: none;\n  animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\n}\n\n.antigravity-tachometer-popover-portal.open {\n  display: block !important;\n}\n\n.antigravity-popover-container {\n  display: none !important;\n}\n\n@keyframes popoverFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(-4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
   }
 
   /**
@@ -2073,7 +2118,7 @@ class AgentSelectorMod extends AntigravityMod {
     });
 
     this.discoveryService = options.discoveryService || new AgentDiscoveryService();
-    this.cachedCss = ".antigravity-agent-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  padding: 4px 10px 4px 7px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n  font-size: 11px;\n  line-height: 1;\n  color: #f4f4f5;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n}\n\n.agent-badge-dot {\n  width: 6px;\n  height: 6px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n  transition: all 0.3s ease;\n}\n\n.agent-color-dot {\n  width: 8px;\n  height: 8px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n}\n\n.antigravity-agent-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  transform: translateY(-0.5px);\n  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);\n}\n\n.antigravity-agent-badge:active {\n  transform: translateY(0.5px);\n}\n\n.agent-label {\n  font-weight: 500;\n  letter-spacing: -0.01em;\n  color: #e4e4e7;\n  white-space: nowrap;\n}\n\n.agent-caret {\n  font-size: 8px;\n  color: #a1a1aa;\n  margin-left: 1px;\n  transition: transform 0.2s ease;\n}\n\n.antigravity-agent-badge:hover .agent-caret {\n  transform: rotate(180deg);\n}\n\n/* Responsive compact mode (Container-driven via ResizeObserver) */\n.antigravity-agent-badge.compact {\n  padding: 4px 6px !important;\n  gap: 0 !important;\n}\n.antigravity-agent-badge.compact .agent-label,\n.antigravity-agent-badge.compact .agent-caret {\n  display: none !important;\n}\n\n/* Responsive shrinking for narrow screen resolutions */\n@media (max-width: 960px) {\n  .agent-label {\n    display: none;\n  }\n  .agent-caret {\n    display: none;\n  }\n  .antigravity-agent-badge {\n    padding: 4px 6px;\n  }\n}\n\n/* Interactive Dropdown Portal (Fixed to Viewport, Immune to Clipping & Overflow) */\n.antigravity-agent-dropdown-portal {\n  position: fixed !important;\n  z-index: 999999 !important;\n  display: none;\n  animation: agentFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\n}\n\n.antigravity-agent-dropdown-portal.open {\n  display: block !important;\n}\n\n.antigravity-agent-dropdown-wrapper {\n  display: none !important;\n}\n\n.antigravity-agent-dropdown {\n  width: 320px;\n  max-height: 420px;\n  background: #18181b;\n  color: #f4f4f5;\n  border: 1px solid rgba(255, 255, 255, 0.16);\n  border-radius: 12px;\n  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);\n  backdrop-filter: blur(20px);\n  -webkit-backdrop-filter: blur(20px);\n  padding: 10px;\n  display: flex;\n  flex-direction: column;\n  pointer-events: auto;\n}\n\n.agent-dropdown-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 6px 8px 10px 8px;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08);\n  margin-bottom: 6px;\n}\n\n.agent-section-header {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-size: 10px;\n  font-weight: 700;\n  text-transform: uppercase;\n  letter-spacing: 0.05em;\n  color: #71717a;\n  padding: 8px 8px 4px 8px;\n  border-top: 1px solid rgba(255, 255, 255, 0.05);\n  margin-top: 4px;\n}\n\n.agent-section-header:first-child {\n  border-top: none;\n  margin-top: 0;\n  padding-top: 2px;\n}\n\n.agent-dropdown-title {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-weight: 600;\n  font-size: 12px;\n  color: #ffffff;\n}\n\n.agent-dropdown-count {\n  font-size: 10px;\n  padding: 2px 6px;\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, 0.08);\n  color: #a1a1aa;\n}\n\n.agent-list-scroll {\n  overflow-y: auto;\n  max-height: 330px;\n  display: flex;\n  flex-direction: column;\n  gap: 3px;\n  padding-right: 2px;\n}\n\n.agent-list-scroll::-webkit-scrollbar {\n  width: 4px;\n}\n\n.agent-list-scroll::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15);\n  border-radius: 4px;\n}\n\n.antigravity-agent-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 8px 10px;\n  border-radius: 8px;\n  cursor: pointer;\n  transition: all 0.12s ease;\n  border: 1px solid transparent;\n}\n\n.antigravity-agent-item:hover {\n  background: rgba(255, 255, 255, 0.07);\n  border-color: rgba(255, 255, 255, 0.1);\n  transform: translateX(1px);\n}\n\n.antigravity-agent-item.selected {\n  background: rgba(56, 189, 248, 0.12);\n  border-color: rgba(56, 189, 248, 0.3);\n}\n\n.agent-item-icon {\n  font-size: 16px;\n  flex-shrink: 0;\n}\n\n.agent-item-details {\n  flex: 1;\n  min-width: 0;\n}\n\n.agent-item-name-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  margin-bottom: 2px;\n}\n\n.agent-item-name {\n  font-size: 12px;\n  font-weight: 600;\n  color: #ffffff;\n}\n\n.agent-item-category {\n  font-size: 9.5px;\n  text-transform: uppercase;\n  color: #71717a;\n  letter-spacing: 0.03em;\n}\n\n.agent-item-role {\n  font-size: 10.5px;\n  color: #a1a1aa;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.agent-check {\n  font-size: 12px;\n  font-weight: bold;\n  color: #38bdf8;\n  width: 14px;\n  text-align: right;\n  flex-shrink: 0;\n}\n\n@keyframes agentFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
+    this.cachedCss = ".antigravity-agent-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  height: 28px;\n  box-sizing: border-box;\n  padding: 0 10px 0 7px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n  font-size: 11px;\n  line-height: 28px;\n  color: #f4f4f5;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n  flex-shrink: 0;\n}\n\n.agent-badge-dot {\n  width: 6px;\n  height: 6px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n  transition: all 0.3s ease;\n}\n\n.agent-color-dot {\n  width: 8px;\n  height: 8px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n}\n\n.antigravity-agent-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  transform: translateY(-0.5px);\n  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);\n}\n\n.antigravity-agent-badge:active {\n  transform: translateY(0.5px);\n}\n\n.agent-label {\n  font-weight: 500;\n  letter-spacing: -0.01em;\n  color: #e4e4e7;\n  white-space: nowrap;\n}\n\n.agent-caret {\n  font-size: 8px;\n  color: #a1a1aa;\n  margin-left: 1px;\n  transition: transform 0.2s ease;\n}\n\n.antigravity-agent-badge:hover .agent-caret {\n  transform: rotate(180deg);\n}\n\n/* Responsive compact mode (Container-driven via ResizeObserver) */\n.antigravity-agent-badge.compact {\n  height: 28px !important;\n  box-sizing: border-box !important;\n  padding: 0 7px !important;\n  gap: 5px !important;\n  border-radius: 9999px !important;\n  justify-content: center !important;\n}\n.antigravity-agent-badge.compact .agent-label,\n.antigravity-agent-badge.compact .agent-caret {\n  display: none !important;\n}\n\n/* Responsive shrinking for narrow screen resolutions */\n@media (max-width: 960px) {\n  .agent-label {\n    display: none !important;\n  }\n  .agent-caret {\n    display: none !important;\n  }\n  .antigravity-agent-badge {\n    height: 28px !important;\n    box-sizing: border-box !important;\n    padding: 0 7px !important;\n    gap: 5px !important;\n    border-radius: 9999px !important;\n    justify-content: center !important;\n  }\n}\n\n/* Interactive Dropdown Portal (Fixed to Viewport, Immune to Clipping & Overflow) */\n.antigravity-agent-dropdown-portal {\n  position: fixed !important;\n  z-index: 999999 !important;\n  display: none;\n  animation: agentFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\n}\n\n.antigravity-agent-dropdown-portal.open {\n  display: block !important;\n}\n\n.antigravity-agent-dropdown-wrapper {\n  display: none !important;\n}\n\n.antigravity-agent-dropdown {\n  width: 320px;\n  max-height: 420px;\n  background: #18181b;\n  color: #f4f4f5;\n  border: 1px solid rgba(255, 255, 255, 0.16);\n  border-radius: 12px;\n  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);\n  backdrop-filter: blur(20px);\n  -webkit-backdrop-filter: blur(20px);\n  padding: 10px;\n  display: flex;\n  flex-direction: column;\n  pointer-events: auto;\n}\n\n.agent-dropdown-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 6px 8px 10px 8px;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08);\n  margin-bottom: 6px;\n}\n\n.agent-section-header {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-size: 10px;\n  font-weight: 700;\n  text-transform: uppercase;\n  letter-spacing: 0.05em;\n  color: #71717a;\n  padding: 8px 8px 4px 8px;\n  border-top: 1px solid rgba(255, 255, 255, 0.05);\n  margin-top: 4px;\n}\n\n.agent-section-header:first-child {\n  border-top: none;\n  margin-top: 0;\n  padding-top: 2px;\n}\n\n.agent-dropdown-title {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-weight: 600;\n  font-size: 12px;\n  color: #ffffff;\n}\n\n.agent-dropdown-count {\n  font-size: 10px;\n  padding: 2px 6px;\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, 0.08);\n  color: #a1a1aa;\n}\n\n.agent-list-scroll {\n  overflow-y: auto;\n  max-height: 330px;\n  display: flex;\n  flex-direction: column;\n  gap: 3px;\n  padding-right: 2px;\n}\n\n.agent-list-scroll::-webkit-scrollbar {\n  width: 4px;\n}\n\n.agent-list-scroll::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15);\n  border-radius: 4px;\n}\n\n.antigravity-agent-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 8px 10px;\n  border-radius: 8px;\n  cursor: pointer;\n  transition: all 0.12s ease;\n  border: 1px solid transparent;\n}\n\n.antigravity-agent-item:hover {\n  background: rgba(255, 255, 255, 0.07);\n  border-color: rgba(255, 255, 255, 0.1);\n  transform: translateX(1px);\n}\n\n.antigravity-agent-item.selected {\n  background: rgba(56, 189, 248, 0.12);\n  border-color: rgba(56, 189, 248, 0.3);\n}\n\n.agent-item-icon {\n  font-size: 16px;\n  flex-shrink: 0;\n}\n\n.agent-item-details {\n  flex: 1;\n  min-width: 0;\n}\n\n.agent-item-name-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  margin-bottom: 2px;\n}\n\n.agent-item-name {\n  font-size: 12px;\n  font-weight: 600;\n  color: #ffffff;\n}\n\n.agent-item-category {\n  font-size: 9.5px;\n  text-transform: uppercase;\n  color: #71717a;\n  letter-spacing: 0.03em;\n}\n\n.agent-item-role {\n  font-size: 10.5px;\n  color: #a1a1aa;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.agent-check {\n  font-size: 12px;\n  font-weight: bold;\n  color: #38bdf8;\n  width: 14px;\n  text-align: right;\n  flex-shrink: 0;\n}\n\n@keyframes agentFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
   }
 
   /**
