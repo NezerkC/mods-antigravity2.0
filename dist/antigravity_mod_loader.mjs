@@ -529,6 +529,9 @@ class StyleIsolator {
           if (
             sel.includes('-portal') ||
             sel.includes('antigravity-agent-dropdown') ||
+            sel.includes('antigravity-mods-manager-portal') ||
+            sel.startsWith('.mod-') ||
+            sel.startsWith('.mods-manager-') ||
             sel.startsWith('.agent-') ||
             sel.startsWith('.antigravity-agent-item') ||
             sel.startsWith('body') ||
@@ -2692,78 +2695,110 @@ function renderModsManagerButton() {
 
 /**
  * Generates HTML markup for the floating Mods Management portal panel.
+ * Card Architecture: Every text block enclosed in card components.
  * @returns {string}
  */
 function renderModsManagerPanelHtml() {
   return `
-    <div class="mods-manager-header">
+    <!-- Header Card -->
+    <div class="mods-manager-header mods-manager-header-card">
       <div class="mods-manager-title-wrap">
-        <h3 class="mods-manager-title">Antigravity Mods</h3>
-        <span class="mods-manager-badge">v2.0</span>
+        <div class="mods-manager-header-icon">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7"></rect>
+            <rect x="14" y="3" width="7" height="7"></rect>
+            <rect x="14" y="14" width="7" height="7"></rect>
+            <rect x="3" y="14" width="7" height="7"></rect>
+          </svg>
+        </div>
+        <div class="mods-manager-title-col">
+          <div class="mods-manager-title-row">
+            <h3 class="mods-manager-title">Antigravity Mods</h3>
+            <span class="mods-manager-badge">v2.0</span>
+          </div>
+          <div class="mods-manager-subtitle">Gestor y Persistencia de Módulos UI</div>
+        </div>
       </div>
       <button class="mods-manager-close-btn" id="antigravity-mods-manager-close" title="Cerrar">✕</button>
     </div>
 
-    <!-- Mod Card: Context Tachometer -->
-    <div class="mod-card">
-      <div class="mod-info">
-        <div class="mod-icon-box">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/>
-            <path d="M12 6v6l4 2"/>
-          </svg>
-        </div>
-        <div class="mod-text">
-          <div class="mod-title">Tacómetro de Contexto</div>
-          <div class="mod-desc">Visualizador de tokens, pasos y tamaño de ventana en el chatbox.</div>
-        </div>
-      </div>
-      <label class="mod-switch">
-        <input type="checkbox" id="mod-toggle-context-tachometer" data-mod="context-tachometer" checked>
-        <span class="mod-slider"></span>
-      </label>
-    </div>
-
-    <!-- Mod Card: Agent Selector -->
-    <div class="mod-card">
-      <div class="mod-info">
-        <div class="mod-icon-box">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-            <circle cx="12" cy="7" r="4"/>
-          </svg>
-        </div>
-        <div class="mod-text">
-          <div class="mod-title">Selector de Agentes</div>
-          <div class="mod-desc">Especialistas de Architecture Vault y SDD Suite en un clic.</div>
-        </div>
-      </div>
-      <label class="mod-switch">
-        <input type="checkbox" id="mod-toggle-agent-selector" data-mod="agent-selector" checked>
-        <span class="mod-slider"></span>
-      </label>
-    </div>
-
-    <!-- Mod Card: Background Persistence (Daemon Kill-Switch) -->
-    <div class="mod-card daemon-card">
-      <div class="mod-info">
-        <div class="mod-icon-box" style="background: rgba(122, 162, 247, 0.15); color: #7aa2f7;">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-          </svg>
-        </div>
-        <div class="mod-text">
-          <div class="mod-title">
-            <span>Auto-Inyección en Background</span>
-            <span class="mod-status-pill active" id="daemon-status-pill">Activo</span>
+    <!-- Mod Cards List -->
+    <div class="mods-manager-cards-list">
+      <!-- Mod Card: Context Tachometer -->
+      <div class="mod-card">
+        <div class="mod-info">
+          <div class="mod-icon-box tach-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/>
+              <path d="M12 6v6l4 2"/>
+            </svg>
           </div>
-          <div class="mod-desc">Persistencia continua vía CDP. Apágalo para suspender toda inyección.</div>
+          <div class="mod-text">
+            <div class="mod-title">Tacómetro de Contexto</div>
+            <div class="mod-desc">Visualizador de tokens, pasos y tamaño de ventana en el chatbox.</div>
+          </div>
         </div>
+        <label class="mod-switch">
+          <input type="checkbox" id="mod-toggle-context-tachometer" data-mod="context-tachometer" checked>
+          <span class="mod-slider"></span>
+        </label>
       </div>
-      <label class="mod-switch">
-        <input type="checkbox" id="mod-toggle-daemon" data-action="toggle-daemon" checked>
-        <span class="mod-slider"></span>
-      </label>
+
+      <!-- Mod Card: Agent Selector -->
+      <div class="mod-card">
+        <div class="mod-info">
+          <div class="mod-icon-box agent-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+              <circle cx="9" cy="7" r="4"/>
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+          </div>
+          <div class="mod-text">
+            <div class="mod-title">Selector de Agentes</div>
+            <div class="mod-desc">Especialistas de Architecture Vault y SDD Suite en un clic.</div>
+          </div>
+        </div>
+        <label class="mod-switch">
+          <input type="checkbox" id="mod-toggle-agent-selector" data-mod="agent-selector" checked>
+          <span class="mod-slider"></span>
+        </label>
+      </div>
+
+      <!-- Mod Card: Background Persistence (Daemon Kill-Switch) -->
+      <div class="mod-card daemon-card">
+        <div class="mod-info">
+          <div class="mod-icon-box daemon-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+          </div>
+          <div class="mod-text">
+            <div class="mod-title">
+              <span>Auto-Inyección en Background</span>
+              <span class="mod-status-pill active" id="daemon-status-pill">Activo</span>
+            </div>
+            <div class="mod-desc">Persistencia continua vía CDP. Apágalo para suspender toda inyección.</div>
+          </div>
+        </div>
+        <label class="mod-switch">
+          <input type="checkbox" id="mod-toggle-daemon" data-action="toggle-daemon" checked>
+          <span class="mod-slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Footer Status Card -->
+    <div class="mods-manager-footer-card">
+      <div class="mods-manager-footer-icon">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+      </div>
+      <div class="mods-manager-footer-text">
+        Host CDP Conectado • Sincronización en tiempo real
+      </div>
     </div>
   `.trim();
 }
@@ -2791,7 +2826,7 @@ class ModsManagerMod extends AntigravityMod {
       priority: 100
     });
 
-    this.cachedCss = "/* Mods Manager Menu Button in Top Menubar */\r\n.antigravity-mods-manager-btn {\r\n  height: 28px !important;\r\n  padding: 0 10px !important;\r\n  font-size: 13px !important;\r\n  font-weight: 500 !important;\r\n  color: rgba(255, 255, 255, 0.72) !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  transition: all 0.15s ease !important;\r\n  app-region: no-drag !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn:hover {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn.open {\r\n  background: rgba(255, 255, 255, 0.14) !important;\r\n  color: #ffffff !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn svg {\r\n  width: 14px;\r\n  height: 14px;\r\n  opacity: 0.85;\r\n}\r\n\r\n/* Floating Portal Panel for Mods Manager */\r\n.antigravity-mods-manager-portal {\r\n  position: fixed !important;\r\n  z-index: 1000000 !important;\r\n  width: 380px !important;\r\n  background: #1a1b26 !important;\r\n  background: linear-gradient(180deg, #1f2335 0%, #1a1b26 100%) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 14px !important;\r\n  box-shadow: 0 20px 50px -10px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;\r\n  padding: 16px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: none;\r\n  box-sizing: border-box !important;\r\n  animation: modManagerPopIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n}\r\n\r\n.antigravity-mods-manager-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n@keyframes modManagerPopIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-6px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* Header */\r\n.mods-manager-header {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  margin-bottom: 14px !important;\r\n  padding-bottom: 10px !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.mods-manager-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.mods-manager-title {\r\n  font-size: 14px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n  margin: 0 !important;\r\n}\r\n\r\n.mods-manager-badge {\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(122, 162, 247, 0.18) !important;\r\n  color: #7aa2f7 !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\r\n}\r\n\r\n.mods-manager-close-btn {\r\n  background: transparent !important;\r\n  border: none !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  cursor: pointer !important;\r\n  padding: 4px !important;\r\n  border-radius: 4px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n}\r\n\r\n.mods-manager-close-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n/* Mod Card Item */\r\n.mod-card {\r\n  background: rgba(255, 255, 255, 0.03) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.07) !important;\r\n  border-radius: 10px !important;\r\n  padding: 12px !important;\r\n  margin-bottom: 10px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 12px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.mod-card:hover {\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  border-color: rgba(255, 255, 255, 0.14) !important;\r\n}\r\n\r\n.mod-card.daemon-card {\r\n  background: rgba(122, 162, 247, 0.04) !important;\r\n  border-color: rgba(122, 162, 247, 0.22) !important;\r\n}\r\n\r\n.mod-card.daemon-card:hover {\r\n  background: rgba(122, 162, 247, 0.08) !important;\r\n  border-color: rgba(122, 162, 247, 0.35) !important;\r\n}\r\n\r\n.mod-info {\r\n  display: flex !important;\r\n  align-items: flex-start !important;\r\n  gap: 10px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.mod-icon-box {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  color: #7aa2f7 !important;\r\n}\r\n\r\n.mod-text {\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.mod-title {\r\n  font-size: 13px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  margin-bottom: 2px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.mod-desc {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.55) !important;\r\n  line-height: 1.35 !important;\r\n}\r\n\r\n/* Status Pill */\r\n.mod-status-pill {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.mod-status-pill.active {\r\n  background: rgba(74, 222, 128, 0.15) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(74, 222, 128, 0.3) !important;\r\n}\r\n\r\n.mod-status-pill.paused {\r\n  background: rgba(248, 113, 113, 0.15) !important;\r\n  color: #f87171 !important;\r\n  border: 1px solid rgba(248, 113, 113, 0.3) !important;\r\n}\r\n\r\n/* Modern Toggle Switch */\r\n.mod-switch {\r\n  position: relative !important;\r\n  display: inline-block !important;\r\n  width: 38px !important;\r\n  height: 20px !important;\r\n  flex-shrink: 0 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.mod-switch input {\r\n  opacity: 0 !important;\r\n  width: 0 !important;\r\n  height: 0 !important;\r\n  position: absolute !important;\r\n}\r\n\r\n.mod-slider {\r\n  position: absolute !important;\r\n  top: 0 !important;\r\n  left: 0 !important;\r\n  right: 0 !important;\r\n  bottom: 0 !important;\r\n  background-color: rgba(255, 255, 255, 0.15) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.18) !important;\r\n  border-radius: 9999px !important;\r\n  transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1) !important;\r\n}\r\n\r\n.mod-slider:before {\r\n  position: absolute !important;\r\n  content: \"\" !important;\r\n  height: 14px !important;\r\n  width: 14px !important;\r\n  left: 2px !important;\r\n  bottom: 2px !important;\r\n  background-color: #ffffff !important;\r\n  border-radius: 50% !important;\r\n  transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1) !important;\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35) !important;\r\n}\r\n\r\n.mod-switch input:checked + .mod-slider {\r\n  background-color: #7aa2f7 !important;\r\n  border-color: #7aa2f7 !important;\r\n}\r\n\r\n.mod-switch input:checked + .mod-slider:before {\r\n  transform: translateX(18px) !important;\r\n}\r\n";
+    this.cachedCss = "/* =========================================================================\n   ANTIGRAVITY MODS MANAGER MOD - STYLES\n   Card Architecture: Every text section enclosed in card components\n   ========================================================================= */\n\n/* Mods Manager Menu Button in Top Menubar */\n.antigravity-mods-manager-btn {\n  height: 28px !important;\n  padding: 0 10px !important;\n  font-size: 13px !important;\n  font-weight: 500 !important;\n  color: rgba(255, 255, 255, 0.72) !important;\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  transition: all 0.15s ease !important;\n  app-region: no-drag !important;\n  user-select: none !important;\n}\n\n.antigravity-mods-manager-btn:hover {\n  background: rgba(255, 255, 255, 0.08) !important;\n  color: #ffffff !important;\n}\n\n.antigravity-mods-manager-btn.open {\n  background: rgba(255, 255, 255, 0.14) !important;\n  color: #ffffff !important;\n  border-color: rgba(255, 255, 255, 0.2) !important;\n}\n\n.antigravity-mods-manager-btn svg {\n  width: 14px;\n  height: 14px;\n  opacity: 0.85;\n}\n\n/* Floating Portal Panel for Mods Manager */\n.antigravity-mods-manager-portal {\n  position: fixed !important;\n  z-index: 1000000 !important;\n  width: 380px !important;\n  background: #161822 !important;\n  background: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\n  border-radius: 14px !important;\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\n  padding: 14px !important;\n  color: #c0caf5 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  display: none;\n  box-sizing: border-box !important;\n  animation: modManagerPopIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\n}\n\n.antigravity-mods-manager-portal.open {\n  display: block !important;\n}\n\n@keyframes modManagerPopIn {\n  from {\n    opacity: 0;\n    transform: translateY(-6px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n\n/* Header Card Component */\n.mods-manager-header,\n.mods-manager-header-card {\n  background: rgba(255, 255, 255, 0.04) !important;\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\n  border-radius: 10px !important;\n  padding: 10px 12px !important;\n  margin-bottom: 12px !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n}\n\n.mods-manager-title-wrap {\n  display: flex !important;\n  align-items: center !important;\n  gap: 10px !important;\n}\n\n.mods-manager-header-icon {\n  width: 32px !important;\n  height: 32px !important;\n  border-radius: 8px !important;\n  background: rgba(122, 162, 247, 0.15) !important;\n  color: #7aa2f7 !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n  border: 1px solid rgba(122, 162, 247, 0.25) !important;\n  flex-shrink: 0 !important;\n}\n\n.mods-manager-title-col {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 2px !important;\n}\n\n.mods-manager-title-row {\n  display: flex !important;\n  align-items: center !important;\n  gap: 8px !important;\n}\n\n.mods-manager-title {\n  font-size: 13.5px !important;\n  font-weight: 700 !important;\n  color: #ffffff !important;\n  letter-spacing: -0.2px !important;\n  margin: 0 !important;\n}\n\n.mods-manager-badge {\n  font-size: 9.5px !important;\n  font-weight: 700 !important;\n  text-transform: uppercase !important;\n  padding: 1px 6px !important;\n  border-radius: 9999px !important;\n  background: rgba(122, 162, 247, 0.18) !important;\n  color: #7aa2f7 !important;\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\n  letter-spacing: 0.3px !important;\n}\n\n.mods-manager-subtitle {\n  font-size: 11px !important;\n  color: rgba(255, 255, 255, 0.5) !important;\n}\n\n.mods-manager-close-btn {\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  color: rgba(255, 255, 255, 0.5) !important;\n  cursor: pointer !important;\n  width: 24px !important;\n  height: 24px !important;\n  border-radius: 6px !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n  font-size: 12px !important;\n  transition: all 0.15s ease !important;\n}\n\n.mods-manager-close-btn:hover {\n  color: #ffffff !important;\n  background: rgba(255, 255, 255, 0.1) !important;\n  border-color: rgba(255, 255, 255, 0.16) !important;\n}\n\n/* Mod Cards List */\n.mods-manager-cards-list {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 8px !important;\n}\n\n/* Mod Card Item */\n.mod-card {\n  background: rgba(255, 255, 255, 0.035) !important;\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\n  border-radius: 10px !important;\n  padding: 11px 13px !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  gap: 12px !important;\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\n  box-sizing: border-box !important;\n}\n\n.mod-card:hover {\n  background: rgba(255, 255, 255, 0.065) !important;\n  border-color: rgba(122, 162, 247, 0.35) !important;\n  transform: translateY(-1px) !important;\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;\n}\n\n.mod-card.daemon-card {\n  background: rgba(122, 162, 247, 0.05) !important;\n  border-color: rgba(122, 162, 247, 0.22) !important;\n}\n\n.mod-card.daemon-card:hover {\n  background: rgba(122, 162, 247, 0.09) !important;\n  border-color: rgba(122, 162, 247, 0.45) !important;\n  box-shadow: 0 4px 18px rgba(122, 162, 247, 0.15) !important;\n}\n\n.mod-info {\n  display: flex !important;\n  align-items: center !important;\n  gap: 10px !important;\n  flex: 1 !important;\n  min-width: 0 !important;\n}\n\n.mod-icon-box {\n  width: 34px !important;\n  height: 34px !important;\n  border-radius: 8px !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n  flex-shrink: 0 !important;\n  background: rgba(255, 255, 255, 0.06) !important;\n  color: #7aa2f7 !important;\n}\n\n.mod-icon-box.tach-icon {\n  background: rgba(56, 189, 248, 0.12) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.25) !important;\n}\n\n.mod-icon-box.agent-icon {\n  background: rgba(168, 85, 247, 0.12) !important;\n  color: #c084fc !important;\n  border: 1px solid rgba(168, 85, 247, 0.25) !important;\n}\n\n.mod-icon-box.daemon-icon {\n  background: rgba(74, 222, 128, 0.12) !important;\n  color: #4ade80 !important;\n  border: 1px solid rgba(74, 222, 128, 0.25) !important;\n}\n\n.mod-text {\n  flex: 1 !important;\n  min-width: 0 !important;\n}\n\n.mod-title {\n  font-size: 13px !important;\n  font-weight: 600 !important;\n  color: #ffffff !important;\n  margin-bottom: 2px !important;\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n}\n\n.mod-desc {\n  font-size: 11px !important;\n  color: rgba(255, 255, 255, 0.6) !important;\n  line-height: 1.35 !important;\n}\n\n/* Status Pill */\n.mod-status-pill {\n  font-size: 9.5px !important;\n  font-weight: 700 !important;\n  padding: 1px 6px !important;\n  border-radius: 9999px !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 3px !important;\n  line-height: 14px !important;\n  letter-spacing: 0.2px !important;\n}\n\n.mod-status-pill.active {\n  background: rgba(74, 222, 128, 0.15) !important;\n  color: #4ade80 !important;\n  border: 1px solid rgba(74, 222, 128, 0.3) !important;\n}\n\n.mod-status-pill.paused {\n  background: rgba(248, 113, 113, 0.15) !important;\n  color: #f87171 !important;\n  border: 1px solid rgba(248, 113, 113, 0.3) !important;\n}\n\n/* Modern Toggle Switch */\n.mod-switch {\n  position: relative !important;\n  display: inline-block !important;\n  width: 38px !important;\n  height: 20px !important;\n  flex-shrink: 0 !important;\n  cursor: pointer !important;\n}\n\n.mod-switch input {\n  opacity: 0 !important;\n  width: 0 !important;\n  height: 0 !important;\n  position: absolute !important;\n  margin: 0 !important;\n  pointer-events: none !important;\n  display: none !important;\n}\n\n.mod-slider {\n  position: absolute !important;\n  top: 0 !important;\n  left: 0 !important;\n  right: 0 !important;\n  bottom: 0 !important;\n  background-color: rgba(255, 255, 255, 0.16) !important;\n  border: 1px solid rgba(255, 255, 255, 0.2) !important;\n  border-radius: 9999px !important;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;\n}\n\n.mod-slider:before {\n  position: absolute !important;\n  content: \"\" !important;\n  height: 14px !important;\n  width: 14px !important;\n  left: 2px !important;\n  bottom: 2px !important;\n  background-color: #ffffff !important;\n  border-radius: 50% !important;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4) !important;\n}\n\n.mod-switch input:checked + .mod-slider {\n  background-color: #7aa2f7 !important;\n  border-color: #7aa2f7 !important;\n}\n\n.mod-switch input:checked + .mod-slider:before {\n  transform: translateX(18px) !important;\n}\n\n/* Footer Status Card */\n.mods-manager-footer-card {\n  background: rgba(0, 0, 0, 0.25) !important;\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\n  border-radius: 8px !important;\n  padding: 8px 10px !important;\n  margin-top: 10px !important;\n  display: flex !important;\n  align-items: center !important;\n  gap: 8px !important;\n  box-sizing: border-box !important;\n}\n\n.mods-manager-footer-icon {\n  display: flex !important;\n  align-items: center !important;\n  color: #4ade80 !important;\n  flex-shrink: 0 !important;\n}\n\n.mods-manager-footer-text {\n  font-size: 11px !important;\n  color: rgba(255, 255, 255, 0.5) !important;\n  font-weight: 500 !important;\n  letter-spacing: -0.1px !important;\n}\n";
   }
 
   /**
