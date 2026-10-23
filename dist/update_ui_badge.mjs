@@ -494,7 +494,7 @@ class ModLoader {
 
   /**
    * Compiles registered mods and their rendered templates into an executable CDP payload.
-   * Mounts and synchronizes across ALL open chat panels via MutationObserver.
+   * Cleans up legacy duplicate elements and auto-mounts across ALL open chat panels.
    * @param {Object} context Host context passed to mod render methods.
    * @returns {string} Executable JavaScript.
    */
@@ -531,6 +531,14 @@ class ModLoader {
       (() => {
         window.__antigravityMods = window.__antigravityMods || {};
 
+        // 0. Permanently terminate any legacy unmanaged loops
+        if (window.__multiContextTrackerLoop) clearInterval(window.__multiContextTrackerLoop);
+        if (window.__contextTrackerLoop) clearInterval(window.__contextTrackerLoop);
+        if (window.__antigravityGaugeLoop) clearInterval(window.__antigravityGaugeLoop);
+        window.__multiContextTrackerLoop = null;
+        window.__contextTrackerLoop = null;
+        window.__antigravityGaugeLoop = null;
+
         // 1. Inject or update shared mod stylesheet
         let styleTag = document.getElementById('antigravity-mods-styles');
         if (!styleTag) {
@@ -540,14 +548,91 @@ class ModLoader {
         }
         styleTag.textContent = ${JSON.stringify(cssBundle)};
 
-        // 2. Function to mount individual mods into target slots across all conversations
+        // 2. Global Agent Selector handlers
+        window.__toggleAgentDropdown = function(e, badgeEl) {
+          if (e) e.stopPropagation();
+          const badge = badgeEl || (e ? e.currentTarget : document.getElementById('antigravity-agent-badge'));
+          if (!badge) return;
+          const isOpen = badge.classList.contains('open');
+          document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+          if (!isOpen) {
+            badge.classList.add('open');
+          }
+        };
+
+        window.__selectAntigravityAgent = function(agentId, agentName, agentColor) {
+          document.querySelectorAll('#antigravity-active-agent-name').forEach(label => {
+            label.textContent = agentName;
+          });
+
+          document.querySelectorAll('#antigravity-agent-badge').forEach(badge => {
+            badge.setAttribute('title', 'Active Specialist: ' + agentName);
+            badge.classList.remove('open');
+            if (agentColor) {
+              badge.style.borderColor = agentColor + '66';
+              badge.style.boxShadow = '0 0 8px ' + agentColor + '33';
+            }
+          });
+
+          document.querySelectorAll('#antigravity-active-agent-dot').forEach(dot => {
+            if (agentColor) {
+              dot.style.background = agentColor;
+              dot.style.boxShadow = '0 0 6px ' + agentColor;
+            }
+          });
+
+          try {
+            localStorage.setItem('__antigravity_selected_agent', JSON.stringify({ 
+              id: agentId, 
+              name: agentName,
+              color: agentColor 
+            }));
+          } catch (e) {}
+
+          document.querySelectorAll('.antigravity-agent-item').forEach(el => {
+            const isMatch = el.getAttribute('data-agent-id') === agentId;
+            el.classList.toggle('selected', isMatch);
+            const check = el.querySelector('.agent-check');
+            if (check) check.textContent = isMatch ? '✓' : '';
+          });
+        };
+
+        if (!window.__agentGlobalClickBound) {
+          window.__agentGlobalClickBound = true;
+          document.addEventListener('click', (e) => {
+            if (!e.target.closest('.antigravity-agent-badge')) {
+              document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+            }
+          });
+          document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+              document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+            }
+          });
+        }
+
+        // 3. Mount individual mods into target slots across all conversations
         function mountAllMods() {
+          // Permanently remove legacy duplicate unmanaged badges
+          document.querySelectorAll('.antigravity-context-badge').forEach(el => el.remove());
+
           ${mountSnippets.join('\n')}
+
+          // Restore saved agent selection across all mounted badges
+          try {
+            const saved = localStorage.getItem('__antigravity_selected_agent');
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              if (parsed && parsed.name) {
+                window.__selectAntigravityAgent(parsed.id, parsed.name, parsed.color);
+              }
+            }
+          } catch (e) {}
         }
 
         mountAllMods();
 
-        // 3. Observe DOM mutations to auto-mount into new or switched chat panels
+        // 4. Observe DOM mutations to auto-mount into new or switched chat panels
         if (window.__antigravityModObserver) {
           window.__antigravityModObserver.disconnect();
           window.__antigravityModObserver = null;
@@ -1344,7 +1429,7 @@ class AgentSelectorMod extends AntigravityMod {
       priority: 45
     });
 
-    this.cachedCss = ".antigravity-agent-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  padding: 4px 10px 4px 7px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n  font-size: 11px;\n  line-height: 1;\n  color: #f4f4f5;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n}\n\n.agent-badge-dot {\n  width: 6px;\n  height: 6px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n  transition: all 0.3s ease;\n}\n\n.agent-color-dot {\n  width: 8px;\n  height: 8px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n}\n\n.antigravity-agent-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  transform: translateY(-0.5px);\n  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);\n}\n\n.antigravity-agent-badge:active {\n  transform: translateY(0.5px);\n}\n\n.agent-label {\n  font-weight: 500;\n  letter-spacing: -0.01em;\n  color: #e4e4e7;\n  white-space: nowrap;\n}\n\n.agent-caret {\n  font-size: 8px;\n  color: #a1a1aa;\n  margin-left: 1px;\n  transition: transform 0.2s ease;\n}\n\n.antigravity-agent-badge:hover .agent-caret {\n  transform: rotate(180deg);\n}\n\n/* Responsive compact mode (Container-driven via ResizeObserver) */\n.antigravity-agent-badge.compact {\n  padding: 4px 6px !important;\n  gap: 0 !important;\n}\n.antigravity-agent-badge.compact .agent-label,\n.antigravity-agent-badge.compact .agent-caret {\n  display: none !important;\n}\n\n/* Responsive shrinking for narrow screen resolutions */\n@media (max-width: 960px) {\n  .agent-label {\n    display: none;\n  }\n  .agent-caret {\n    display: none;\n  }\n  .antigravity-agent-badge {\n    padding: 4px 6px;\n  }\n}\n\n/* Interactive Dropdown Popover (opens upward above bottom prompt bar) */\n.antigravity-agent-dropdown-wrapper {\n  position: absolute;\n  bottom: calc(100% + 10px);\n  left: 0;\n  z-index: 99999;\n  display: none;\n  animation: agentFadeIn 0.15s ease-out;\n}\n\n.antigravity-agent-badge:hover .antigravity-agent-dropdown-wrapper,\n.antigravity-agent-badge:focus-within .antigravity-agent-dropdown-wrapper,\n.antigravity-agent-dropdown-wrapper:hover {\n  display: block;\n}\n\n.antigravity-agent-dropdown {\n  width: 320px;\n  max-height: 420px;\n  background: #18181b;\n  color: #f4f4f5;\n  border: 1px solid rgba(255, 255, 255, 0.16);\n  border-radius: 12px;\n  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);\n  backdrop-filter: blur(20px);\n  -webkit-backdrop-filter: blur(20px);\n  padding: 10px;\n  display: flex;\n  flex-direction: column;\n  pointer-events: auto;\n}\n\n.agent-dropdown-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 6px 8px 10px 8px;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08);\n  margin-bottom: 6px;\n}\n\n.agent-section-header {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-size: 10px;\n  font-weight: 700;\n  text-transform: uppercase;\n  letter-spacing: 0.05em;\n  color: #71717a;\n  padding: 8px 8px 4px 8px;\n  border-top: 1px solid rgba(255, 255, 255, 0.05);\n  margin-top: 4px;\n}\n\n.agent-section-header:first-child {\n  border-top: none;\n  margin-top: 0;\n  padding-top: 2px;\n}\n\n.agent-dropdown-title {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-weight: 600;\n  font-size: 12px;\n  color: #ffffff;\n}\n\n.agent-dropdown-count {\n  font-size: 10px;\n  padding: 2px 6px;\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, 0.08);\n  color: #a1a1aa;\n}\n\n.agent-list-scroll {\n  overflow-y: auto;\n  max-height: 330px;\n  display: flex;\n  flex-direction: column;\n  gap: 3px;\n  padding-right: 2px;\n}\n\n.agent-list-scroll::-webkit-scrollbar {\n  width: 4px;\n}\n\n.agent-list-scroll::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15);\n  border-radius: 4px;\n}\n\n.antigravity-agent-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 8px 10px;\n  border-radius: 8px;\n  cursor: pointer;\n  transition: all 0.12s ease;\n  border: 1px solid transparent;\n}\n\n.antigravity-agent-item:hover {\n  background: rgba(255, 255, 255, 0.07);\n  border-color: rgba(255, 255, 255, 0.1);\n  transform: translateX(1px);\n}\n\n.antigravity-agent-item.selected {\n  background: rgba(56, 189, 248, 0.12);\n  border-color: rgba(56, 189, 248, 0.3);\n}\n\n.agent-item-icon {\n  font-size: 16px;\n  flex-shrink: 0;\n}\n\n.agent-item-details {\n  flex: 1;\n  min-width: 0;\n}\n\n.agent-item-name-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  margin-bottom: 2px;\n}\n\n.agent-item-name {\n  font-size: 12px;\n  font-weight: 600;\n  color: #ffffff;\n}\n\n.agent-item-category {\n  font-size: 9.5px;\n  text-transform: uppercase;\n  color: #71717a;\n  letter-spacing: 0.03em;\n}\n\n.agent-item-role {\n  font-size: 10.5px;\n  color: #a1a1aa;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.agent-check {\n  font-size: 12px;\n  font-weight: bold;\n  color: #38bdf8;\n  width: 14px;\n  text-align: right;\n  flex-shrink: 0;\n}\n\n@keyframes agentFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
+    this.cachedCss = ".antigravity-agent-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  padding: 4px 10px 4px 7px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n  font-size: 11px;\n  line-height: 1;\n  color: #f4f4f5;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n}\n\n.agent-badge-dot {\n  width: 6px;\n  height: 6px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n  transition: all 0.3s ease;\n}\n\n.agent-color-dot {\n  width: 8px;\n  height: 8px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n}\n\n.antigravity-agent-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  transform: translateY(-0.5px);\n  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);\n}\n\n.antigravity-agent-badge:active {\n  transform: translateY(0.5px);\n}\n\n.agent-label {\n  font-weight: 500;\n  letter-spacing: -0.01em;\n  color: #e4e4e7;\n  white-space: nowrap;\n}\n\n.agent-caret {\n  font-size: 8px;\n  color: #a1a1aa;\n  margin-left: 1px;\n  transition: transform 0.2s ease;\n}\n\n.antigravity-agent-badge:hover .agent-caret {\n  transform: rotate(180deg);\n}\n\n/* Responsive compact mode (Container-driven via ResizeObserver) */\n.antigravity-agent-badge.compact {\n  padding: 4px 6px !important;\n  gap: 0 !important;\n}\n.antigravity-agent-badge.compact .agent-label,\n.antigravity-agent-badge.compact .agent-caret {\n  display: none !important;\n}\n\n/* Responsive shrinking for narrow screen resolutions */\n@media (max-width: 960px) {\n  .agent-label {\n    display: none;\n  }\n  .agent-caret {\n    display: none;\n  }\n  .antigravity-agent-badge {\n    padding: 4px 6px;\n  }\n}\n\n/* Interactive Dropdown Popover */\n.antigravity-agent-dropdown-wrapper {\n  position: absolute;\n  top: calc(100% + 8px);\n  left: 0;\n  z-index: 999999;\n  display: none;\n  animation: agentFadeIn 0.15s ease-out;\n}\n\n.antigravity-agent-badge.open .antigravity-agent-dropdown-wrapper,\n.antigravity-agent-badge:hover .antigravity-agent-dropdown-wrapper,\n.antigravity-agent-badge:focus-within .antigravity-agent-dropdown-wrapper,\n.antigravity-agent-dropdown-wrapper:hover {\n  display: block !important;\n}\n\n.antigravity-agent-dropdown {\n  width: 320px;\n  max-height: 420px;\n  background: #18181b;\n  color: #f4f4f5;\n  border: 1px solid rgba(255, 255, 255, 0.16);\n  border-radius: 12px;\n  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);\n  backdrop-filter: blur(20px);\n  -webkit-backdrop-filter: blur(20px);\n  padding: 10px;\n  display: flex;\n  flex-direction: column;\n  pointer-events: auto;\n}\n\n.agent-dropdown-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 6px 8px 10px 8px;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08);\n  margin-bottom: 6px;\n}\n\n.agent-section-header {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-size: 10px;\n  font-weight: 700;\n  text-transform: uppercase;\n  letter-spacing: 0.05em;\n  color: #71717a;\n  padding: 8px 8px 4px 8px;\n  border-top: 1px solid rgba(255, 255, 255, 0.05);\n  margin-top: 4px;\n}\n\n.agent-section-header:first-child {\n  border-top: none;\n  margin-top: 0;\n  padding-top: 2px;\n}\n\n.agent-dropdown-title {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-weight: 600;\n  font-size: 12px;\n  color: #ffffff;\n}\n\n.agent-dropdown-count {\n  font-size: 10px;\n  padding: 2px 6px;\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, 0.08);\n  color: #a1a1aa;\n}\n\n.agent-list-scroll {\n  overflow-y: auto;\n  max-height: 330px;\n  display: flex;\n  flex-direction: column;\n  gap: 3px;\n  padding-right: 2px;\n}\n\n.agent-list-scroll::-webkit-scrollbar {\n  width: 4px;\n}\n\n.agent-list-scroll::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15);\n  border-radius: 4px;\n}\n\n.antigravity-agent-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 8px 10px;\n  border-radius: 8px;\n  cursor: pointer;\n  transition: all 0.12s ease;\n  border: 1px solid transparent;\n}\n\n.antigravity-agent-item:hover {\n  background: rgba(255, 255, 255, 0.07);\n  border-color: rgba(255, 255, 255, 0.1);\n  transform: translateX(1px);\n}\n\n.antigravity-agent-item.selected {\n  background: rgba(56, 189, 248, 0.12);\n  border-color: rgba(56, 189, 248, 0.3);\n}\n\n.agent-item-icon {\n  font-size: 16px;\n  flex-shrink: 0;\n}\n\n.agent-item-details {\n  flex: 1;\n  min-width: 0;\n}\n\n.agent-item-name-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  margin-bottom: 2px;\n}\n\n.agent-item-name {\n  font-size: 12px;\n  font-weight: 600;\n  color: #ffffff;\n}\n\n.agent-item-category {\n  font-size: 9.5px;\n  text-transform: uppercase;\n  color: #71717a;\n  letter-spacing: 0.03em;\n}\n\n.agent-item-role {\n  font-size: 10.5px;\n  color: #a1a1aa;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.agent-check {\n  font-size: 12px;\n  font-weight: bold;\n  color: #38bdf8;\n  width: 14px;\n  text-align: right;\n  flex-shrink: 0;\n}\n\n@keyframes agentFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
   }
 
   /**
@@ -1366,6 +1451,7 @@ class AgentSelectorMod extends AntigravityMod {
         title="Active Specialist: ${initialAgentName}" 
         style="border-color: ${initialColor}55; box-shadow: 0 0 8px ${initialColor}22;"
         tabindex="0"
+        onclick="window.__toggleAgentDropdown(event, this)"
       >
         <span 
           id="antigravity-active-agent-dot" 
@@ -1375,61 +1461,9 @@ class AgentSelectorMod extends AntigravityMod {
         ${iconSvg}
         <span id="antigravity-active-agent-name" class="agent-label">${initialAgentName}</span>
         <span class="agent-caret">▼</span>
-        <div class="antigravity-agent-dropdown-wrapper">
+        <div class="antigravity-agent-dropdown-wrapper" onclick="event.stopPropagation()">
           ${dropdownHtml}
         </div>
-        <script>
-          if (!window.__selectAntigravityAgent) {
-            window.__selectAntigravityAgent = function(agentId, agentName, agentColor) {
-              // Synchronize across ALL open chat panels & tabs
-              document.querySelectorAll('#antigravity-active-agent-name').forEach(label => {
-                label.textContent = agentName;
-              });
-
-              document.querySelectorAll('#antigravity-agent-badge').forEach(badge => {
-                badge.setAttribute('title', 'Active Specialist: ' + agentName);
-                if (agentColor) {
-                  badge.style.borderColor = agentColor + '66';
-                  badge.style.boxShadow = '0 0 8px ' + agentColor + '33';
-                }
-              });
-
-              document.querySelectorAll('#antigravity-active-agent-dot').forEach(dot => {
-                if (agentColor) {
-                  dot.style.background = agentColor;
-                  dot.style.boxShadow = '0 0 6px ' + agentColor;
-                }
-              });
-
-              try {
-                localStorage.setItem('__antigravity_selected_agent', JSON.stringify({ 
-                  id: agentId, 
-                  name: agentName,
-                  color: agentColor 
-                }));
-              } catch (e) {}
-
-              // Update active checkmarks in all open dropdowns
-              document.querySelectorAll('.antigravity-agent-item').forEach(el => {
-                const isMatch = el.getAttribute('data-agent-id') === agentId;
-                el.classList.toggle('selected', isMatch);
-                const check = el.querySelector('.agent-check');
-                if (check) check.textContent = isMatch ? '✓' : '';
-              });
-            };
-
-            // Restore saved preference if exists
-            try {
-              const saved = localStorage.getItem('__antigravity_selected_agent');
-              if (saved) {
-                const parsed = JSON.parse(saved);
-                if (parsed && parsed.name) {
-                  window.__selectAntigravityAgent(parsed.id, parsed.name, parsed.color);
-                }
-              }
-            } catch (e) {}
-          }
-        </script>
       </div>
     `.trim();
 

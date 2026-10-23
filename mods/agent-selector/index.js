@@ -46,6 +46,7 @@ export class AgentSelectorMod extends AntigravityMod {
         title="Active Specialist: ${initialAgentName}" 
         style="border-color: ${initialColor}55; box-shadow: 0 0 8px ${initialColor}22;"
         tabindex="0"
+        onclick="window.__toggleAgentDropdown(event, this)"
       >
         <span 
           id="antigravity-active-agent-dot" 
@@ -55,61 +56,9 @@ export class AgentSelectorMod extends AntigravityMod {
         ${iconSvg}
         <span id="antigravity-active-agent-name" class="agent-label">${initialAgentName}</span>
         <span class="agent-caret">▼</span>
-        <div class="antigravity-agent-dropdown-wrapper">
+        <div class="antigravity-agent-dropdown-wrapper" onclick="event.stopPropagation()">
           ${dropdownHtml}
         </div>
-        <script>
-          if (!window.__selectAntigravityAgent) {
-            window.__selectAntigravityAgent = function(agentId, agentName, agentColor) {
-              // Synchronize across ALL open chat panels & tabs
-              document.querySelectorAll('#antigravity-active-agent-name').forEach(label => {
-                label.textContent = agentName;
-              });
-
-              document.querySelectorAll('#antigravity-agent-badge').forEach(badge => {
-                badge.setAttribute('title', 'Active Specialist: ' + agentName);
-                if (agentColor) {
-                  badge.style.borderColor = agentColor + '66';
-                  badge.style.boxShadow = '0 0 8px ' + agentColor + '33';
-                }
-              });
-
-              document.querySelectorAll('#antigravity-active-agent-dot').forEach(dot => {
-                if (agentColor) {
-                  dot.style.background = agentColor;
-                  dot.style.boxShadow = '0 0 6px ' + agentColor;
-                }
-              });
-
-              try {
-                localStorage.setItem('__antigravity_selected_agent', JSON.stringify({ 
-                  id: agentId, 
-                  name: agentName,
-                  color: agentColor 
-                }));
-              } catch (e) {}
-
-              // Update active checkmarks in all open dropdowns
-              document.querySelectorAll('.antigravity-agent-item').forEach(el => {
-                const isMatch = el.getAttribute('data-agent-id') === agentId;
-                el.classList.toggle('selected', isMatch);
-                const check = el.querySelector('.agent-check');
-                if (check) check.textContent = isMatch ? '✓' : '';
-              });
-            };
-
-            // Restore saved preference if exists
-            try {
-              const saved = localStorage.getItem('__antigravity_selected_agent');
-              if (saved) {
-                const parsed = JSON.parse(saved);
-                if (parsed && parsed.name) {
-                  window.__selectAntigravityAgent(parsed.id, parsed.name, parsed.color);
-                }
-              }
-            } catch (e) {}
-          }
-        </script>
       </div>
     `.trim();
 

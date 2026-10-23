@@ -45,7 +45,7 @@ export class ModLoader {
 
   /**
    * Compiles registered mods and their rendered templates into an executable CDP payload.
-   * Mounts and synchronizes across ALL open chat panels via MutationObserver.
+   * Cleans up legacy duplicate elements and auto-mounts across ALL open chat panels.
    * @param {Object} context Host context passed to mod render methods.
    * @returns {string} Executable JavaScript.
    */
@@ -82,6 +82,14 @@ export class ModLoader {
       (() => {
         window.__antigravityMods = window.__antigravityMods || {};
 
+        // 0. Permanently terminate any legacy unmanaged loops
+        if (window.__multiContextTrackerLoop) clearInterval(window.__multiContextTrackerLoop);
+        if (window.__contextTrackerLoop) clearInterval(window.__contextTrackerLoop);
+        if (window.__antigravityGaugeLoop) clearInterval(window.__antigravityGaugeLoop);
+        window.__multiContextTrackerLoop = null;
+        window.__contextTrackerLoop = null;
+        window.__antigravityGaugeLoop = null;
+
         // 1. Inject or update shared mod stylesheet
         let styleTag = document.getElementById('antigravity-mods-styles');
         if (!styleTag) {
@@ -91,14 +99,91 @@ export class ModLoader {
         }
         styleTag.textContent = ${JSON.stringify(cssBundle)};
 
-        // 2. Function to mount individual mods into target slots across all conversations
+        // 2. Global Agent Selector handlers
+        window.__toggleAgentDropdown = function(e, badgeEl) {
+          if (e) e.stopPropagation();
+          const badge = badgeEl || (e ? e.currentTarget : document.getElementById('antigravity-agent-badge'));
+          if (!badge) return;
+          const isOpen = badge.classList.contains('open');
+          document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+          if (!isOpen) {
+            badge.classList.add('open');
+          }
+        };
+
+        window.__selectAntigravityAgent = function(agentId, agentName, agentColor) {
+          document.querySelectorAll('#antigravity-active-agent-name').forEach(label => {
+            label.textContent = agentName;
+          });
+
+          document.querySelectorAll('#antigravity-agent-badge').forEach(badge => {
+            badge.setAttribute('title', 'Active Specialist: ' + agentName);
+            badge.classList.remove('open');
+            if (agentColor) {
+              badge.style.borderColor = agentColor + '66';
+              badge.style.boxShadow = '0 0 8px ' + agentColor + '33';
+            }
+          });
+
+          document.querySelectorAll('#antigravity-active-agent-dot').forEach(dot => {
+            if (agentColor) {
+              dot.style.background = agentColor;
+              dot.style.boxShadow = '0 0 6px ' + agentColor;
+            }
+          });
+
+          try {
+            localStorage.setItem('__antigravity_selected_agent', JSON.stringify({ 
+              id: agentId, 
+              name: agentName,
+              color: agentColor 
+            }));
+          } catch (e) {}
+
+          document.querySelectorAll('.antigravity-agent-item').forEach(el => {
+            const isMatch = el.getAttribute('data-agent-id') === agentId;
+            el.classList.toggle('selected', isMatch);
+            const check = el.querySelector('.agent-check');
+            if (check) check.textContent = isMatch ? '✓' : '';
+          });
+        };
+
+        if (!window.__agentGlobalClickBound) {
+          window.__agentGlobalClickBound = true;
+          document.addEventListener('click', (e) => {
+            if (!e.target.closest('.antigravity-agent-badge')) {
+              document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+            }
+          });
+          document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+              document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+            }
+          });
+        }
+
+        // 3. Mount individual mods into target slots across all conversations
         function mountAllMods() {
+          // Permanently remove legacy duplicate unmanaged badges
+          document.querySelectorAll('.antigravity-context-badge').forEach(el => el.remove());
+
           ${mountSnippets.join('\n')}
+
+          // Restore saved agent selection across all mounted badges
+          try {
+            const saved = localStorage.getItem('__antigravity_selected_agent');
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              if (parsed && parsed.name) {
+                window.__selectAntigravityAgent(parsed.id, parsed.name, parsed.color);
+              }
+            }
+          } catch (e) {}
         }
 
         mountAllMods();
 
-        // 3. Observe DOM mutations to auto-mount into new or switched chat panels
+        // 4. Observe DOM mutations to auto-mount into new or switched chat panels
         if (window.__antigravityModObserver) {
           window.__antigravityModObserver.disconnect();
           window.__antigravityModObserver = null;
