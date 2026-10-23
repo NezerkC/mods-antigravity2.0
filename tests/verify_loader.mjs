@@ -9,7 +9,7 @@ async function verifyLiveLoader() {
   console.log('🔍 Starting Antigravity Mod Framework Live Smoke Test...\n');
 
   const resolver = new CdpPortResolver();
-  const port = resolver.resolvePort();
+  const port = await resolver.resolvePort();
   console.log(`[1/3] Resolved CDP Port: ${port}`);
 
   const client = new CdpWebSocketClient({ port, timeoutMs: 3000 });
