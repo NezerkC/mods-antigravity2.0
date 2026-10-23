@@ -1,49 +1,88 @@
-# Antigravity 2.0 Context Tachometer Mod
+# Mods Antigravity 2.0 (`mods-antigravity2.0`)
 
-A real-time visual telemetry and context window monitor for Google Antigravity 2.0 desktop application.
+Extensible UI Mod Framework and Specialist Suite for the Google Antigravity 2.0 Desktop Application.
 
 ## Overview
 
-This mod enhances the Antigravity 2.0 top toolbar by injecting:
-1. **Analog Speedometer / Tachometer Gauge:** A vector SVG gauge featuring a 240° color-gradient track (green to yellow to red) with an active needle rotating dynamically based on the current context consumption against the 1,000,000 token limit.
-2. **Context Breakdown Popover:** An interactive overlay that triggers on hover/click over the badge, displaying:
-   - User messages (`USER_INPUT`)
-   - Model responses (`PLANNER_RESPONSE`)
-   - Internal reasoning / thinking (`thinking` CoT)
-   - Local tools and terminal output (`GENERIC` / `run_command`, `read_file`)
-   - Model Context Protocol calls (`mcp_*`, `call_mcp_tool`)
-   - Overall memory size and conversation turn count.
+This repository provides an enterprise-grade modding engine for Antigravity, organizing code into two decoupled architectural domains:
+1. **`framework/`**: The host runtime, slot manager, style isolator, CDP bridge, telemetric token analyzer, and dynamic agent discovery engine.
+2. **`mods/`**: Standalone UI mods that mount into target slots across all active conversation panels.
 
-## Architecture
+---
+
+## Architecture & Layout
 
 ```
-antigravity-ui-mods/
-├── src/
-│   ├── metrics.js           # Brain transcript analyzer & token categorization
-│   ├── injector.js          # Chrome DevTools Protocol (CDP) WebSocket bridge
-│   └── components/
-│       ├── gauge.js         # Reactive SVG analog tachometer component
-│       └── popover.js       # Rich breakdown popover markup and styling
-├── dist/
-│   └── update_ui_badge.mjs  # Standalone bundled distribution file
-├── tests/
-│   ├── test_cdp.mjs         # DOM injection verification test
-│   └── test_hover.mjs       # Hover and popover interaction test
-├── build.js                 # Packager that compiles and deploys to ~/.gemini/config/mods/
+mods-antigravity2.0/
+├── framework/                       # Core Mod Framework & Runtime
+│   ├── core/
+│   │   ├── CdpPortResolver.js       # Auto-discovers Electron CDP debug port
+│   │   ├── CdpWebSocketClient.js    # Dispatches JS payloads via CDP WebSockets
+│   │   ├── ModHost.js               # Central host orchestrator & lifecycle manager
+│   │   ├── ModLoader.js             # Compiles mods, binds events, manages portals
+│   │   └── SlotManager.js           # Multi-panel slot injection & anchor targeting
+│   ├── sdk/
+│   │   ├── AntigravityMod.js        # Base contract for custom mods
+│   │   └── StyleIsolator.js         # CSS scoping with portal & keyframes support
+│   ├── services/
+│   │   ├── TelemetryService.js      # Accurate per-chat transcript & token analyzer
+│   │   └── AgentDiscoveryService.js # Dynamic scanner for agent.md & *.agent.md files
+│   └── index.js                     # Unified framework entrypoint
+├── mods/                            # User-Facing Injected Mods
+│   ├── agent-selector/              # Role selector with auto-collapse & .md discovery
+│   │   ├── components/
+│   │   │   ├── AgentDropdownHtml.js # Floating portal dropdown template
+│   │   │   └── AgentIconSvg.js      # Fedora hat + sunglasses SVG icon
+│   │   ├── manifest.json
+│   │   └── styles.css
+│   ├── context-tachometer/          # Analog speedometer & context window monitor
+│   │   ├── components/
+│   │   │   ├── GaugeSvg.js          # SVG 240° gradient speedometer
+│   │   │   └── PopoverHtml.js       # Detailed telemetry breakdown card
+│   │   ├── manifest.json
+│   │   └── styles.css
+│   └── template/                    # Starter template for new mods
+├── dist/                            # Bundled distributions ready for deployment
+│   └── antigravity_mod_loader.mjs
+├── tests/                           # Unit and live CDP integration test suite
+├── build.js                         # Bundler deploying to ~/.gemini/config/mods/
 └── package.json
 ```
 
-## How It Works
+---
 
-1. **Telemetry Parsing:** Reads `.system_generated/logs/transcript.jsonl` (or `transcript_full.jsonl`) from the active conversation in `~/.gemini/antigravity/brain/<conversation-id>/`.
-2. **CDP Connection:** Reads the debugging WebSocket URL exposed in Antigravity's Electron logs (`AppData/Roaming/Antigravity/logs/*.log`).
-3. **DOM Injection:** Injects the gauge and floating popover adjacent to `button[data-testid="model-selector-trigger"]`.
-4. **Lifecycle Hooks:** Triggered automatically before each invocation through `~/.gemini/config/hooks.json` via the `context-tracker` hook.
+## Features
 
-## Deployment
+### 1. Accurate Per-Chat Context Tachometer
+- Reads `.system_generated/logs/transcript_full.jsonl` matching the conversation ID in `data-cascade-id` and `/c/<id>` in real-time.
+- Displays accurate token count, percentage against the 1M ceiling, and dynamic color-coded needle (Green $\rightarrow$ Yellow $\rightarrow$ Orange $\rightarrow$ Red).
+- Floating popover portal auto-flips upwards when anchored in the bottom chat footer.
 
-To rebuild and deploy changes to the Antigravity global configuration:
+### 2. Dynamic Agent Discovery (`*.md`)
+- `AgentDiscoveryService` automatically discovers all agent definitions from:
+  - Local workspace (`./agents/*.md`, `**/*.agent.md`, `agent.md`)
+  - Shared Architecture Vault (`~/.gemini/antigravity/scratch/architecture-vault/`)
+  - Global Skills (`~/.gemini/config/skills/**/SKILL.md`)
+- Parses YAML frontmatter or Markdown headers to extract name, description, role, icon, and suite.
+- Merges discovered agents with the canonical Architecture Vault & SDD Gentleman Programming specialists.
+
+### 3. Floating Portals & Zero-DOM-Thrashing
+- Menus attach directly to `document.body` (`position: fixed; z-index: 999999;`).
+- Non-destructive `MutationObserver` checks slot existence before mounting; eliminates DOM rebuilding and click cancellation.
+
+---
+
+## Build & Deployment
+
+To bundle and deploy the latest framework and mods directly to Antigravity's global mods directory (`~/.gemini/config/mods/`):
 
 ```bash
 npm run build
 ```
+
+To run the unit test suite (33 tests):
+
+```bash
+npm test
+```
+

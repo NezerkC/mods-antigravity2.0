@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { StyleIsolator } from '../../src/sdk/StyleIsolator.js';
+import { StyleIsolator } from '../../framework/sdk/StyleIsolator.js';
 
 test('StyleIsolator - scopes simple class selectors under root container', () => {
   const css = '.badge { background: #000; color: #fff; }';

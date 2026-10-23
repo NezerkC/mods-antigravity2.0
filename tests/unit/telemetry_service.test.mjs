@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { TelemetryService } from '../../src/services/TelemetryService.js';
+import { TelemetryService } from '../../framework/services/TelemetryService.js';
 
 test('TelemetryService - calculates empty metric snapshot', () => {
   const service = new TelemetryService();

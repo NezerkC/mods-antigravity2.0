@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AntigravityMod } from '../../src/sdk/AntigravityMod.js';
+import { AntigravityMod } from '../../framework/sdk/AntigravityMod.js';
+import { AgentDiscoveryService } from '../../framework/services/AgentDiscoveryService.js';
 import { renderAgentIconSvg } from './components/AgentIconSvg.js';
 import { renderAgentDropdownHtml, getAgentColor } from './components/AgentDropdownHtml.js';
 
@@ -9,7 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export class AgentSelectorMod extends AntigravityMod {
-  constructor() {
+  constructor(options = {}) {
     super({
       id: 'agent-selector',
       name: 'Agent Role Selector',
@@ -18,6 +19,7 @@ export class AgentSelectorMod extends AntigravityMod {
       priority: 45
     });
 
+    this.discoveryService = options.discoveryService || new AgentDiscoveryService();
     this.cachedCss = '';
     try {
       const cssPath = path.join(__dirname, 'styles.css');
@@ -37,7 +39,8 @@ export class AgentSelectorMod extends AntigravityMod {
     const initialAgentId = 'lead-architect';
     const initialAgentName = 'Lead Architect';
     const initialColor = getAgentColor(initialAgentId);
-    const dropdownHtml = renderAgentDropdownHtml(initialAgentId);
+    const discoveredAgents = this.discoveryService.discoverAgents();
+    const dropdownHtml = renderAgentDropdownHtml(initialAgentId, discoveredAgents);
 
     const html = `
       <div 

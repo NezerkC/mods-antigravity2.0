@@ -234,15 +234,32 @@ export class ModLoader {
           }
         };
 
-        window.__updateAntigravityTelemetry = function(m) {
-          if (!m) return;
-          const pctNum = parseFloat(m.pct) || 0;
-          let statusColor = '#22c55e';
-          if (pctNum >= 85) statusColor = '#ef4444';
-          else if (pctNum >= 60) statusColor = '#f97316';
-          else if (pctNum >= 25) statusColor = '#eab308';
+        // Store all per-conversation metrics and current primary snapshot
+        window.__antigravityAllMetrics = ${JSON.stringify(context.allMetrics || {})};
+        window.__antigravityLatestMetric = ${JSON.stringify(context.telemetry || {})};
+
+        window.__updateAntigravityTelemetry = function(fallbackMetric) {
+          const all = window.__antigravityAllMetrics || {};
+          const latest = fallbackMetric || window.__antigravityLatestMetric;
 
           document.querySelectorAll('.antigravity-tachometer-badge').forEach(badge => {
+            const cascadeEl = badge.closest('[data-cascade-id]');
+            const cascadeId = cascadeEl ? cascadeEl.getAttribute('data-cascade-id') : null;
+            const urlPath = window.location.pathname || '';
+            const pathParts = urlPath.split('/c/');
+            const urlPathId = (pathParts.length > 1 && pathParts[1]) ? pathParts[1].split('/')[0].split('?')[0] : null;
+            const searchMatch = (window.location.search || '').match(/[?&](?:focused|conversationId)=([0-9a-fA-F-]+)/);
+            const activeId = cascadeId || urlPathId || (searchMatch ? searchMatch[1] : null);
+
+            const m = (activeId && all[activeId]) ? all[activeId] : latest;
+            if (!m) return;
+
+            const pctNum = parseFloat(m.pct) || 0;
+            let statusColor = '#22c55e';
+            if (pctNum >= 85) statusColor = '#ef4444';
+            else if (pctNum >= 60) statusColor = '#f97316';
+            else if (pctNum >= 25) statusColor = '#eab308';
+
             badge.setAttribute('title', 'Context: ' + m.displayTokens + ' tokens (' + m.pct + '%)');
             const tokenSpan = badge.querySelector('.tachometer-tokens');
             if (tokenSpan) tokenSpan.textContent = m.displayTokens;

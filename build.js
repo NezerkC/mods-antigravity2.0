@@ -16,14 +16,15 @@ async function build() {
   console.log('⚡ Building Antigravity Mod Framework...');
 
   // 1. Read Core & SDK sources
-  const cdpPortResolver = cleanModuleCode('src/core/CdpPortResolver.js');
-  const cdpWebSocketClient = cleanModuleCode('src/core/CdpWebSocketClient.js');
-  const slotManager = cleanModuleCode('src/core/SlotManager.js');
-  const styleIsolator = cleanModuleCode('src/sdk/StyleIsolator.js');
-  const antigravityMod = cleanModuleCode('src/sdk/AntigravityMod.js');
-  const modLoader = cleanModuleCode('src/core/ModLoader.js');
-  const telemetryService = cleanModuleCode('src/services/TelemetryService.js');
-  const modHost = cleanModuleCode('src/core/ModHost.js');
+  const cdpPortResolver = cleanModuleCode('framework/core/CdpPortResolver.js');
+  const cdpWebSocketClient = cleanModuleCode('framework/core/CdpWebSocketClient.js');
+  const slotManager = cleanModuleCode('framework/core/SlotManager.js');
+  const styleIsolator = cleanModuleCode('framework/sdk/StyleIsolator.js');
+  const antigravityMod = cleanModuleCode('framework/sdk/AntigravityMod.js');
+  const modLoader = cleanModuleCode('framework/core/ModLoader.js');
+  const telemetryService = cleanModuleCode('framework/services/TelemetryService.js');
+  const agentDiscoveryService = cleanModuleCode('framework/services/AgentDiscoveryService.js');
+  const modHost = cleanModuleCode('framework/core/ModHost.js');
 
   // 2. Read Context Tachometer Mod sources
   const gaugeSvg = cleanModuleCode('mods/context-tachometer/components/GaugeSvg.js');
@@ -67,6 +68,8 @@ ${antigravityMod}
 ${modLoader}
 
 ${telemetryService}
+
+${agentDiscoveryService}
 
 ${modHost}
 

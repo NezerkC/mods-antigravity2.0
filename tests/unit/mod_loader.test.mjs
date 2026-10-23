@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ModLoader } from '../../src/core/ModLoader.js';
-import { AntigravityMod } from '../../src/sdk/AntigravityMod.js';
+import { ModLoader } from '../../framework/core/ModLoader.js';
+import { AntigravityMod } from '../../framework/sdk/AntigravityMod.js';
 
 class MockMod extends AntigravityMod {
   constructor(manifest, renderOutput) {

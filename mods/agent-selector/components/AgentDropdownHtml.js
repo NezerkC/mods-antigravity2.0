@@ -152,41 +152,61 @@ export function getAgentColor(agentId) {
   return `hsl(${hue}, 85%, 62%)`;
 }
 
-export function renderAgentDropdownHtml(activeAgentId = 'lead-architect') {
-  const vaultAgents = AGENT_REGISTRY.filter(a => a.suite === 'Bóveda');
-  const sddAgents = AGENT_REGISTRY.filter(a => a.suite === 'Gentleman');
+export function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynamicAgents = []) {
+  const mergedMap = new Map();
+  // 1. Base canonical specialists
+  for (const a of AGENT_REGISTRY) {
+    mergedMap.set(a.id, a);
+  }
+  // 2. Dynamically discovered markdown agents
+  if (Array.isArray(dynamicAgents)) {
+    for (const a of dynamicAgents) {
+      if (a && a.id && !mergedMap.has(a.id)) {
+        mergedMap.set(a.id, a);
+      }
+    }
+  }
 
-  const renderGroup = (title, icon, agents) => `
-    <div class="agent-section-header">
-      <span>${icon}</span>
-      <span>${title}</span>
-    </div>
-    ${agents.map(agent => {
-      const isSelected = agent.id === activeAgentId;
-      const color = getAgentColor(agent.id);
-      return `
-        <div 
-          class="antigravity-agent-item ${isSelected ? 'selected' : ''}" 
-          data-agent-id="${agent.id}"
-          data-agent-name="${agent.name}"
-          data-agent-color="${color}"
-          data-agent-icon="${agent.icon}"
-          onclick="window.__selectAntigravityAgent('${agent.id}', '${agent.name}', '${color}')"
-        >
-          <span class="agent-color-dot" style="background: ${color}; box-shadow: 0 0 8px ${color}66;"></span>
-          <span class="agent-item-icon">${agent.icon}</span>
-          <div class="agent-item-details">
-            <div class="agent-item-name-row">
-              <span class="agent-item-name">${agent.name}</span>
-              <span class="agent-item-category" style="color: ${color};">${agent.category}</span>
+  const allAgents = Array.from(mergedMap.values());
+  const vaultAgents = allAgents.filter(a => a.suite === 'Bóveda');
+  const sddAgents = allAgents.filter(a => a.suite === 'Gentleman' || a.suite === 'Gentleman SDD');
+  const customAgents = allAgents.filter(a => a.suite !== 'Bóveda' && a.suite !== 'Gentleman' && a.suite !== 'Gentleman SDD');
+
+  const renderGroup = (title, icon, agents) => {
+    if (!agents.length) return '';
+    return `
+      <div class="agent-section-header">
+        <span>${icon}</span>
+        <span>${title}</span>
+      </div>
+      ${agents.map(agent => {
+        const isSelected = agent.id === activeAgentId;
+        const color = getAgentColor(agent.id);
+        const safeName = (agent.name || '').replace(/'/g, "\\'");
+        return `
+          <div 
+            class="antigravity-agent-item ${isSelected ? 'selected' : ''}" 
+            data-agent-id="${agent.id}"
+            data-agent-name="${safeName}"
+            data-agent-color="${color}"
+            data-agent-icon="${agent.icon || '🤖'}"
+            onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}')"
+          >
+            <span class="agent-color-dot" style="background: ${color}; box-shadow: 0 0 8px ${color}66;"></span>
+            <span class="agent-item-icon">${agent.icon || '🤖'}</span>
+            <div class="agent-item-details">
+              <div class="agent-item-name-row">
+                <span class="agent-item-name">${agent.name}</span>
+                <span class="agent-item-category" style="color: ${color};">${agent.category || 'Specialist'}</span>
+              </div>
+              <div class="agent-item-role">${agent.role || ''}</div>
             </div>
-            <div class="agent-item-role">${agent.role}</div>
+            <span class="agent-check" style="color: ${color};">${isSelected ? '✓' : ''}</span>
           </div>
-          <span class="agent-check" style="color: ${color};">${isSelected ? '✓' : ''}</span>
-        </div>
-      `;
-    }).join('')}
-  `;
+        `;
+      }).join('')}
+    `;
+  };
 
   return `
     <div class="antigravity-agent-dropdown">
@@ -195,11 +215,12 @@ export function renderAgentDropdownHtml(activeAgentId = 'lead-architect') {
           <span>🕶️</span>
           <span>Especialistas & Suite SDD</span>
         </div>
-        <span class="agent-dropdown-count">${AGENT_REGISTRY.length} Disponibles</span>
+        <span class="agent-dropdown-count">${allAgents.length} Disponibles</span>
       </div>
       <div class="agent-list-scroll">
         ${renderGroup('Bóveda de Arquitectura (Gobernanza)', '🏛️', vaultAgents)}
         ${renderGroup('Suite SDD Gentleman Programming (Táctica)', '⚡', sddAgents)}
+        ${renderGroup('Especialistas Descubiertos (.md)', '📁', customAgents)}
       </div>
     </div>
   `.trim();

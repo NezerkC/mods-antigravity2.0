@@ -702,15 +702,32 @@ class ModLoader {
           }
         };
 
-        window.__updateAntigravityTelemetry = function(m) {
-          if (!m) return;
-          const pctNum = parseFloat(m.pct) || 0;
-          let statusColor = '#22c55e';
-          if (pctNum >= 85) statusColor = '#ef4444';
-          else if (pctNum >= 60) statusColor = '#f97316';
-          else if (pctNum >= 25) statusColor = '#eab308';
+        // Store all per-conversation metrics and current primary snapshot
+        window.__antigravityAllMetrics = ${JSON.stringify(context.allMetrics || {})};
+        window.__antigravityLatestMetric = ${JSON.stringify(context.telemetry || {})};
+
+        window.__updateAntigravityTelemetry = function(fallbackMetric) {
+          const all = window.__antigravityAllMetrics || {};
+          const latest = fallbackMetric || window.__antigravityLatestMetric;
 
           document.querySelectorAll('.antigravity-tachometer-badge').forEach(badge => {
+            const cascadeEl = badge.closest('[data-cascade-id]');
+            const cascadeId = cascadeEl ? cascadeEl.getAttribute('data-cascade-id') : null;
+            const urlPath = window.location.pathname || '';
+            const pathParts = urlPath.split('/c/');
+            const urlPathId = (pathParts.length > 1 && pathParts[1]) ? pathParts[1].split('/')[0].split('?')[0] : null;
+            const searchMatch = (window.location.search || '').match(/[?&](?:focused|conversationId)=([0-9a-fA-F-]+)/);
+            const activeId = cascadeId || urlPathId || (searchMatch ? searchMatch[1] : null);
+
+            const m = (activeId && all[activeId]) ? all[activeId] : latest;
+            if (!m) return;
+
+            const pctNum = parseFloat(m.pct) || 0;
+            let statusColor = '#22c55e';
+            if (pctNum >= 85) statusColor = '#ef4444';
+            else if (pctNum >= 60) statusColor = '#f97316';
+            else if (pctNum >= 25) statusColor = '#eab308';
+
             badge.setAttribute('title', 'Context: ' + m.displayTokens + ' tokens (' + m.pct + '%)');
             const tokenSpan = badge.querySelector('.tachometer-tokens');
             if (tokenSpan) tokenSpan.textContent = m.displayTokens;
@@ -965,9 +982,12 @@ class TelemetryService {
         steps: 0
       };
 
+      let totalRawChars = 0;
+
       for (const line of lines) {
         if (!line.trim()) continue;
         raw.steps++;
+        totalRawChars += line.length;
 
         let obj;
         try {
@@ -983,31 +1003,27 @@ class TelemetryService {
         }
 
         const contentLen = len(obj.content);
+        const toolCallsLen = obj.tool_calls ? JSON.stringify(obj.tool_calls).length : 0;
 
         if (obj.tool_calls && Array.isArray(obj.tool_calls)) {
           const isMcp = obj.tool_calls.some(tc =>
             tc.name && (tc.name.startsWith('mcp_') || tc.name === 'call_mcp_tool')
           );
-          if (isMcp) raw.mcpChars += contentLen;
-          else raw.toolsChars += contentLen;
+          if (isMcp) raw.mcpChars += contentLen + toolCallsLen;
+          else raw.toolsChars += contentLen + toolCallsLen;
         } else if (obj.type === 'USER_INPUT') {
           raw.userChars += contentLen;
         } else if (obj.type === 'PLANNER_RESPONSE') {
           raw.modelChars += contentLen;
         } else if (obj.type === 'GENERIC') {
-          raw.toolsChars += contentLen;
+          raw.toolsChars += contentLen + toolCallsLen;
         } else {
           raw.otherChars += contentLen;
         }
       }
 
-      raw.totalChars =
-        raw.userChars +
-        raw.modelChars +
-        raw.thinkingChars +
-        raw.toolsChars +
-        raw.mcpChars +
-        raw.otherChars;
+      // Total characters reflects real serialized message envelope sent to context window
+      raw.totalChars = totalRawChars;
 
       const estTokens = Math.round(raw.totalChars / this.charsPerToken);
       const pctVal = (estTokens / this.tokenLimit) * 100;
@@ -1059,27 +1075,216 @@ class TelemetryService {
     try {
       if (!fs.existsSync(this.brainDir)) return metrics;
 
-      const dirs = fs.readdirSync(this.brainDir).filter(d => /^[0-9a-fA-F-]{36}$/.test(d));
+      const dirs = fs.readdirSync(this.brainDir)
+        .filter(d => /^[0-9a-fA-F-]{36}$/.test(d))
+        .map(d => {
+          const dirPath = path.join(this.brainDir, d);
+          const fullPath = path.join(dirPath, '.system_generated', 'logs', 'transcript_full.jsonl');
+          const compactPath = path.join(dirPath, '.system_generated', 'logs', 'transcript.jsonl');
+          let mtime = 0;
+          let targetPath = '';
+          try {
+            if (fs.existsSync(fullPath)) {
+              mtime = fs.statSync(fullPath).mtimeMs;
+              targetPath = fullPath;
+            } else if (fs.existsSync(compactPath)) {
+              mtime = fs.statSync(compactPath).mtimeMs;
+              targetPath = compactPath;
+            }
+          } catch {}
+          return { id: d, mtime, targetPath };
+        })
+        .filter(item => item.targetPath)
+        .sort((a, b) => b.mtime - a.mtime); // Sort newest/active conversations first!
 
-      for (const convId of dirs) {
-        const fullPath = path.join(this.brainDir, convId, '.system_generated', 'logs', 'transcript_full.jsonl');
-        const compactPath = path.join(this.brainDir, convId, '.system_generated', 'logs', 'transcript.jsonl');
-
-        let targetPath = '';
-        if (fs.existsSync(fullPath)) targetPath = fullPath;
-        else if (fs.existsSync(compactPath)) targetPath = compactPath;
-
-        if (!targetPath) {
-          metrics[convId] = this.getEmptySnapshot();
-          continue;
-        }
-
-        metrics[convId] = this.parseTranscriptFile(targetPath);
+      for (const item of dirs) {
+        metrics[item.id] = this.parseTranscriptFile(item.targetPath);
       }
     } catch {
       // Gracefully prevent background hook crashes
     }
     return metrics;
+  }
+}
+
+
+
+
+
+/**
+ * Service responsible for discovering and parsing agent markdown files (*.agent.md, agent.md, Agente *.md, SKILL.md)
+ * across workspace directories and global Antigravity/Gemini configuration vaults.
+ */
+class AgentDiscoveryService {
+  /**
+   * @param {Object} [options]
+   * @param {string[]} [options.searchRoots]
+   */
+  constructor(options = {}) {
+    const homedir = os.homedir();
+    this.searchRoots = options.searchRoots || [
+      process.cwd(),
+      path.join(homedir, '.gemini', 'antigravity', 'scratch', 'architecture-vault'),
+      path.join(homedir, '.gemini', 'config', 'skills'),
+      path.join(homedir, '.gemini', 'antigravity', 'agents')
+    ];
+  }
+
+  /**
+   * Scans configured paths and returns all discovered agents.
+   * @returns {Array<Object>} List of structured agent descriptor objects.
+   */
+  discoverAgents() {
+    const discovered = new Map();
+
+    for (const root of this.searchRoots) {
+      if (!fs.existsSync(root)) continue;
+      this._scanDirectory(root, discovered, 0, 4);
+    }
+
+    return Array.from(discovered.values());
+  }
+
+  /**
+   * Recursively scans a directory for agent markdown files.
+   * @private
+   */
+  _scanDirectory(dir, map, depth, maxDepth) {
+    if (depth > maxDepth) return;
+
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+
+        if (entry.isDirectory()) {
+          // Skip node_modules and .git
+          if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue;
+          this._scanDirectory(fullPath, map, depth + 1, maxDepth);
+        } else if (entry.isFile() && entry.name.endsWith('.md')) {
+          if (this._isAgentFile(entry.name, fullPath)) {
+            const agent = this.parseAgentFile(fullPath);
+            if (agent && agent.id && !map.has(agent.id)) {
+              map.set(agent.id, agent);
+            }
+          }
+        }
+      }
+    } catch {
+      // Gracefully continue on permission or filesystem errors
+    }
+  }
+
+  /**
+   * Determines if a markdown file represents an agent definition.
+   * @private
+   */
+  _isAgentFile(filename, fullPath) {
+    const lower = filename.toLowerCase();
+    if (lower === 'agent.md' || lower.endsWith('.agent.md') || lower.startsWith('agente ') || lower.startsWith('agente_')) {
+      return true;
+    }
+    if (lower === 'skill.md' && fullPath.includes('skills')) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Parses frontmatter or markdown content from an agent file.
+   * @param {string} filePath
+   * @returns {Object|null}
+   */
+  parseAgentFile(filePath) {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const filename = path.basename(filePath, '.md');
+
+      let name = '';
+      let role = '';
+      let category = 'Specialist';
+      let suite = 'Workspace';
+      let icon = '🤖';
+
+      // Detect suite by location
+      if (filePath.includes('architecture-vault') || filePath.includes('Bóveda') || filename.toLowerCase().startsWith('agente')) {
+        suite = 'Bóveda';
+        icon = '🏛️';
+      } else if (filePath.toLowerCase().includes('sdd') || filename.toLowerCase().includes('sdd')) {
+        suite = 'Gentleman SDD';
+        icon = '⚡';
+      } else if (filePath.includes('skills')) {
+        suite = 'Skills';
+        icon = '🛠️';
+      }
+
+      // 1. Try parsing YAML frontmatter
+      const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      if (fmMatch) {
+        const fmLines = fmMatch[1].split('\n');
+        for (const line of fmLines) {
+          const colonIdx = line.indexOf(':');
+          if (colonIdx === -1) continue;
+          const key = line.slice(0, colonIdx).trim().toLowerCase();
+          let val = line.slice(colonIdx + 1).trim().replace(/^["']|["']$/g, '');
+
+          if (key === 'name') name = val;
+          else if (key === 'description' || key === 'role') role = val;
+          else if (key === 'category' || key === 'dominio') category = val;
+          else if (key === 'icon') icon = val;
+        }
+      }
+
+      // Clean up common prefix wrappers in names and roles
+      if (name) {
+        name = name
+          .replace(/^(SKILL(\s+AAS)?:\s*|🤖\s*Agente\s*(Especialista)?:\s*|Agente\s*)/i, '')
+          .replace(/\s*\([^)]*Flujos[^)]*\)/i, '')
+          .trim();
+      }
+      if (role) {
+        role = role.replace(/^(description:\s*|role:\s*)/i, '').replace(/^["']|["']$/g, '').trim();
+      }
+
+      // 2. If name not in frontmatter, extract from first heading
+      if (!name) {
+        const h1Match = content.match(/^#\s+(.+)$/m);
+        if (h1Match) {
+          name = h1Match[1].replace(/^(Agente|Agent|SKILL:)\s*/i, '').trim();
+        } else {
+          name = filename.replace(/^Agente\s*/i, '').replace(/[-_]/g, ' ');
+        }
+      }
+
+      // 3. If role not in frontmatter, extract from subtitle or first non-empty paragraph
+      if (!role) {
+        const lines = content.replace(/^---\r?\n[\s\S]*?\r?\n---/, '').split('\n');
+        for (const rawLine of lines) {
+          const trimmed = rawLine.trim();
+          if (trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('---') && !trimmed.startsWith('![')) {
+            role = trimmed.slice(0, 80);
+            break;
+          }
+        }
+        if (!role) role = `${name} Specialist`;
+      }
+
+      // Generate a clean slug id
+      const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || filename.toLowerCase();
+
+      return {
+        id,
+        name,
+        role,
+        category,
+        suite,
+        icon,
+        filePath
+      };
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -1133,11 +1338,21 @@ class ModHost {
   async dispatch() {
     const allMetrics = this.telemetryService.getAllMetrics();
 
-    // Determine current/latest conversation metrics
-    const convIds = Object.keys(allMetrics);
-    let primaryMetric = this.telemetryService.getEmptySnapshot();
-    if (convIds.length > 0) {
-      primaryMetric = allMetrics[convIds[0]];
+    // Check if a specific transcript was passed via CLI argument (--transcript <path>)
+    let primaryMetric = null;
+    const transcriptArgIdx = process.argv.indexOf('--transcript');
+    if (transcriptArgIdx !== -1 && process.argv[transcriptArgIdx + 1]) {
+      const explicitPath = process.argv[transcriptArgIdx + 1];
+      primaryMetric = this.telemetryService.parseTranscriptFile(explicitPath);
+    }
+
+    if (!primaryMetric) {
+      const convIds = Object.keys(allMetrics);
+      if (convIds.length > 0) {
+        primaryMetric = allMetrics[convIds[0]];
+      } else {
+        primaryMetric = this.telemetryService.getEmptySnapshot();
+      }
     }
 
     const hostContext = {
@@ -1603,41 +1818,61 @@ function getAgentColor(agentId) {
   return `hsl(${hue}, 85%, 62%)`;
 }
 
-function renderAgentDropdownHtml(activeAgentId = 'lead-architect') {
-  const vaultAgents = AGENT_REGISTRY.filter(a => a.suite === 'Bóveda');
-  const sddAgents = AGENT_REGISTRY.filter(a => a.suite === 'Gentleman');
+function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynamicAgents = []) {
+  const mergedMap = new Map();
+  // 1. Base canonical specialists
+  for (const a of AGENT_REGISTRY) {
+    mergedMap.set(a.id, a);
+  }
+  // 2. Dynamically discovered markdown agents
+  if (Array.isArray(dynamicAgents)) {
+    for (const a of dynamicAgents) {
+      if (a && a.id && !mergedMap.has(a.id)) {
+        mergedMap.set(a.id, a);
+      }
+    }
+  }
 
-  const renderGroup = (title, icon, agents) => `
-    <div class="agent-section-header">
-      <span>${icon}</span>
-      <span>${title}</span>
-    </div>
-    ${agents.map(agent => {
-      const isSelected = agent.id === activeAgentId;
-      const color = getAgentColor(agent.id);
-      return `
-        <div 
-          class="antigravity-agent-item ${isSelected ? 'selected' : ''}" 
-          data-agent-id="${agent.id}"
-          data-agent-name="${agent.name}"
-          data-agent-color="${color}"
-          data-agent-icon="${agent.icon}"
-          onclick="window.__selectAntigravityAgent('${agent.id}', '${agent.name}', '${color}')"
-        >
-          <span class="agent-color-dot" style="background: ${color}; box-shadow: 0 0 8px ${color}66;"></span>
-          <span class="agent-item-icon">${agent.icon}</span>
-          <div class="agent-item-details">
-            <div class="agent-item-name-row">
-              <span class="agent-item-name">${agent.name}</span>
-              <span class="agent-item-category" style="color: ${color};">${agent.category}</span>
+  const allAgents = Array.from(mergedMap.values());
+  const vaultAgents = allAgents.filter(a => a.suite === 'Bóveda');
+  const sddAgents = allAgents.filter(a => a.suite === 'Gentleman' || a.suite === 'Gentleman SDD');
+  const customAgents = allAgents.filter(a => a.suite !== 'Bóveda' && a.suite !== 'Gentleman' && a.suite !== 'Gentleman SDD');
+
+  const renderGroup = (title, icon, agents) => {
+    if (!agents.length) return '';
+    return `
+      <div class="agent-section-header">
+        <span>${icon}</span>
+        <span>${title}</span>
+      </div>
+      ${agents.map(agent => {
+        const isSelected = agent.id === activeAgentId;
+        const color = getAgentColor(agent.id);
+        const safeName = (agent.name || '').replace(/'/g, "\\'");
+        return `
+          <div 
+            class="antigravity-agent-item ${isSelected ? 'selected' : ''}" 
+            data-agent-id="${agent.id}"
+            data-agent-name="${safeName}"
+            data-agent-color="${color}"
+            data-agent-icon="${agent.icon || '🤖'}"
+            onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}')"
+          >
+            <span class="agent-color-dot" style="background: ${color}; box-shadow: 0 0 8px ${color}66;"></span>
+            <span class="agent-item-icon">${agent.icon || '🤖'}</span>
+            <div class="agent-item-details">
+              <div class="agent-item-name-row">
+                <span class="agent-item-name">${agent.name}</span>
+                <span class="agent-item-category" style="color: ${color};">${agent.category || 'Specialist'}</span>
+              </div>
+              <div class="agent-item-role">${agent.role || ''}</div>
             </div>
-            <div class="agent-item-role">${agent.role}</div>
+            <span class="agent-check" style="color: ${color};">${isSelected ? '✓' : ''}</span>
           </div>
-          <span class="agent-check" style="color: ${color};">${isSelected ? '✓' : ''}</span>
-        </div>
-      `;
-    }).join('')}
-  `;
+        `;
+      }).join('')}
+    `;
+  };
 
   return `
     <div class="antigravity-agent-dropdown">
@@ -1646,11 +1881,12 @@ function renderAgentDropdownHtml(activeAgentId = 'lead-architect') {
           <span>🕶️</span>
           <span>Especialistas & Suite SDD</span>
         </div>
-        <span class="agent-dropdown-count">${AGENT_REGISTRY.length} Disponibles</span>
+        <span class="agent-dropdown-count">${allAgents.length} Disponibles</span>
       </div>
       <div class="agent-list-scroll">
         ${renderGroup('Bóveda de Arquitectura (Gobernanza)', '🏛️', vaultAgents)}
         ${renderGroup('Suite SDD Gentleman Programming (Táctica)', '⚡', sddAgents)}
+        ${renderGroup('Especialistas Descubiertos (.md)', '📁', customAgents)}
       </div>
     </div>
   `.trim();
@@ -1666,8 +1902,9 @@ function renderAgentDropdownHtml(activeAgentId = 'lead-architect') {
 
 
 
+
 class AgentSelectorMod extends AntigravityMod {
-  constructor() {
+  constructor(options = {}) {
     super({
       id: 'agent-selector',
       name: 'Agent Role Selector',
@@ -1676,6 +1913,7 @@ class AgentSelectorMod extends AntigravityMod {
       priority: 45
     });
 
+    this.discoveryService = options.discoveryService || new AgentDiscoveryService();
     this.cachedCss = ".antigravity-agent-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  padding: 4px 10px 4px 7px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n  font-size: 11px;\n  line-height: 1;\n  color: #f4f4f5;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n}\n\n.agent-badge-dot {\n  width: 6px;\n  height: 6px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n  transition: all 0.3s ease;\n}\n\n.agent-color-dot {\n  width: 8px;\n  height: 8px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n}\n\n.antigravity-agent-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  transform: translateY(-0.5px);\n  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);\n}\n\n.antigravity-agent-badge:active {\n  transform: translateY(0.5px);\n}\n\n.agent-label {\n  font-weight: 500;\n  letter-spacing: -0.01em;\n  color: #e4e4e7;\n  white-space: nowrap;\n}\n\n.agent-caret {\n  font-size: 8px;\n  color: #a1a1aa;\n  margin-left: 1px;\n  transition: transform 0.2s ease;\n}\n\n.antigravity-agent-badge:hover .agent-caret {\n  transform: rotate(180deg);\n}\n\n/* Responsive compact mode (Container-driven via ResizeObserver) */\n.antigravity-agent-badge.compact {\n  padding: 4px 6px !important;\n  gap: 0 !important;\n}\n.antigravity-agent-badge.compact .agent-label,\n.antigravity-agent-badge.compact .agent-caret {\n  display: none !important;\n}\n\n/* Responsive shrinking for narrow screen resolutions */\n@media (max-width: 960px) {\n  .agent-label {\n    display: none;\n  }\n  .agent-caret {\n    display: none;\n  }\n  .antigravity-agent-badge {\n    padding: 4px 6px;\n  }\n}\n\n/* Interactive Dropdown Portal (Fixed to Viewport, Immune to Clipping & Overflow) */\n.antigravity-agent-dropdown-portal {\n  position: fixed !important;\n  z-index: 999999 !important;\n  display: none;\n  animation: agentFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\n}\n\n.antigravity-agent-dropdown-portal.open {\n  display: block !important;\n}\n\n.antigravity-agent-dropdown-wrapper {\n  display: none !important;\n}\n\n.antigravity-agent-dropdown {\n  width: 320px;\n  max-height: 420px;\n  background: #18181b;\n  color: #f4f4f5;\n  border: 1px solid rgba(255, 255, 255, 0.16);\n  border-radius: 12px;\n  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);\n  backdrop-filter: blur(20px);\n  -webkit-backdrop-filter: blur(20px);\n  padding: 10px;\n  display: flex;\n  flex-direction: column;\n  pointer-events: auto;\n}\n\n.agent-dropdown-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 6px 8px 10px 8px;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08);\n  margin-bottom: 6px;\n}\n\n.agent-section-header {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-size: 10px;\n  font-weight: 700;\n  text-transform: uppercase;\n  letter-spacing: 0.05em;\n  color: #71717a;\n  padding: 8px 8px 4px 8px;\n  border-top: 1px solid rgba(255, 255, 255, 0.05);\n  margin-top: 4px;\n}\n\n.agent-section-header:first-child {\n  border-top: none;\n  margin-top: 0;\n  padding-top: 2px;\n}\n\n.agent-dropdown-title {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-weight: 600;\n  font-size: 12px;\n  color: #ffffff;\n}\n\n.agent-dropdown-count {\n  font-size: 10px;\n  padding: 2px 6px;\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, 0.08);\n  color: #a1a1aa;\n}\n\n.agent-list-scroll {\n  overflow-y: auto;\n  max-height: 330px;\n  display: flex;\n  flex-direction: column;\n  gap: 3px;\n  padding-right: 2px;\n}\n\n.agent-list-scroll::-webkit-scrollbar {\n  width: 4px;\n}\n\n.agent-list-scroll::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15);\n  border-radius: 4px;\n}\n\n.antigravity-agent-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 8px 10px;\n  border-radius: 8px;\n  cursor: pointer;\n  transition: all 0.12s ease;\n  border: 1px solid transparent;\n}\n\n.antigravity-agent-item:hover {\n  background: rgba(255, 255, 255, 0.07);\n  border-color: rgba(255, 255, 255, 0.1);\n  transform: translateX(1px);\n}\n\n.antigravity-agent-item.selected {\n  background: rgba(56, 189, 248, 0.12);\n  border-color: rgba(56, 189, 248, 0.3);\n}\n\n.agent-item-icon {\n  font-size: 16px;\n  flex-shrink: 0;\n}\n\n.agent-item-details {\n  flex: 1;\n  min-width: 0;\n}\n\n.agent-item-name-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  margin-bottom: 2px;\n}\n\n.agent-item-name {\n  font-size: 12px;\n  font-weight: 600;\n  color: #ffffff;\n}\n\n.agent-item-category {\n  font-size: 9.5px;\n  text-transform: uppercase;\n  color: #71717a;\n  letter-spacing: 0.03em;\n}\n\n.agent-item-role {\n  font-size: 10.5px;\n  color: #a1a1aa;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.agent-check {\n  font-size: 12px;\n  font-weight: bold;\n  color: #38bdf8;\n  width: 14px;\n  text-align: right;\n  flex-shrink: 0;\n}\n\n@keyframes agentFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
   }
 
@@ -1689,7 +1927,8 @@ class AgentSelectorMod extends AntigravityMod {
     const initialAgentId = 'lead-architect';
     const initialAgentName = 'Lead Architect';
     const initialColor = getAgentColor(initialAgentId);
-    const dropdownHtml = renderAgentDropdownHtml(initialAgentId);
+    const discoveredAgents = this.discoveryService.discoverAgents();
+    const dropdownHtml = renderAgentDropdownHtml(initialAgentId, discoveredAgents);
 
     const html = `
       <div 

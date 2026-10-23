@@ -1,9 +1,9 @@
 {
-  "name": "antigravity-ui-mods",
+  "name": "mods-antigravity2.0",
   "version": "2.0.0",
-  "description": "Custom UI modifications and context tachometer for Google Antigravity 2.0",
+  "description": "Extensible UI Mod Framework and Specialists for Google Antigravity 2.0",
   "type": "module",
-  "main": "src/host.js",
+  "main": "framework/index.js",
   "scripts": {
     "build": "node build.js",
     "deploy": "node build.js",

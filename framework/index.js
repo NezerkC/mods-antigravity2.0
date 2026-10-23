@@ -1,0 +1,9 @@
+export { AntigravityMod } from './sdk/AntigravityMod.js';
+export { StyleIsolator } from './sdk/StyleIsolator.js';
+export { SlotManager } from './core/SlotManager.js';
+export { ModLoader } from './core/ModLoader.js';
+export { ModHost } from './core/ModHost.js';
+export { CdpPortResolver } from './core/CdpPortResolver.js';
+export { CdpWebSocketClient } from './core/CdpWebSocketClient.js';
+export { TelemetryService } from './services/TelemetryService.js';
+export { AgentDiscoveryService } from './services/AgentDiscoveryService.js';

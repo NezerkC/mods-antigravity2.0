@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AntigravityMod } from '../../src/sdk/AntigravityMod.js';
+import { AntigravityMod } from '../../framework/sdk/AntigravityMod.js';
 
 test('AntigravityMod - enforces required manifest properties', () => {
   assert.throws(() => {

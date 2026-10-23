@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ModHost } from '../../src/core/ModHost.js';
-import { AntigravityMod } from '../../src/sdk/AntigravityMod.js';
+import { ModHost } from '../../framework/core/ModHost.js';
+import { AntigravityMod } from '../../framework/sdk/AntigravityMod.js';
 
 class DummyModA extends AntigravityMod {
   constructor() {

@@ -66,9 +66,12 @@ export class TelemetryService {
         steps: 0
       };
 
+      let totalRawChars = 0;
+
       for (const line of lines) {
         if (!line.trim()) continue;
         raw.steps++;
+        totalRawChars += line.length;
 
         let obj;
         try {
@@ -84,31 +87,27 @@ export class TelemetryService {
         }
 
         const contentLen = len(obj.content);
+        const toolCallsLen = obj.tool_calls ? JSON.stringify(obj.tool_calls).length : 0;
 
         if (obj.tool_calls && Array.isArray(obj.tool_calls)) {
           const isMcp = obj.tool_calls.some(tc =>
             tc.name && (tc.name.startsWith('mcp_') || tc.name === 'call_mcp_tool')
           );
-          if (isMcp) raw.mcpChars += contentLen;
-          else raw.toolsChars += contentLen;
+          if (isMcp) raw.mcpChars += contentLen + toolCallsLen;
+          else raw.toolsChars += contentLen + toolCallsLen;
         } else if (obj.type === 'USER_INPUT') {
           raw.userChars += contentLen;
         } else if (obj.type === 'PLANNER_RESPONSE') {
           raw.modelChars += contentLen;
         } else if (obj.type === 'GENERIC') {
-          raw.toolsChars += contentLen;
+          raw.toolsChars += contentLen + toolCallsLen;
         } else {
           raw.otherChars += contentLen;
         }
       }
 
-      raw.totalChars =
-        raw.userChars +
-        raw.modelChars +
-        raw.thinkingChars +
-        raw.toolsChars +
-        raw.mcpChars +
-        raw.otherChars;
+      // Total characters reflects real serialized message envelope sent to context window
+      raw.totalChars = totalRawChars;
 
       const estTokens = Math.round(raw.totalChars / this.charsPerToken);
       const pctVal = (estTokens / this.tokenLimit) * 100;
@@ -160,22 +159,30 @@ export class TelemetryService {
     try {
       if (!fs.existsSync(this.brainDir)) return metrics;
 
-      const dirs = fs.readdirSync(this.brainDir).filter(d => /^[0-9a-fA-F-]{36}$/.test(d));
+      const dirs = fs.readdirSync(this.brainDir)
+        .filter(d => /^[0-9a-fA-F-]{36}$/.test(d))
+        .map(d => {
+          const dirPath = path.join(this.brainDir, d);
+          const fullPath = path.join(dirPath, '.system_generated', 'logs', 'transcript_full.jsonl');
+          const compactPath = path.join(dirPath, '.system_generated', 'logs', 'transcript.jsonl');
+          let mtime = 0;
+          let targetPath = '';
+          try {
+            if (fs.existsSync(fullPath)) {
+              mtime = fs.statSync(fullPath).mtimeMs;
+              targetPath = fullPath;
+            } else if (fs.existsSync(compactPath)) {
+              mtime = fs.statSync(compactPath).mtimeMs;
+              targetPath = compactPath;
+            }
+          } catch {}
+          return { id: d, mtime, targetPath };
+        })
+        .filter(item => item.targetPath)
+        .sort((a, b) => b.mtime - a.mtime); // Sort newest/active conversations first!
 
-      for (const convId of dirs) {
-        const fullPath = path.join(this.brainDir, convId, '.system_generated', 'logs', 'transcript_full.jsonl');
-        const compactPath = path.join(this.brainDir, convId, '.system_generated', 'logs', 'transcript.jsonl');
-
-        let targetPath = '';
-        if (fs.existsSync(fullPath)) targetPath = fullPath;
-        else if (fs.existsSync(compactPath)) targetPath = compactPath;
-
-        if (!targetPath) {
-          metrics[convId] = this.getEmptySnapshot();
-          continue;
-        }
-
-        metrics[convId] = this.parseTranscriptFile(targetPath);
+      for (const item of dirs) {
+        metrics[item.id] = this.parseTranscriptFile(item.targetPath);
       }
     } catch {
       // Gracefully prevent background hook crashes

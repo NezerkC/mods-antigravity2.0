@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CdpWebSocketClient } from '../../src/core/CdpWebSocketClient.js';
+import { CdpWebSocketClient } from '../../framework/core/CdpWebSocketClient.js';
 
 test('CdpWebSocketClient - generates structured Runtime.evaluate command payload', () => {
   const client = new CdpWebSocketClient({ port: 12345 });

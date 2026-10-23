@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SlotManager } from '../../src/core/SlotManager.js';
+import { SlotManager } from '../../framework/core/SlotManager.js';
 
 test('SlotManager - provides default slot definitions', () => {
   const manager = new SlotManager();

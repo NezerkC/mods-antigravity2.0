@@ -1,5 +1,5 @@
-import { CdpPortResolver } from '../src/core/CdpPortResolver.js';
-import { CdpWebSocketClient } from '../src/core/CdpWebSocketClient.js';
+import { CdpPortResolver } from '../framework/core/CdpPortResolver.js';
+import { CdpWebSocketClient } from '../framework/core/CdpWebSocketClient.js';
 
 /**
  * Automated smoke test script verifying live Antigravity Electron CDP bridge

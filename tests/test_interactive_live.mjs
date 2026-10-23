@@ -1,5 +1,5 @@
-import { CdpPortResolver } from '../src/core/CdpPortResolver.js';
-import { CdpWebSocketClient } from '../src/core/CdpWebSocketClient.js';
+import { CdpPortResolver } from '../framework/core/CdpPortResolver.js';
+import { CdpWebSocketClient } from '../framework/core/CdpWebSocketClient.js';
 
 async function testInteractive() {
   const resolver = new CdpPortResolver();

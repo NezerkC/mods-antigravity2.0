@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AntigravityMod } from '../../src/sdk/AntigravityMod.js';
+import { AntigravityMod } from '../../framework/sdk/AntigravityMod.js';
 import { renderGaugeSvg } from './components/GaugeSvg.js';
 import { renderPopoverHtml } from './components/PopoverHtml.js';
 

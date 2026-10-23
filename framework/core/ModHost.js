@@ -48,11 +48,21 @@ export class ModHost {
   async dispatch() {
     const allMetrics = this.telemetryService.getAllMetrics();
 
-    // Determine current/latest conversation metrics
-    const convIds = Object.keys(allMetrics);
-    let primaryMetric = this.telemetryService.getEmptySnapshot();
-    if (convIds.length > 0) {
-      primaryMetric = allMetrics[convIds[0]];
+    // Check if a specific transcript was passed via CLI argument (--transcript <path>)
+    let primaryMetric = null;
+    const transcriptArgIdx = process.argv.indexOf('--transcript');
+    if (transcriptArgIdx !== -1 && process.argv[transcriptArgIdx + 1]) {
+      const explicitPath = process.argv[transcriptArgIdx + 1];
+      primaryMetric = this.telemetryService.parseTranscriptFile(explicitPath);
+    }
+
+    if (!primaryMetric) {
+      const convIds = Object.keys(allMetrics);
+      if (convIds.length > 0) {
+        primaryMetric = allMetrics[convIds[0]];
+      } else {
+        primaryMetric = this.telemetryService.getEmptySnapshot();
+      }
     }
 
     const hostContext = {
