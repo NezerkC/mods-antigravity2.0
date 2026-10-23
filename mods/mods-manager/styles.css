@@ -1,0 +1,264 @@
+/* Mods Manager Menu Button in Top Menubar */
+.antigravity-mods-manager-btn {
+  height: 28px !important;
+  padding: 0 10px !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  color: rgba(255, 255, 255, 0.72) !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  transition: all 0.15s ease !important;
+  app-region: no-drag !important;
+  user-select: none !important;
+}
+
+.antigravity-mods-manager-btn:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: #ffffff !important;
+}
+
+.antigravity-mods-manager-btn.open {
+  background: rgba(255, 255, 255, 0.14) !important;
+  color: #ffffff !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+.antigravity-mods-manager-btn svg {
+  width: 14px;
+  height: 14px;
+  opacity: 0.85;
+}
+
+/* Floating Portal Panel for Mods Manager */
+.antigravity-mods-manager-portal {
+  position: fixed !important;
+  z-index: 1000000 !important;
+  width: 380px !important;
+  background: #1a1b26 !important;
+  background: linear-gradient(180deg, #1f2335 0%, #1a1b26 100%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 20px 50px -10px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;
+  padding: 16px !important;
+  color: #c0caf5 !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  display: none;
+  box-sizing: border-box !important;
+  animation: modManagerPopIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;
+}
+
+.antigravity-mods-manager-portal.open {
+  display: block !important;
+}
+
+@keyframes modManagerPopIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Header */
+.mods-manager-header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  margin-bottom: 14px !important;
+  padding-bottom: 10px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.mods-manager-title-wrap {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.mods-manager-title {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: #ffffff !important;
+  letter-spacing: -0.2px !important;
+  margin: 0 !important;
+}
+
+.mods-manager-badge {
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  padding: 2px 6px !important;
+  border-radius: 9999px !important;
+  background: rgba(122, 162, 247, 0.18) !important;
+  color: #7aa2f7 !important;
+  border: 1px solid rgba(122, 162, 247, 0.3) !important;
+}
+
+.mods-manager-close-btn {
+  background: transparent !important;
+  border: none !important;
+  color: rgba(255, 255, 255, 0.5) !important;
+  cursor: pointer !important;
+  padding: 4px !important;
+  border-radius: 4px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.mods-manager-close-btn:hover {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* Mod Card Item */
+.mod-card {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.07) !important;
+  border-radius: 10px !important;
+  padding: 12px !important;
+  margin-bottom: 10px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  transition: all 0.15s ease !important;
+}
+
+.mod-card:hover {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+}
+
+.mod-card.daemon-card {
+  background: rgba(122, 162, 247, 0.04) !important;
+  border-color: rgba(122, 162, 247, 0.22) !important;
+}
+
+.mod-card.daemon-card:hover {
+  background: rgba(122, 162, 247, 0.08) !important;
+  border-color: rgba(122, 162, 247, 0.35) !important;
+}
+
+.mod-info {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 10px !important;
+  flex: 1 !important;
+  min-width: 0 !important;
+}
+
+.mod-icon-box {
+  width: 32px !important;
+  height: 32px !important;
+  border-radius: 8px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0 !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: #7aa2f7 !important;
+}
+
+.mod-text {
+  flex: 1 !important;
+  min-width: 0 !important;
+}
+
+.mod-title {
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  color: #ffffff !important;
+  margin-bottom: 2px !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+}
+
+.mod-desc {
+  font-size: 11px !important;
+  color: rgba(255, 255, 255, 0.55) !important;
+  line-height: 1.35 !important;
+}
+
+/* Status Pill */
+.mod-status-pill {
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  padding: 1px 6px !important;
+  border-radius: 9999px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+}
+
+.mod-status-pill.active {
+  background: rgba(74, 222, 128, 0.15) !important;
+  color: #4ade80 !important;
+  border: 1px solid rgba(74, 222, 128, 0.3) !important;
+}
+
+.mod-status-pill.paused {
+  background: rgba(248, 113, 113, 0.15) !important;
+  color: #f87171 !important;
+  border: 1px solid rgba(248, 113, 113, 0.3) !important;
+}
+
+/* Modern Toggle Switch */
+.mod-switch {
+  position: relative !important;
+  display: inline-block !important;
+  width: 38px !important;
+  height: 20px !important;
+  flex-shrink: 0 !important;
+  cursor: pointer !important;
+}
+
+.mod-switch input {
+  opacity: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+  position: absolute !important;
+}
+
+.mod-slider {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  background-color: rgba(255, 255, 255, 0.15) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  border-radius: 9999px !important;
+  transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.mod-slider:before {
+  position: absolute !important;
+  content: "" !important;
+  height: 14px !important;
+  width: 14px !important;
+  left: 2px !important;
+  bottom: 2px !important;
+  background-color: #ffffff !important;
+  border-radius: 50% !important;
+  transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35) !important;
+}
+
+.mod-switch input:checked + .mod-slider {
+  background-color: #7aa2f7 !important;
+  border-color: #7aa2f7 !important;
+}
+
+.mod-switch input:checked + .mod-slider:before {
+  transform: translateX(18px) !important;
+}

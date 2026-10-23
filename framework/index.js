@@ -7,3 +7,5 @@ export { CdpPortResolver } from './core/CdpPortResolver.js';
 export { CdpWebSocketClient } from './core/CdpWebSocketClient.js';
 export { TelemetryService } from './services/TelemetryService.js';
 export { AgentDiscoveryService } from './services/AgentDiscoveryService.js';
+export { ModDaemon, createDefaultHost } from './core/ModDaemon.js';
+export { WindowsDaemonService } from './services/WindowsDaemonService.js';

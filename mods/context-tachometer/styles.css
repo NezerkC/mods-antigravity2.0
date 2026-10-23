@@ -1,8 +1,10 @@
 .antigravity-tachometer-badge {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 3px 9px 3px 6px;
+  gap: 6px;
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 8px 0 6px;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 9999px;
@@ -10,11 +12,12 @@
   user-select: none;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 11px;
-  line-height: 1;
+  line-height: 28px;
   color: #e4e4e7;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
   position: relative;
+  flex-shrink: 0;
 }
 
 .antigravity-tachometer-badge:hover {
@@ -28,26 +31,43 @@
   transform: translateY(0.5px);
 }
 
-/* Responsive compact mode (Speedometer SVG only, hides labels) */
-.antigravity-tachometer-badge.compact:not(.pinned) {
-  padding: 3px 6px !important;
+/* Responsive compact mode (Speedometer SVG only, hides labels, exact 28x28 circle) */
+.antigravity-tachometer-badge.compact:not(.open):not(.pinned) {
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px !important;
+  padding: 0 !important;
   gap: 0 !important;
+  justify-content: center !important;
+  border-radius: 9999px !important;
+  box-sizing: border-box !important;
 }
 
-.antigravity-tachometer-badge.compact:not(.pinned) .tachometer-tokens,
-.antigravity-tachometer-badge.compact:not(.pinned) .tachometer-pct {
+.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,
+.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {
   display: none !important;
+}
+
+.antigravity-tachometer-badge.open {
+  background: rgba(255, 255, 255, 0.12) !important;
+  border-color: rgba(255, 255, 255, 0.3) !important;
 }
 
 /* Responsive shrinking for narrow screen resolutions */
 @media (max-width: 960px) {
-  .antigravity-tachometer-badge:not(.pinned) {
-    padding: 3px 6px;
-    gap: 0;
+  .antigravity-tachometer-badge:not(.open):not(.pinned) {
+    width: 28px !important;
+    height: 28px !important;
+    min-width: 28px !important;
+    padding: 0 !important;
+    gap: 0 !important;
+    justify-content: center !important;
+    border-radius: 9999px !important;
+    box-sizing: border-box !important;
   }
-  .antigravity-tachometer-badge:not(.pinned) .tachometer-tokens,
-  .antigravity-tachometer-badge:not(.pinned) .tachometer-pct {
-    display: none;
+  .antigravity-tachometer-badge:not(.open):not(.pinned) .tachometer-tokens,
+  .antigravity-tachometer-badge:not(.open):not(.pinned) .tachometer-pct {
+    display: none !important;
   }
 }
 

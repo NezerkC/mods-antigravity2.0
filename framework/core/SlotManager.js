@@ -14,6 +14,10 @@ export class SlotManager {
         selector: 'header, [role="banner"]',
         strategy: 'append'
       }],
+      ['menubar-actions', {
+        selector: '.shrink-0 > .bg-sidebar',
+        strategy: 'append'
+      }],
       ['status-bar', {
         selector: 'footer, [data-testid="status-bar"]',
         strategy: 'append'
@@ -80,31 +84,75 @@ export class SlotManager {
         const anchors = Array.from(document.querySelectorAll('${slot.selector}'));
         if (!anchors.length) return;
 
+        // Clean up any misplaced legacy slot containers that were injected directly inside non-flex wrappers
+        document.querySelectorAll('#${containerId}').forEach(el => {
+          if (el.parentElement && !el.parentElement.className.includes('flex')) {
+            el.remove();
+          }
+        });
+
         for (const anchor of anchors) {
-          const parent = anchor.parentElement;
-          if (!parent) continue;
+          let parent;
+          let targetItem = anchor;
+
+          if ('${slot.strategy}' === 'append' || '${slot.strategy}' === 'prepend') {
+            parent = anchor;
+          } else {
+            parent = anchor.parentElement;
+            if (!parent) continue;
+
+            const candidateFlex = anchor.parentElement ? (
+              anchor.parentElement.closest('.flex.items-center.gap-1') || 
+              anchor.parentElement.closest('.flex.items-center') || 
+              anchor.parentElement.closest('.flex')
+            ) : null;
+
+            if (candidateFlex && candidateFlex.contains(anchor)) {
+              let curr = anchor;
+              while (curr.parentElement && curr.parentElement !== candidateFlex) {
+                curr = curr.parentElement;
+              }
+              if (curr.parentElement === candidateFlex) {
+                parent = candidateFlex;
+                targetItem = curr;
+              }
+            }
+          }
 
           let container = parent.querySelector('#${containerId}');
           if (!container) {
             container = document.createElement('div');
             container.id = '${containerId}';
-            container.className = 'antigravity-slot-container';
+            container.className = 'antigravity-slot-container ${containerId}';
             container.style.display = 'inline-flex';
             container.style.alignItems = 'center';
-            container.style.gap = '8px';
+            container.style.gap = '6px';
+            container.style.height = '100%';
+            container.style.setProperty('app-region', 'no-drag');
 
             if ('${slot.strategy}' === 'after') {
-              if (anchor.nextSibling) {
-                parent.insertBefore(container, anchor.nextSibling);
+              if (targetItem.nextSibling) {
+                parent.insertBefore(container, targetItem.nextSibling);
               } else {
                 parent.appendChild(container);
               }
             } else if ('${slot.strategy}' === 'before') {
-              parent.insertBefore(container, anchor);
+              parent.insertBefore(container, targetItem);
             } else if ('${slot.strategy}' === 'prepend') {
-              anchor.prepend(container);
+              parent.prepend(container);
             } else {
-              anchor.appendChild(container);
+              parent.appendChild(container);
+            }
+          } else {
+            // Ensure slot container remains directly in parent flex row, right after targetItem
+            if ('${slot.strategy}' === 'after' && (container.parentElement !== parent || container.previousElementSibling !== targetItem)) {
+              if (targetItem.nextSibling) {
+                parent.insertBefore(container, targetItem.nextSibling);
+              } else {
+                parent.appendChild(container);
+              }
+            } else if (('${slot.strategy}' === 'append' || '${slot.strategy}' === 'prepend') && container.parentElement !== parent) {
+              parent.appendChild(container);
             }
           }
 
@@ -114,6 +162,9 @@ export class SlotManager {
               modNode = document.createElement('div');
               modNode.id = '${modWrapperId}';
               modNode.className = '${modWrapperId}';
+              modNode.style.display = 'inline-flex';
+              modNode.style.alignItems = 'center';
+              modNode.style.height = '28px';
               container.appendChild(modNode);
             }
             modNode.setAttribute('data-version', '2');

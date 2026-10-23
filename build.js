@@ -47,7 +47,16 @@ async function build() {
     .replace(/const __dirname = .*?;/, '')
     .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(agentSelectorCss)};`);
 
-  // 4. Assemble Standalone Bundle
+  // 4. Read Mods Manager Mod sources
+  const modsManagerHtml = cleanModuleCode('mods/mods-manager/components/ModsManagerHtml.js');
+  const modsManagerCss = fs.readFileSync(path.resolve('mods/mods-manager/styles.css'), 'utf-8');
+
+  const modsManagerIndex = cleanModuleCode('mods/mods-manager/index.js')
+    .replace(/const __filename = .*?;/, '')
+    .replace(/const __dirname = .*?;/, '')
+    .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(modsManagerCss)};`);
+
+  // 5. Assemble Standalone Bundle
   const bundle = `// Antigravity Mod Framework Runtime Host (Bundle)
 import fs from 'node:fs';
 import path from 'node:path';
@@ -87,12 +96,18 @@ ${agentDropdownHtml}
 
 ${agentSelectorIndex}
 
+// ===================== Mods Manager Mod =====================
+${modsManagerHtml}
+
+${modsManagerIndex}
+
 // ======================= Entrypoint Execution =======================
 async function main() {
   try {
     const host = new ModHost();
     host.registerMod(new ContextTachometerMod());
     host.registerMod(new AgentSelectorMod());
+    host.registerMod(new ModsManagerMod());
     await host.dispatch();
   } catch (err) {
     // Fail silently in background hook context

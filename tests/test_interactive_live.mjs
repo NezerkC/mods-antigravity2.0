@@ -3,7 +3,7 @@ import { CdpWebSocketClient } from '../framework/core/CdpWebSocketClient.js';
 
 async function testInteractive() {
   const resolver = new CdpPortResolver();
-  const port = resolver.resolvePort();
+  const port = await resolver.resolvePort();
   const client = new CdpWebSocketClient({ port, timeoutMs: 3000 });
 
   console.log('Testing interactive agent dropdown click & positioning...');

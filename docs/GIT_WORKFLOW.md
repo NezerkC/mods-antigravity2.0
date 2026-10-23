@@ -14,21 +14,33 @@ Seguimos un modelo **Trunk-Based Development** asistido por ramas cortas de func
 * Los merges a `main` se realizan tras verificación técnica y revisión de cambios.
 
 ### 1.2 Convención de Nombres de Ramas
-Toda rama de trabajo debe crearse a partir de `main` y utilizar el formato de prefijo con descripción en minúsculas separada por guiones (`kebab-case`):
+Toda rama de trabajo debe crearse a partir de `main` y utilizar el formato estructurado con prefijo de tipo y el dominio/alcance del trabajo (`kebab-case`):
 
-| Prefijo | Propósito | Ejemplo |
+```text
+<tipo>/<alcance>-<descripcion>
+```
+
+**Alcances principales (`<alcance>`):**
+* `framework` o `core`: Runtime host, resolvers, websocket CDP, slot manager o SDK.
+* `mods`: Mods específicos de UI (`agent-selector`, `context-tachometer`, etc.).
+* `tests`: Suites unitarias, de integración o scripts de prueba en vivo.
+* `dist`: Empaquetado, distribución y bundler (`build.js`).
+* `ci`: Pipelines, GitHub Actions o automatizaciones de repositorio.
+* `docs`: Documentación técnica, guías o gobernanza.
+
+| Prefijo | Propósito | Ejemplo con Alcance |
 | :--- | :--- | :--- |
-| `feat/` | Nueva funcionalidad, componente o mod | `feat/agent-discovery-engine` |
-| `fix/` | Corrección de bug o comportamiento anómalo | `fix/popover-z-index-clipping` |
-| `refactor/` | Reestructuración de código sin alterar comportamiento | `refactor/cdp-socket-reconnect` |
-| `perf/` | Optimización de rendimiento o memoria | `perf/throttle-dom-mutations` |
-| `test/` | Adición o corrección de pruebas automatizadas | `test/style-isolator-keyframes` |
-| `docs/` | Cambios exclusivos en documentación o especificaciones | `docs/git-workflow-rules` |
-| `chore/` | Tareas de mantenimiento, CI/CD, dependencias o tooling | `chore/seed-project-backlog` |
+| `feat/` | Nueva funcionalidad, componente o mod | `feat/mods-agent-discovery` |
+| `fix/` | Corrección de bug o comportamiento anómalo | `fix/mods-popover-clipping` |
+| `refactor/` | Reestructuración de código sin alterar comportamiento | `refactor/framework-cdp-active-probe` |
+| `perf/` | Optimización de rendimiento o memoria | `perf/core-throttle-mutations` |
+| `test/` | Adición o corrección de pruebas automatizadas | `test/framework-cdp-resolver` |
+| `docs/` | Cambios exclusivos en documentación o especificaciones | `docs/workflow-branch-scoping` |
+| `chore/` | Tareas de mantenimiento, CI/CD, dependencias o tooling | `chore/ci-seed-project-backlog` |
 
 ### 1.3 Ciclo de Vida de una Rama
 1. Actualizar `main`: `git checkout main && git pull origin main`
-2. Crear la rama de trabajo: `git checkout -b <tipo>/<nombre-descriptivo>`
+2. Crear la rama de trabajo con alcance: `git checkout -b <tipo>/<alcance>-<nombre-descriptivo>`
 3. Desarrollar aplicando commits atómicos verificados.
 4. Validar que la suite de pruebas pase al 100%: `npm test`
 5. Integrar a `main` mediante Pull Request o merge fast-forward limpio.

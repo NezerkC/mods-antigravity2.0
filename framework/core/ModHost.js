@@ -72,7 +72,7 @@ export class ModHost {
     };
 
     const payload = this.compilePayload(hostContext);
-    const port = this.portResolver.resolvePort();
+    const port = await this.portResolver.resolvePort();
     const cdpClient = new CdpWebSocketClient({ port });
 
     return await cdpClient.evaluate(payload);
