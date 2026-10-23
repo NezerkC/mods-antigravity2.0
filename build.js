@@ -38,6 +38,7 @@ async function build() {
     .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(tachometerCss)};`);
 
   // 3. Read Agent Selector Mod sources
+  const agentIcons = cleanModuleCode('mods/agent-selector/components/AgentIcons.js');
   const agentIconSvg = cleanModuleCode('mods/agent-selector/components/AgentIconSvg.js');
   const agentDropdownHtml = cleanModuleCode('mods/agent-selector/components/AgentDropdownHtml.js');
   const agentSelectorCss = fs.readFileSync(path.resolve('mods/agent-selector/styles.css'), 'utf-8');
@@ -90,6 +91,8 @@ ${popoverHtml}
 ${tachometerIndex}
 
 // ===================== Agent Selector Mod =====================
+${agentIcons}
+
 ${agentIconSvg}
 
 ${agentDropdownHtml}
