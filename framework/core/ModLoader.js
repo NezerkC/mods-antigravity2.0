@@ -126,6 +126,14 @@ export class ModLoader {
 
           const isCurrentOpen = portal.classList.contains('open') && portal.__currentBadge === badge;
 
+          // Close Tachometer popover if open
+          const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+          if (tachPortal) {
+            tachPortal.classList.remove('open');
+            tachPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
           document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
           portal.classList.remove('open');
           portal.__currentBadge = null;
@@ -197,7 +205,22 @@ export class ModLoader {
 
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
 
-        window.__showTachometerPopover = function(badge) {
+        window.__toggleTachometerPopover = function(e, badgeEl) {
+          if (e) {
+            e.stopPropagation();
+            e.preventDefault();
+          }
+          const badge = badgeEl || (e ? e.currentTarget : document.querySelector('.antigravity-tachometer-badge'));
+          if (!badge) return;
+
+          // Close Agent dropdown if open
+          const agentPortal = document.getElementById('antigravity-agent-dropdown-portal');
+          if (agentPortal) {
+            agentPortal.classList.remove('open');
+            agentPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+
           let portal = document.getElementById('antigravity-tachometer-popover-portal');
           if (!portal) {
             portal = document.createElement('div');
@@ -206,44 +229,61 @@ export class ModLoader {
             document.body.appendChild(portal);
           }
 
-          // Resolve active conversation metric for this badge
-          const cascadeEl = badge.closest('[data-cascade-id]');
-          const cascadeId = cascadeEl ? cascadeEl.getAttribute('data-cascade-id') : null;
-          const urlPath = window.location.pathname || '';
-          const pathParts = urlPath.split('/c/');
-          const urlPathId = (pathParts.length > 1 && pathParts[1]) ? pathParts[1].split('/')[0].split('?')[0] : null;
-          const searchMatch = (window.location.search || '').match(/[?&](?:focused|conversationId)=([0-9a-fA-F-]+)/);
-          const activeId = cascadeId || urlPathId || (searchMatch ? searchMatch[1] : null);
+          const isCurrentOpen = portal.classList.contains('open') && portal.__currentBadge === badge;
 
-          const all = window.__antigravityAllMetrics || {};
-          const m = (activeId && all[activeId]) ? all[activeId] : window.__antigravityLatestMetric;
+          document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+          portal.classList.remove('open');
+          portal.__currentBadge = null;
 
-          if (m && window.__renderTachometerPopoverHtml) {
-            portal.innerHTML = window.__renderTachometerPopoverHtml(m);
+          if (!isCurrentOpen) {
+            badge.classList.add('open');
+            portal.__currentBadge = badge;
+
+            // Resolve active conversation metric for this badge
+            const cascadeEl = badge.closest('[data-cascade-id]');
+            const cascadeId = cascadeEl ? cascadeEl.getAttribute('data-cascade-id') : null;
+            const urlPath = window.location.pathname || '';
+            const pathParts = urlPath.split('/c/');
+            const urlPathId = (pathParts.length > 1 && pathParts[1]) ? pathParts[1].split('/')[0].split('?')[0] : null;
+            const searchMatch = (window.location.search || '').match(/[?&](?:focused|conversationId)=([0-9a-fA-F-]+)/);
+            const activeId = cascadeId || urlPathId || (searchMatch ? searchMatch[1] : null);
+
+            const all = window.__antigravityAllMetrics || {};
+            const m = (activeId && all[activeId]) ? all[activeId] : window.__antigravityLatestMetric;
+
+            if (m && window.__renderTachometerPopoverHtml) {
+              portal.innerHTML = window.__renderTachometerPopoverHtml(m);
+            }
+
+            const rect = badge.getBoundingClientRect();
+            const portalHeight = 295;
+            const portalWidth = 310;
+
+            if (rect.bottom + portalHeight > window.innerHeight && rect.top > portalHeight) {
+              portal.style.top = 'auto';
+              portal.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+            } else {
+              portal.style.bottom = 'auto';
+              portal.style.top = (rect.bottom + 8) + 'px';
+            }
+
+            const clampedLeft = Math.max(10, Math.min(window.innerWidth - portalWidth - 10, rect.left - 20));
+            portal.style.left = clampedLeft + 'px';
+            portal.classList.add('open');
           }
+        };
 
-          const rect = badge.getBoundingClientRect();
-          const portalHeight = 295;
-          const portalWidth = 310;
-
-          if (rect.bottom + portalHeight > window.innerHeight && rect.top > portalHeight) {
-            portal.style.top = 'auto';
-            portal.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
-          } else {
-            portal.style.bottom = 'auto';
-            portal.style.top = (rect.bottom + 8) + 'px';
-          }
-
-          const clampedLeft = Math.max(10, Math.min(window.innerWidth - portalWidth - 10, rect.left - 40));
-          portal.style.left = clampedLeft + 'px';
-          portal.classList.add('open');
+        window.__showTachometerPopover = function(badge) {
+          window.__toggleTachometerPopover(null, badge);
         };
 
         window.__hideTachometerPopover = function() {
           const portal = document.getElementById('antigravity-tachometer-popover-portal');
-          if (portal && !portal.__isPinned && !portal.__isHovered) {
+          if (portal) {
             portal.classList.remove('open');
+            portal.__currentBadge = null;
           }
+          document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
         };
 
         // Store all per-conversation metrics and current primary snapshot
@@ -308,24 +348,29 @@ export class ModLoader {
             const isTachPortal = e.target.closest('#antigravity-tachometer-popover-portal');
             if (!isTachBadge && !isTachPortal) {
               const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
-              if (tachPortal && !tachPortal.__isPinned) {
+              if (tachPortal) {
                 tachPortal.classList.remove('open');
+                tachPortal.__currentBadge = null;
               }
+              document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
             }
           }, true);
 
           document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
               const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
-              if (aPortal) aPortal.classList.remove('open');
+              if (aPortal) {
+                aPortal.classList.remove('open');
+                aPortal.__currentBadge = null;
+              }
               document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
 
               const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
               if (tachPortal) {
                 tachPortal.classList.remove('open');
-                tachPortal.__isPinned = false;
+                tachPortal.__currentBadge = null;
               }
-              document.querySelectorAll('.antigravity-tachometer-badge.pinned').forEach(b => b.classList.remove('pinned'));
+              document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
             }
           });
         }
@@ -374,50 +419,14 @@ export class ModLoader {
             });
           });
 
-          // Bind Tachometer hover & click handlers
+          // Bind Tachometer click handler (pure click confirmation, zero hover activation)
           document.querySelectorAll('.antigravity-tachometer-badge').forEach(badge => {
-            if (badge.__tachEventsBound) return;
-            badge.__tachEventsBound = true;
-            let leaveTimer = null;
-
-            badge.addEventListener('mouseenter', () => {
-              if (leaveTimer) clearTimeout(leaveTimer);
-              window.__showTachometerPopover(badge);
-            });
-
-            badge.addEventListener('mouseleave', () => {
-              leaveTimer = setTimeout(() => {
-                window.__hideTachometerPopover();
-              }, 150);
-            });
-
+            if (badge.__tachClickBound) return;
+            badge.__tachClickBound = true;
             badge.addEventListener('click', (e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              const portal = document.getElementById('antigravity-tachometer-popover-portal');
-              if (!portal) return;
-              portal.__isPinned = !portal.__isPinned;
-              badge.classList.toggle('pinned', portal.__isPinned);
-              if (portal.__isPinned) {
-                window.__showTachometerPopover(badge);
-              } else {
-                portal.classList.remove('open');
-              }
+              window.__toggleTachometerPopover(e, badge);
             });
           });
-
-          // Bind Tachometer portal hover protection
-          const tPortal = document.getElementById('antigravity-tachometer-popover-portal');
-          if (tPortal && !tPortal.__portalHoverBound) {
-            tPortal.__portalHoverBound = true;
-            tPortal.addEventListener('mouseenter', () => {
-              tPortal.__isHovered = true;
-            });
-            tPortal.addEventListener('mouseleave', () => {
-              tPortal.__isHovered = false;
-              window.__hideTachometerPopover();
-            });
-          }
 
           // Restore saved agent selection across all mounted badges
           try {

@@ -80,3 +80,13 @@ test('ModLoader - generates consolidated injection script for registered mods', 
   assert.ok(script.includes('<span>12:00</span>'));
   assert.ok(script.includes('#antigravity-mod-clock-mod .time { color: green; }'));
 });
+
+test('ModLoader - generates click toggle handlers and excludes hover listeners', () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({});
+
+  assert.ok(script.includes('window.__toggleTachometerPopover'));
+  assert.ok(script.includes('__tachClickBound'));
+  assert.ok(!script.includes("badge.addEventListener('mouseenter'"));
+  assert.ok(!script.includes("badge.addEventListener('mouseleave'"));
+});
