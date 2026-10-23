@@ -62,6 +62,36 @@ test('ModDaemon - tick skips injection when mods are already present in DOM', as
   assert.equal(dispatchCalled, false);
 });
 
+test('ModDaemon - tick pauses and skips injection when stealth kill-switch is active', async () => {
+  const mockResolver = {
+    resolvePort: async () => 53908,
+    probePort: async () => true
+  };
+
+  let dispatchCalled = false;
+  const mockCdpClient = {
+    evaluate: async () => ({ value: 'paused' })
+  };
+
+  const mockHost = {
+    dispatch: async () => {
+      dispatchCalled = true;
+    }
+  };
+
+  const daemon = new ModDaemon({
+    portResolver: mockResolver,
+    modHost: mockHost,
+    cdpClientFactory: () => mockCdpClient
+  });
+
+  const result = await daemon.tick();
+
+  assert.equal(result.status, 'paused');
+  assert.equal(result.port, 53908);
+  assert.equal(dispatchCalled, false);
+});
+
 test('ModDaemon - tick dispatches mod injection when CDP is alive and mods are missing', async () => {
   const mockResolver = {
     resolvePort: async () => 53908,

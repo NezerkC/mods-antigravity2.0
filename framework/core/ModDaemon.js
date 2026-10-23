@@ -3,6 +3,7 @@ import { CdpPortResolver } from './CdpPortResolver.js';
 import { CdpWebSocketClient } from './CdpWebSocketClient.js';
 import { ContextTachometerMod } from '../../mods/context-tachometer/index.js';
 import { AgentSelectorMod } from '../../mods/agent-selector/index.js';
+import { ModsManagerMod } from '../../mods/mods-manager/index.js';
 
 /**
  * Creates a ModHost instance pre-configured with default first-party mods.
@@ -13,6 +14,7 @@ export function createDefaultHost(options = {}) {
   const host = new ModHost(options);
   host.registerMod(new ContextTachometerMod());
   host.registerMod(new AgentSelectorMod());
+  host.registerMod(new ModsManagerMod());
   return host;
 }
 
@@ -45,26 +47,33 @@ export class ModDaemon {
   }
 
   /**
-   * Checks whether mod containers are actively mounted in the Electron DOM.
+   * Checks whether mod containers are actively mounted in the Electron DOM,
+   * or whether the daemon persistence has been paused by the user stealth switch.
    * @param {CdpWebSocketClient} client
-   * @returns {Promise<boolean>}
+   * @returns {Promise<'injected' | 'missing' | 'paused'>}
    */
   async checkInjected(client) {
     try {
       const res = await client.evaluate(`
         (() => {
+          const daemonEnabled = localStorage.getItem('__antigravity_daemon_enabled') !== 'false';
+          if (!daemonEnabled) {
+            return 'paused';
+          }
           const hasScript = typeof window.__toggleTachometerPopover === 'function';
           let hasBadge = Boolean(document.querySelector('.antigravity-tachometer-badge'));
           if (hasScript && !hasBadge && typeof window.__antigravityMountAll === 'function') {
             window.__antigravityMountAll();
             hasBadge = Boolean(document.querySelector('.antigravity-tachometer-badge'));
           }
-          return hasScript && hasBadge;
+          return (hasScript && hasBadge) ? 'injected' : 'missing';
         })()
       `);
-      return res?.value === true;
+      if (res?.value === 'paused') return 'paused';
+      if (res?.value === 'injected' || res?.value === true) return 'injected';
+      return 'missing';
     } catch {
-      return false;
+      return 'missing';
     }
   }
 
@@ -92,9 +101,13 @@ export class ModDaemon {
 
       this.connectedPort = port;
       const client = this.cdpClientFactory(port);
-      const isAlreadyInjected = await this.checkInjected(client);
+      const injectState = await this.checkInjected(client);
 
-      if (!isAlreadyInjected) {
+      if (injectState === 'paused') {
+        return { status: 'paused', port };
+      }
+
+      if (injectState !== 'injected') {
         this.logger.log(`[ModDaemon] Antigravity detected on port ${port}. Injecting mods...`);
         await this.modHost.dispatch();
         this.lastInjectedAt = Date.now();
