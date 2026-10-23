@@ -14,9 +14,12 @@ export class StyleIsolator {
     const cleanScope = scopeSelector.trim();
     if (!cleanScope) return css;
 
+    // Strip comments to ensure clean selector tokenization
+    const commentFreeCss = css.replace(/\/\*[\s\S]*?\*\//g, '');
+
     // Tokenize at-rules (like @keyframes, @media) by tracking balanced braces
     const atRuleBlocks = [];
-    let text = css;
+    let text = commentFreeCss;
     let strippedCss = '';
 
     while (text.length > 0) {
@@ -62,7 +65,19 @@ export class StyleIsolator {
         .split(',')
         .map(sel => sel.trim())
         .filter(Boolean)
-        .map(sel => `${cleanScope} ${sel}`)
+        .map(sel => {
+          if (
+            sel.includes('-portal') ||
+            sel.includes('antigravity-agent-dropdown') ||
+            sel.startsWith('.agent-') ||
+            sel.startsWith('.antigravity-agent-item') ||
+            sel.startsWith('body') ||
+            sel.startsWith(':root')
+          ) {
+            return sel;
+          }
+          return `${cleanScope} ${sel}`;
+        })
         .join(', ');
 
       return `${scopedSelectors} {${declarations}}`;

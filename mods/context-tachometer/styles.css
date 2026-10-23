@@ -28,18 +28,21 @@
   transform: translateY(0.5px);
 }
 
-.antigravity-popover-container {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  z-index: 99999;
+/* Interactive Tachometer Popover Portal (Fixed to Viewport) */
+.antigravity-tachometer-popover-portal {
+  position: fixed !important;
+  z-index: 999999 !important;
   display: none;
-  animation: popoverFadeIn 0.15s ease-out;
+  animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));
 }
 
-.antigravity-tachometer-badge:hover .antigravity-popover-container,
-.antigravity-popover-container:hover {
-  display: block;
+.antigravity-tachometer-popover-portal.open {
+  display: block !important;
+}
+
+.antigravity-popover-container {
+  display: none !important;
 }
 
 @keyframes popoverFadeIn {

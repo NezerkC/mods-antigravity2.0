@@ -289,12 +289,16 @@ class SlotManager {
           }
 
           let modNode = container.querySelector('#${modWrapperId}');
-          if (!modNode) {
-            modNode = document.createElement('div');
-            modNode.id = '${modWrapperId}';
-            container.appendChild(modNode);
+          if (!modNode || modNode.getAttribute('data-version') !== '2') {
+            if (!modNode) {
+              modNode = document.createElement('div');
+              modNode.id = '${modWrapperId}';
+              modNode.className = '${modWrapperId}';
+              container.appendChild(modNode);
+            }
+            modNode.setAttribute('data-version', '2');
+            modNode.innerHTML = ${JSON.stringify(htmlContent)};
           }
-          modNode.innerHTML = ${JSON.stringify(htmlContent)};
         }
       })();
     `;
@@ -318,9 +322,12 @@ class StyleIsolator {
     const cleanScope = scopeSelector.trim();
     if (!cleanScope) return css;
 
+    // Strip comments to ensure clean selector tokenization
+    const commentFreeCss = css.replace(/\/\*[\s\S]*?\*\//g, '');
+
     // Tokenize at-rules (like @keyframes, @media) by tracking balanced braces
     const atRuleBlocks = [];
-    let text = css;
+    let text = commentFreeCss;
     let strippedCss = '';
 
     while (text.length > 0) {
@@ -366,7 +373,19 @@ class StyleIsolator {
         .split(',')
         .map(sel => sel.trim())
         .filter(Boolean)
-        .map(sel => `${cleanScope} ${sel}`)
+        .map(sel => {
+          if (
+            sel.includes('-portal') ||
+            sel.includes('antigravity-agent-dropdown') ||
+            sel.startsWith('.agent-') ||
+            sel.startsWith('.antigravity-agent-item') ||
+            sel.startsWith('body') ||
+            sel.startsWith(':root')
+          ) {
+            return sel;
+          }
+          return `${cleanScope} ${sel}`;
+        })
         .join(', ');
 
       return `${scopedSelectors} {${declarations}}`;
@@ -548,24 +567,64 @@ class ModLoader {
         }
         styleTag.textContent = ${JSON.stringify(cssBundle)};
 
-        // 2. Global Agent Selector handlers
+        // 2. Global Agent Selector & Tachometer Portal Handlers
         window.__toggleAgentDropdown = function(e, badgeEl) {
-          if (e) e.stopPropagation();
-          const badge = badgeEl || (e ? e.currentTarget : document.getElementById('antigravity-agent-badge'));
+          if (e) {
+            e.stopPropagation();
+            e.preventDefault();
+          }
+          const badge = badgeEl || (e ? e.currentTarget : document.querySelector('.antigravity-agent-badge'));
           if (!badge) return;
-          const isOpen = badge.classList.contains('open');
+
+          let portal = document.getElementById('antigravity-agent-dropdown-portal');
+          if (!portal) {
+            portal = document.createElement('div');
+            portal.id = 'antigravity-agent-dropdown-portal';
+            portal.className = 'antigravity-agent-dropdown-portal';
+            document.body.appendChild(portal);
+          }
+
+          if (!portal.firstElementChild) {
+            const template = document.querySelector('.antigravity-agent-dropdown-template');
+            if (template) {
+              portal.innerHTML = template.innerHTML;
+            }
+          }
+
+          const isCurrentOpen = portal.classList.contains('open') && portal.__currentBadge === badge;
+
           document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
-          if (!isOpen) {
+          portal.classList.remove('open');
+          portal.__currentBadge = null;
+
+          if (!isCurrentOpen) {
             badge.classList.add('open');
+            portal.__currentBadge = badge;
+
+            const rect = badge.getBoundingClientRect();
+            const portalHeight = 390;
+            const portalWidth = 320;
+
+            if (rect.bottom + portalHeight > window.innerHeight && rect.top > portalHeight) {
+              portal.style.top = 'auto';
+              portal.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+            } else {
+              portal.style.bottom = 'auto';
+              portal.style.top = (rect.bottom + 8) + 'px';
+            }
+
+            const clampedLeft = Math.max(10, Math.min(window.innerWidth - portalWidth - 10, rect.left));
+            portal.style.left = clampedLeft + 'px';
+            portal.classList.add('open');
           }
         };
 
         window.__selectAntigravityAgent = function(agentId, agentName, agentColor) {
-          document.querySelectorAll('#antigravity-active-agent-name').forEach(label => {
+          document.querySelectorAll('.antigravity-active-agent-name, #antigravity-active-agent-name').forEach(label => {
             label.textContent = agentName;
           });
 
-          document.querySelectorAll('#antigravity-agent-badge').forEach(badge => {
+          document.querySelectorAll('.antigravity-agent-badge, #antigravity-agent-badge').forEach(badge => {
             badge.setAttribute('title', 'Active Specialist: ' + agentName);
             badge.classList.remove('open');
             if (agentColor) {
@@ -574,12 +633,18 @@ class ModLoader {
             }
           });
 
-          document.querySelectorAll('#antigravity-active-agent-dot').forEach(dot => {
+          document.querySelectorAll('.antigravity-active-agent-dot, #antigravity-active-agent-dot').forEach(dot => {
             if (agentColor) {
               dot.style.background = agentColor;
               dot.style.boxShadow = '0 0 6px ' + agentColor;
             }
           });
+
+          const portal = document.getElementById('antigravity-agent-dropdown-portal');
+          if (portal) {
+            portal.classList.remove('open');
+            portal.__currentBadge = null;
+          }
 
           try {
             localStorage.setItem('__antigravity_selected_agent', JSON.stringify({ 
@@ -597,16 +662,103 @@ class ModLoader {
           });
         };
 
-        if (!window.__agentGlobalClickBound) {
-          window.__agentGlobalClickBound = true;
-          document.addEventListener('click', (e) => {
-            if (!e.target.closest('.antigravity-agent-badge')) {
-              document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+        window.__showTachometerPopover = function(badge) {
+          let portal = document.getElementById('antigravity-tachometer-popover-portal');
+          if (!portal) {
+            portal = document.createElement('div');
+            portal.id = 'antigravity-tachometer-popover-portal';
+            portal.className = 'antigravity-tachometer-popover-portal';
+            document.body.appendChild(portal);
+          }
+
+          if (!portal.firstElementChild) {
+            const template = document.querySelector('.antigravity-popover-template');
+            if (template) {
+              portal.innerHTML = template.innerHTML;
+            }
+          }
+
+          const rect = badge.getBoundingClientRect();
+          const portalHeight = 295;
+          const portalWidth = 310;
+
+          if (rect.bottom + portalHeight > window.innerHeight && rect.top > portalHeight) {
+            portal.style.top = 'auto';
+            portal.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+          } else {
+            portal.style.bottom = 'auto';
+            portal.style.top = (rect.bottom + 8) + 'px';
+          }
+
+          const clampedLeft = Math.max(10, Math.min(window.innerWidth - portalWidth - 10, rect.left - 40));
+          portal.style.left = clampedLeft + 'px';
+          portal.classList.add('open');
+        };
+
+        window.__hideTachometerPopover = function() {
+          const portal = document.getElementById('antigravity-tachometer-popover-portal');
+          if (portal && !portal.__isPinned && !portal.__isHovered) {
+            portal.classList.remove('open');
+          }
+        };
+
+        window.__updateAntigravityTelemetry = function(m) {
+          if (!m) return;
+          const pctNum = parseFloat(m.pct) || 0;
+          let statusColor = '#22c55e';
+          if (pctNum >= 85) statusColor = '#ef4444';
+          else if (pctNum >= 60) statusColor = '#f97316';
+          else if (pctNum >= 25) statusColor = '#eab308';
+
+          document.querySelectorAll('.antigravity-tachometer-badge').forEach(badge => {
+            badge.setAttribute('title', 'Context: ' + m.displayTokens + ' tokens (' + m.pct + '%)');
+            const tokenSpan = badge.querySelector('.tachometer-tokens');
+            if (tokenSpan) tokenSpan.textContent = m.displayTokens;
+            const pctSpan = badge.querySelector('.tachometer-pct');
+            if (pctSpan) pctSpan.textContent = '(' + m.pct + '%)';
+            const needle = badge.querySelector('g[filter]');
+            if (needle) {
+              const angle = -120 + (Math.min(pctNum, 100) / 100) * 240;
+              needle.style.transform = 'rotate(' + angle.toFixed(1) + 'deg)';
+              const poly = needle.querySelector('polygon');
+              if (poly) poly.setAttribute('fill', statusColor);
             }
           });
+        };
+
+        if (!window.__antigravityGlobalEventsBound) {
+          window.__antigravityGlobalEventsBound = true;
+          document.addEventListener('click', (e) => {
+            const isAgentBadge = e.target.closest('.antigravity-agent-badge');
+            const isAgentPortal = e.target.closest('#antigravity-agent-dropdown-portal');
+            if (!isAgentBadge && !isAgentPortal) {
+              const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
+              if (aPortal) aPortal.classList.remove('open');
+              document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+            }
+
+            const isTachBadge = e.target.closest('.antigravity-tachometer-badge');
+            const isTachPortal = e.target.closest('#antigravity-tachometer-popover-portal');
+            if (!isTachBadge && !isTachPortal) {
+              const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+              if (tachPortal && !tachPortal.__isPinned) {
+                tachPortal.classList.remove('open');
+              }
+            }
+          }, true);
+
           document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
+              const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
+              if (aPortal) aPortal.classList.remove('open');
               document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+
+              const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+              if (tachPortal) {
+                tachPortal.classList.remove('open');
+                tachPortal.__isPinned = false;
+              }
+              document.querySelectorAll('.antigravity-tachometer-badge.pinned').forEach(b => b.classList.remove('pinned'));
             }
           });
         }
@@ -618,6 +770,87 @@ class ModLoader {
 
           ${mountSnippets.join('\n')}
 
+          // 3.1 Initialize Floating Portals in document.body
+          let agentPortal = document.getElementById('antigravity-agent-dropdown-portal');
+          if (!agentPortal) {
+            agentPortal = document.createElement('div');
+            agentPortal.id = 'antigravity-agent-dropdown-portal';
+            agentPortal.className = 'antigravity-agent-dropdown-portal';
+            document.body.appendChild(agentPortal);
+          }
+          const agentTemplate = document.querySelector('.antigravity-agent-dropdown-template');
+          if (agentTemplate && (!agentPortal.firstElementChild || agentPortal.getAttribute('data-v') !== '2')) {
+            agentPortal.innerHTML = agentTemplate.innerHTML;
+            agentPortal.setAttribute('data-v', '2');
+          }
+
+          let tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+          if (!tachPortal) {
+            tachPortal = document.createElement('div');
+            tachPortal.id = 'antigravity-tachometer-popover-portal';
+            tachPortal.className = 'antigravity-tachometer-popover-portal';
+            document.body.appendChild(tachPortal);
+          }
+          const tachTemplate = document.querySelector('.antigravity-popover-template');
+          if (tachTemplate && (!tachPortal.firstElementChild || tachPortal.getAttribute('data-v') !== '2')) {
+            tachPortal.innerHTML = tachTemplate.innerHTML;
+            tachPortal.setAttribute('data-v', '2');
+          }
+
+          // Bind Agent Selector click handlers
+          document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {
+            if (badge.__agentClickBound) return;
+            badge.__agentClickBound = true;
+            badge.addEventListener('click', (e) => {
+              window.__toggleAgentDropdown(e, badge);
+            });
+          });
+
+          // Bind Tachometer hover & click handlers
+          document.querySelectorAll('.antigravity-tachometer-badge').forEach(badge => {
+            if (badge.__tachEventsBound) return;
+            badge.__tachEventsBound = true;
+            let leaveTimer = null;
+
+            badge.addEventListener('mouseenter', () => {
+              if (leaveTimer) clearTimeout(leaveTimer);
+              window.__showTachometerPopover(badge);
+            });
+
+            badge.addEventListener('mouseleave', () => {
+              leaveTimer = setTimeout(() => {
+                window.__hideTachometerPopover();
+              }, 150);
+            });
+
+            badge.addEventListener('click', (e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              const portal = document.getElementById('antigravity-tachometer-popover-portal');
+              if (!portal) return;
+              portal.__isPinned = !portal.__isPinned;
+              badge.classList.toggle('pinned', portal.__isPinned);
+              if (portal.__isPinned) {
+                window.__showTachometerPopover(badge);
+              } else {
+                portal.classList.remove('open');
+              }
+            });
+          });
+
+          // Bind Tachometer portal hover protection
+          const tPortal = document.getElementById('antigravity-tachometer-popover-portal');
+          if (tPortal && !tPortal.__portalHoverBound) {
+            tPortal.__portalHoverBound = true;
+            tPortal.addEventListener('mouseenter', () => {
+              tPortal.__isHovered = true;
+            });
+            tPortal.addEventListener('mouseleave', () => {
+              tPortal.__isHovered = false;
+              window.__hideTachometerPopover();
+            });
+          }
+
           // Restore saved agent selection across all mounted badges
           try {
             const saved = localStorage.getItem('__antigravity_selected_agent');
@@ -628,20 +861,34 @@ class ModLoader {
               }
             }
           } catch (e) {}
+
+          // Apply current telemetry
+          window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})});
         }
 
         mountAllMods();
 
-        // 4. Observe DOM mutations to auto-mount into new or switched chat panels
+        // 4. Observe DOM mutations with smart slot check to avoid DOM thrashing
         if (window.__antigravityModObserver) {
           window.__antigravityModObserver.disconnect();
           window.__antigravityModObserver = null;
         }
 
-        let mountRaf = null;
+        let mountDebounce = null;
         window.__antigravityModObserver = new MutationObserver(() => {
-          if (mountRaf) cancelAnimationFrame(mountRaf);
-          mountRaf = requestAnimationFrame(mountAllMods);
+          const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
+          let missingSlot = false;
+          for (const btn of triggers) {
+            if (btn.parentElement && !btn.parentElement.querySelector('#antigravity-slot-header-actions')) {
+              missingSlot = true;
+              break;
+            }
+          }
+
+          if (missingSlot) {
+            if (mountDebounce) clearTimeout(mountDebounce);
+            mountDebounce = setTimeout(mountAllMods, 80);
+          }
         });
 
         window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
@@ -1122,7 +1369,7 @@ class ContextTachometerMod extends AntigravityMod {
       priority: 50
     });
 
-    this.cachedCss = ".antigravity-tachometer-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 7px;\n  padding: 3px 9px 3px 6px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;\n  font-size: 11px;\n  line-height: 1;\n  color: #e4e4e7;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n}\n\n.antigravity-tachometer-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  transform: translateY(-0.5px);\n  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);\n}\n\n.antigravity-tachometer-badge:active {\n  transform: translateY(0.5px);\n}\n\n.antigravity-popover-container {\n  position: absolute;\n  top: calc(100% + 8px);\n  left: 0;\n  z-index: 99999;\n  display: none;\n  animation: popoverFadeIn 0.15s ease-out;\n}\n\n.antigravity-tachometer-badge:hover .antigravity-popover-container,\n.antigravity-popover-container:hover {\n  display: block;\n}\n\n@keyframes popoverFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(-4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
+    this.cachedCss = ".antigravity-tachometer-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 7px;\n  padding: 3px 9px 3px 6px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;\n  font-size: 11px;\n  line-height: 1;\n  color: #e4e4e7;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n}\n\n.antigravity-tachometer-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  transform: translateY(-0.5px);\n  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);\n}\n\n.antigravity-tachometer-badge:active {\n  transform: translateY(0.5px);\n}\n\n/* Interactive Tachometer Popover Portal (Fixed to Viewport) */\n.antigravity-tachometer-popover-portal {\n  position: fixed !important;\n  z-index: 999999 !important;\n  display: none;\n  animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\n}\n\n.antigravity-tachometer-popover-portal.open {\n  display: block !important;\n}\n\n.antigravity-popover-container {\n  display: none !important;\n}\n\n@keyframes popoverFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(-4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
   }
 
   /**
@@ -1152,13 +1399,13 @@ class ContextTachometerMod extends AntigravityMod {
     const popoverHtml = renderPopoverHtml(telemetry);
 
     const html = `
-      <div id="antigravity-tachometer-badge" class="antigravity-tachometer-badge" title="Context: ${telemetry.displayTokens} tokens (${telemetry.pct}%)">
+      <div id="antigravity-tachometer-badge" class="antigravity-tachometer-badge" title="Context: ${telemetry.displayTokens} tokens (${telemetry.pct}%)" tabindex="0">
         ${gaugeSvg}
-        <span style="font-weight: 500; letter-spacing: -0.01em;">${telemetry.displayTokens}</span>
-        <span style="color: #a1a1aa; font-size: 10px;">(${telemetry.pct}%)</span>
-        <div class="antigravity-popover-container">
+        <span class="tachometer-tokens" style="font-weight: 500; letter-spacing: -0.01em; pointer-events: none;">${telemetry.displayTokens}</span>
+        <span class="tachometer-pct" style="color: #a1a1aa; font-size: 10px; pointer-events: none;">(${telemetry.pct}%)</span>
+        <template class="antigravity-popover-template">
           ${popoverHtml}
-        </div>
+        </template>
       </div>
     `.trim();
 
@@ -1429,7 +1676,7 @@ class AgentSelectorMod extends AntigravityMod {
       priority: 45
     });
 
-    this.cachedCss = ".antigravity-agent-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  padding: 4px 10px 4px 7px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n  font-size: 11px;\n  line-height: 1;\n  color: #f4f4f5;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n}\n\n.agent-badge-dot {\n  width: 6px;\n  height: 6px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n  transition: all 0.3s ease;\n}\n\n.agent-color-dot {\n  width: 8px;\n  height: 8px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n}\n\n.antigravity-agent-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  transform: translateY(-0.5px);\n  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);\n}\n\n.antigravity-agent-badge:active {\n  transform: translateY(0.5px);\n}\n\n.agent-label {\n  font-weight: 500;\n  letter-spacing: -0.01em;\n  color: #e4e4e7;\n  white-space: nowrap;\n}\n\n.agent-caret {\n  font-size: 8px;\n  color: #a1a1aa;\n  margin-left: 1px;\n  transition: transform 0.2s ease;\n}\n\n.antigravity-agent-badge:hover .agent-caret {\n  transform: rotate(180deg);\n}\n\n/* Responsive compact mode (Container-driven via ResizeObserver) */\n.antigravity-agent-badge.compact {\n  padding: 4px 6px !important;\n  gap: 0 !important;\n}\n.antigravity-agent-badge.compact .agent-label,\n.antigravity-agent-badge.compact .agent-caret {\n  display: none !important;\n}\n\n/* Responsive shrinking for narrow screen resolutions */\n@media (max-width: 960px) {\n  .agent-label {\n    display: none;\n  }\n  .agent-caret {\n    display: none;\n  }\n  .antigravity-agent-badge {\n    padding: 4px 6px;\n  }\n}\n\n/* Interactive Dropdown Popover */\n.antigravity-agent-dropdown-wrapper {\n  position: absolute;\n  top: calc(100% + 8px);\n  left: 0;\n  z-index: 999999;\n  display: none;\n  animation: agentFadeIn 0.15s ease-out;\n}\n\n.antigravity-agent-badge.open .antigravity-agent-dropdown-wrapper,\n.antigravity-agent-badge:hover .antigravity-agent-dropdown-wrapper,\n.antigravity-agent-badge:focus-within .antigravity-agent-dropdown-wrapper,\n.antigravity-agent-dropdown-wrapper:hover {\n  display: block !important;\n}\n\n.antigravity-agent-dropdown {\n  width: 320px;\n  max-height: 420px;\n  background: #18181b;\n  color: #f4f4f5;\n  border: 1px solid rgba(255, 255, 255, 0.16);\n  border-radius: 12px;\n  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);\n  backdrop-filter: blur(20px);\n  -webkit-backdrop-filter: blur(20px);\n  padding: 10px;\n  display: flex;\n  flex-direction: column;\n  pointer-events: auto;\n}\n\n.agent-dropdown-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 6px 8px 10px 8px;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08);\n  margin-bottom: 6px;\n}\n\n.agent-section-header {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-size: 10px;\n  font-weight: 700;\n  text-transform: uppercase;\n  letter-spacing: 0.05em;\n  color: #71717a;\n  padding: 8px 8px 4px 8px;\n  border-top: 1px solid rgba(255, 255, 255, 0.05);\n  margin-top: 4px;\n}\n\n.agent-section-header:first-child {\n  border-top: none;\n  margin-top: 0;\n  padding-top: 2px;\n}\n\n.agent-dropdown-title {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-weight: 600;\n  font-size: 12px;\n  color: #ffffff;\n}\n\n.agent-dropdown-count {\n  font-size: 10px;\n  padding: 2px 6px;\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, 0.08);\n  color: #a1a1aa;\n}\n\n.agent-list-scroll {\n  overflow-y: auto;\n  max-height: 330px;\n  display: flex;\n  flex-direction: column;\n  gap: 3px;\n  padding-right: 2px;\n}\n\n.agent-list-scroll::-webkit-scrollbar {\n  width: 4px;\n}\n\n.agent-list-scroll::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15);\n  border-radius: 4px;\n}\n\n.antigravity-agent-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 8px 10px;\n  border-radius: 8px;\n  cursor: pointer;\n  transition: all 0.12s ease;\n  border: 1px solid transparent;\n}\n\n.antigravity-agent-item:hover {\n  background: rgba(255, 255, 255, 0.07);\n  border-color: rgba(255, 255, 255, 0.1);\n  transform: translateX(1px);\n}\n\n.antigravity-agent-item.selected {\n  background: rgba(56, 189, 248, 0.12);\n  border-color: rgba(56, 189, 248, 0.3);\n}\n\n.agent-item-icon {\n  font-size: 16px;\n  flex-shrink: 0;\n}\n\n.agent-item-details {\n  flex: 1;\n  min-width: 0;\n}\n\n.agent-item-name-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  margin-bottom: 2px;\n}\n\n.agent-item-name {\n  font-size: 12px;\n  font-weight: 600;\n  color: #ffffff;\n}\n\n.agent-item-category {\n  font-size: 9.5px;\n  text-transform: uppercase;\n  color: #71717a;\n  letter-spacing: 0.03em;\n}\n\n.agent-item-role {\n  font-size: 10.5px;\n  color: #a1a1aa;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.agent-check {\n  font-size: 12px;\n  font-weight: bold;\n  color: #38bdf8;\n  width: 14px;\n  text-align: right;\n  flex-shrink: 0;\n}\n\n@keyframes agentFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
+    this.cachedCss = ".antigravity-agent-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  padding: 4px 10px 4px 7px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n  font-size: 11px;\n  line-height: 1;\n  color: #f4f4f5;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n}\n\n.agent-badge-dot {\n  width: 6px;\n  height: 6px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n  transition: all 0.3s ease;\n}\n\n.agent-color-dot {\n  width: 8px;\n  height: 8px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n}\n\n.antigravity-agent-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  transform: translateY(-0.5px);\n  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);\n}\n\n.antigravity-agent-badge:active {\n  transform: translateY(0.5px);\n}\n\n.agent-label {\n  font-weight: 500;\n  letter-spacing: -0.01em;\n  color: #e4e4e7;\n  white-space: nowrap;\n}\n\n.agent-caret {\n  font-size: 8px;\n  color: #a1a1aa;\n  margin-left: 1px;\n  transition: transform 0.2s ease;\n}\n\n.antigravity-agent-badge:hover .agent-caret {\n  transform: rotate(180deg);\n}\n\n/* Responsive compact mode (Container-driven via ResizeObserver) */\n.antigravity-agent-badge.compact {\n  padding: 4px 6px !important;\n  gap: 0 !important;\n}\n.antigravity-agent-badge.compact .agent-label,\n.antigravity-agent-badge.compact .agent-caret {\n  display: none !important;\n}\n\n/* Responsive shrinking for narrow screen resolutions */\n@media (max-width: 960px) {\n  .agent-label {\n    display: none;\n  }\n  .agent-caret {\n    display: none;\n  }\n  .antigravity-agent-badge {\n    padding: 4px 6px;\n  }\n}\n\n/* Interactive Dropdown Portal (Fixed to Viewport, Immune to Clipping & Overflow) */\n.antigravity-agent-dropdown-portal {\n  position: fixed !important;\n  z-index: 999999 !important;\n  display: none;\n  animation: agentFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\n}\n\n.antigravity-agent-dropdown-portal.open {\n  display: block !important;\n}\n\n.antigravity-agent-dropdown-wrapper {\n  display: none !important;\n}\n\n.antigravity-agent-dropdown {\n  width: 320px;\n  max-height: 420px;\n  background: #18181b;\n  color: #f4f4f5;\n  border: 1px solid rgba(255, 255, 255, 0.16);\n  border-radius: 12px;\n  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);\n  backdrop-filter: blur(20px);\n  -webkit-backdrop-filter: blur(20px);\n  padding: 10px;\n  display: flex;\n  flex-direction: column;\n  pointer-events: auto;\n}\n\n.agent-dropdown-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 6px 8px 10px 8px;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08);\n  margin-bottom: 6px;\n}\n\n.agent-section-header {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-size: 10px;\n  font-weight: 700;\n  text-transform: uppercase;\n  letter-spacing: 0.05em;\n  color: #71717a;\n  padding: 8px 8px 4px 8px;\n  border-top: 1px solid rgba(255, 255, 255, 0.05);\n  margin-top: 4px;\n}\n\n.agent-section-header:first-child {\n  border-top: none;\n  margin-top: 0;\n  padding-top: 2px;\n}\n\n.agent-dropdown-title {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  font-weight: 600;\n  font-size: 12px;\n  color: #ffffff;\n}\n\n.agent-dropdown-count {\n  font-size: 10px;\n  padding: 2px 6px;\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, 0.08);\n  color: #a1a1aa;\n}\n\n.agent-list-scroll {\n  overflow-y: auto;\n  max-height: 330px;\n  display: flex;\n  flex-direction: column;\n  gap: 3px;\n  padding-right: 2px;\n}\n\n.agent-list-scroll::-webkit-scrollbar {\n  width: 4px;\n}\n\n.agent-list-scroll::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15);\n  border-radius: 4px;\n}\n\n.antigravity-agent-item {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n  padding: 8px 10px;\n  border-radius: 8px;\n  cursor: pointer;\n  transition: all 0.12s ease;\n  border: 1px solid transparent;\n}\n\n.antigravity-agent-item:hover {\n  background: rgba(255, 255, 255, 0.07);\n  border-color: rgba(255, 255, 255, 0.1);\n  transform: translateX(1px);\n}\n\n.antigravity-agent-item.selected {\n  background: rgba(56, 189, 248, 0.12);\n  border-color: rgba(56, 189, 248, 0.3);\n}\n\n.agent-item-icon {\n  font-size: 16px;\n  flex-shrink: 0;\n}\n\n.agent-item-details {\n  flex: 1;\n  min-width: 0;\n}\n\n.agent-item-name-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  margin-bottom: 2px;\n}\n\n.agent-item-name {\n  font-size: 12px;\n  font-weight: 600;\n  color: #ffffff;\n}\n\n.agent-item-category {\n  font-size: 9.5px;\n  text-transform: uppercase;\n  color: #71717a;\n  letter-spacing: 0.03em;\n}\n\n.agent-item-role {\n  font-size: 10.5px;\n  color: #a1a1aa;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.agent-check {\n  font-size: 12px;\n  font-weight: bold;\n  color: #38bdf8;\n  width: 14px;\n  text-align: right;\n  flex-shrink: 0;\n}\n\n@keyframes agentFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
   }
 
   /**
@@ -1451,19 +1698,18 @@ class AgentSelectorMod extends AntigravityMod {
         title="Active Specialist: ${initialAgentName}" 
         style="border-color: ${initialColor}55; box-shadow: 0 0 8px ${initialColor}22;"
         tabindex="0"
-        onclick="window.__toggleAgentDropdown(event, this)"
       >
         <span 
           id="antigravity-active-agent-dot" 
-          class="agent-badge-dot" 
-          style="background: ${initialColor}; box-shadow: 0 0 6px ${initialColor};"
+          class="agent-badge-dot antigravity-active-agent-dot" 
+          style="background: ${initialColor}; box-shadow: 0 0 6px ${initialColor}; pointer-events: none;"
         ></span>
         ${iconSvg}
-        <span id="antigravity-active-agent-name" class="agent-label">${initialAgentName}</span>
-        <span class="agent-caret">▼</span>
-        <div class="antigravity-agent-dropdown-wrapper" onclick="event.stopPropagation()">
+        <span id="antigravity-active-agent-name" class="agent-label antigravity-active-agent-name" style="pointer-events: none;">${initialAgentName}</span>
+        <span class="agent-caret" style="pointer-events: none;">▼</span>
+        <template class="antigravity-agent-dropdown-template">
           ${dropdownHtml}
-        </div>
+        </template>
       </div>
     `.trim();
 

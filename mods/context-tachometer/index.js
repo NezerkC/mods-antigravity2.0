@@ -56,13 +56,13 @@ export class ContextTachometerMod extends AntigravityMod {
     const popoverHtml = renderPopoverHtml(telemetry);
 
     const html = `
-      <div id="antigravity-tachometer-badge" class="antigravity-tachometer-badge" title="Context: ${telemetry.displayTokens} tokens (${telemetry.pct}%)">
+      <div id="antigravity-tachometer-badge" class="antigravity-tachometer-badge" title="Context: ${telemetry.displayTokens} tokens (${telemetry.pct}%)" tabindex="0">
         ${gaugeSvg}
-        <span style="font-weight: 500; letter-spacing: -0.01em;">${telemetry.displayTokens}</span>
-        <span style="color: #a1a1aa; font-size: 10px;">(${telemetry.pct}%)</span>
-        <div class="antigravity-popover-container">
+        <span class="tachometer-tokens" style="font-weight: 500; letter-spacing: -0.01em; pointer-events: none;">${telemetry.displayTokens}</span>
+        <span class="tachometer-pct" style="color: #a1a1aa; font-size: 10px; pointer-events: none;">(${telemetry.pct}%)</span>
+        <template class="antigravity-popover-template">
           ${popoverHtml}
-        </div>
+        </template>
       </div>
     `.trim();
 

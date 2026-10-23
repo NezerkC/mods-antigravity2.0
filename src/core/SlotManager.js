@@ -109,12 +109,16 @@ export class SlotManager {
           }
 
           let modNode = container.querySelector('#${modWrapperId}');
-          if (!modNode) {
-            modNode = document.createElement('div');
-            modNode.id = '${modWrapperId}';
-            container.appendChild(modNode);
+          if (!modNode || modNode.getAttribute('data-version') !== '2') {
+            if (!modNode) {
+              modNode = document.createElement('div');
+              modNode.id = '${modWrapperId}';
+              modNode.className = '${modWrapperId}';
+              container.appendChild(modNode);
+            }
+            modNode.setAttribute('data-version', '2');
+            modNode.innerHTML = ${JSON.stringify(htmlContent)};
           }
-          modNode.innerHTML = ${JSON.stringify(htmlContent)};
         }
       })();
     `;

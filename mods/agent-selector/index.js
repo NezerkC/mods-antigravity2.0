@@ -46,19 +46,18 @@ export class AgentSelectorMod extends AntigravityMod {
         title="Active Specialist: ${initialAgentName}" 
         style="border-color: ${initialColor}55; box-shadow: 0 0 8px ${initialColor}22;"
         tabindex="0"
-        onclick="window.__toggleAgentDropdown(event, this)"
       >
         <span 
           id="antigravity-active-agent-dot" 
-          class="agent-badge-dot" 
-          style="background: ${initialColor}; box-shadow: 0 0 6px ${initialColor};"
+          class="agent-badge-dot antigravity-active-agent-dot" 
+          style="background: ${initialColor}; box-shadow: 0 0 6px ${initialColor}; pointer-events: none;"
         ></span>
         ${iconSvg}
-        <span id="antigravity-active-agent-name" class="agent-label">${initialAgentName}</span>
-        <span class="agent-caret">▼</span>
-        <div class="antigravity-agent-dropdown-wrapper" onclick="event.stopPropagation()">
+        <span id="antigravity-active-agent-name" class="agent-label antigravity-active-agent-name" style="pointer-events: none;">${initialAgentName}</span>
+        <span class="agent-caret" style="pointer-events: none;">▼</span>
+        <template class="antigravity-agent-dropdown-template">
           ${dropdownHtml}
-        </div>
+        </template>
       </div>
     `.trim();
 
