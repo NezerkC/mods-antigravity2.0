@@ -23,12 +23,11 @@
 .antigravity-tachometer-badge:hover {
   background: rgba(255, 255, 255, 0.1);
   border-color: rgba(255, 255, 255, 0.25);
-  transform: translateY(-0.5px);
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
 .antigravity-tachometer-badge:active {
-  transform: translateY(0.5px);
+  background: rgba(255, 255, 255, 0.14);
 }
 
 /* Responsive compact mode (Speedometer SVG only, hides labels, exact 28x28 circle) */
