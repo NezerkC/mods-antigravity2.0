@@ -7,7 +7,13 @@
   "scripts": {
     "build": "node build.js",
     "deploy": "node build.js",
-    "test": "node --test tests/unit/*.test.mjs"
+    "test": "node --test tests/unit/*.test.mjs",
+    "daemon": "node framework/daemon.js",
+    "daemon:start": "node framework/daemon.js --start",
+    "daemon:stop": "node framework/daemon.js --stop",
+    "daemon:status": "node framework/daemon.js --status",
+    "daemon:install": "node framework/daemon.js --install",
+    "daemon:uninstall": "node framework/daemon.js --uninstall"
   },
   "author": "Victor Manuel Martinez Munoz",
   "license": "MIT"
