@@ -90,3 +90,15 @@ test('ModLoader - generates click toggle handlers and excludes hover listeners',
   assert.ok(!script.includes("badge.addEventListener('mouseenter'"));
   assert.ok(!script.includes("badge.addEventListener('mouseleave'"));
 });
+
+test('ModLoader - generates mods manager panel and visibility synchronization logic', () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({});
+
+  assert.ok(script.includes('window.__toggleModsManagerPanel'));
+  assert.ok(script.includes('window.__applyModsVisibility'));
+  assert.ok(script.includes('__modsClickBound'));
+  assert.ok(script.includes('antigravity-mods-manager-portal'));
+  assert.ok(script.includes('__antigravity_daemon_enabled'));
+});
+
