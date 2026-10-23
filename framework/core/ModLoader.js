@@ -211,6 +211,15 @@ export class ModLoader {
           });
         };
 
+        window.__switchAgentTab = function(tabId) {
+          document.querySelectorAll('.agent-tab-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.getAttribute('data-tab') === tabId);
+          });
+          document.querySelectorAll('.agent-tab-content').forEach(panel => {
+            panel.classList.toggle('active', panel.getAttribute('data-tab-content') === tabId);
+          });
+        };
+
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
         window.__renderModsManagerPanelHtml = ${renderModsManagerPanelHtml.toString()};
 
