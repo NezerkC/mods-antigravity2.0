@@ -840,6 +840,20 @@ class ModLoader {
           });
         };
 
+        window.__toggleAgentCatalog = function() {
+          const drawer = document.getElementById('antigravity-agent-catalog-drawer');
+          const btn = document.getElementById('antigravity-agent-catalog-toggle');
+          if (!drawer) return;
+          const isCollapsed = drawer.classList.contains('collapsed');
+          drawer.classList.toggle('collapsed', !isCollapsed);
+          if (btn) {
+            const textSpan = btn.querySelector('.catalog-toggle-text');
+            if (textSpan) {
+              textSpan.textContent = isCollapsed ? '▴ Ocultar Especialistas' : '▾ Ver Especialistas (Micro & Nano)';
+            }
+          }
+        };
+
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
         window.__renderModsManagerPanelHtml = ${renderModsManagerPanelHtml.toString()};
 
@@ -2079,6 +2093,18 @@ const PALETTE = [
   'hsl(340, 85%, 65%)'  // Crimson (Gentleman Guardian GGA)
 ];
 
+const DEFAULT_AGENT = {
+  id: 'default',
+  name: 'Sin Agente (Default)',
+  level: 'default',
+  levelLabel: 'DEFAULT',
+  levelDesc: 'Asistente Antigravity Estándar',
+  role: 'Modo general sin rol especializado',
+  category: 'Standard',
+  suite: 'Standard',
+  iconName: 'default'
+};
+
 const AGENT_REGISTRY = [
   // =========================================================================
   // 1. CÚSPIDE (GOBERNANZA GLOBAL & DIRECCIÓN DE OBRA)
@@ -2253,6 +2279,9 @@ const AGENT_REGISTRY = [
  * @returns {string} HSL color string
  */
 function getAgentColor(agentId) {
+  if (agentId === 'default') {
+    return 'hsl(215, 16%, 65%)';
+  }
   const index = AGENT_REGISTRY.findIndex(a => a.id === agentId);
   if (index !== -1 && index < PALETTE.length) {
     return PALETTE[index];
@@ -2267,7 +2296,10 @@ function getAgentColor(agentId) {
 }
 
 /**
- * Renders the hierarchical dropdown card markup using Lucide SVG vectors.
+ * Renders the hierarchical dropdown card markup using Progressive Disclosure:
+ * Initial view: Default mode + Top 2 Orchestrators (Planner & Builder).
+ * Secondary catalog (Micro & Nano) collapsed behind an expandable trigger.
+ * 
  * @param {string} activeAgentId
  * @param {Array} dynamicAgents
  * @returns {string} HTML markup
@@ -2297,16 +2329,45 @@ function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynamicAgents
   const nanoAgents = allAgents.filter(a => a.level === 'nano');
   const customAgents = allAgents.filter(a => a.level === 'custom');
 
+  // Render Default (Vanilla) card
+  const isDefaultSelected = activeAgentId === 'default';
+  const defaultColor = getAgentColor('default');
+  const defaultCardHtml = `
+    <div 
+      class="antigravity-agent-item primary-hero-card default-mode-card ${isDefaultSelected ? 'selected' : ''}" 
+      data-agent-id="default"
+      data-agent-name="Sin Agente (Default)"
+      data-agent-color="${defaultColor}"
+      style="--agent-theme-color: ${defaultColor};"
+      onclick="window.__selectAntigravityAgent('default', 'Sin Agente (Default)', '${defaultColor}')"
+      title="Asistente Antigravity Estándar sin rol especializado"
+    >
+      <div class="primary-hero-left">
+        <div class="primary-icon-box" style="color: ${defaultColor}; background: ${defaultColor}1a; border-color: ${defaultColor}33;">
+          ${renderAgentSvg('default', 16, 2)}
+        </div>
+        <div class="primary-info">
+          <div class="primary-title-row">
+            <span class="primary-title">Sin Agente</span>
+            <span class="primary-tag" style="background: ${defaultColor}20; color: ${defaultColor};">DEFAULT</span>
+          </div>
+          <div class="primary-sub">Modo estándar general</div>
+        </div>
+      </div>
+      <span class="agent-check" style="color: ${defaultColor};">${isDefaultSelected ? '✓' : ''}</span>
+    </div>
+  `;
+
   // Render a Cúspide Hero card (Planner or Builder)
   const renderCuspideCard = (agent) => {
     const isSelected = agent.id === activeAgentId;
     const color = getAgentColor(agent.id);
     const safeName = (agent.name || '').replace(/'/g, "\\'");
-    const svgIcon = renderAgentSvg(agent.id, 18, 2, 'cuspide-svg-icon');
+    const svgIcon = renderAgentSvg(agent.id, 16, 2, 'cuspide-svg-icon');
 
     return `
       <div 
-        class="antigravity-agent-item cuspide-hero-card ${isSelected ? 'selected' : ''}" 
+        class="antigravity-agent-item primary-hero-card cuspide-card ${isSelected ? 'selected' : ''}" 
         data-agent-id="${agent.id}"
         data-agent-name="${safeName}"
         data-agent-color="${color}"
@@ -2314,21 +2375,21 @@ function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynamicAgents
         onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}')"
         title="${agent.name} - ${agent.role}"
       >
-        <div class="cuspide-top-row">
-          <div class="cuspide-icon-box" style="color: ${color}; background: ${color}1a; border-color: ${color}44;">
+        <div class="primary-hero-left">
+          <div class="primary-icon-box" style="color: ${color}; background: ${color}1a; border-color: ${color}44;">
             ${svgIcon}
           </div>
-          <span class="cuspide-tag" style="background: ${color}26; color: ${color}; border-color: ${color}55;">
-            ${agent.levelLabel}
-          </span>
-        </div>
-        <div class="cuspide-info">
-          <div class="cuspide-name-row">
-            <span class="cuspide-name">${agent.name}</span>
-            <span class="agent-check" style="color: ${color};">${isSelected ? '✓' : ''}</span>
+          <div class="primary-info">
+            <div class="primary-title-row">
+              <span class="primary-title">${agent.name}</span>
+              <span class="primary-tag" style="background: ${color}26; color: ${color}; border-color: ${color}55;">
+                ${agent.levelLabel}
+              </span>
+            </div>
+            <div class="primary-sub">${agent.levelDesc}</div>
           </div>
-          <div class="cuspide-desc">${agent.levelDesc}</div>
         </div>
+        <span class="agent-check" style="color: ${color};">${isSelected ? '✓' : ''}</span>
       </div>
     `;
   };
@@ -2338,7 +2399,7 @@ function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynamicAgents
     const isSelected = agent.id === activeAgentId;
     const color = getAgentColor(agent.id);
     const safeName = (agent.name || '').replace(/'/g, "\\'");
-    const svgIcon = renderAgentSvg(agent.id, 15, 2, 'compact-svg-icon');
+    const svgIcon = renderAgentSvg(agent.id, 14, 2, 'compact-svg-icon');
 
     return `
       <div 
@@ -2373,76 +2434,86 @@ function renderAgentDropdownHtml(activeAgentId = 'lead-architect', dynamicAgents
             ${renderAgentSvg('lead-architect', 14, 2)}
           </span>
           <div class="agent-header-text">
-            <span class="agent-header-main">Jerarquía de Agentes</span>
-            <span class="agent-header-sub">Control Tower</span>
+            <span class="agent-header-main">Agentes Activos</span>
+            <span class="agent-header-sub">Selección Rápida</span>
           </div>
         </div>
-        <span class="agent-dropdown-count">${allAgents.length} Disponibles</span>
+        <span class="agent-dropdown-count">${allAgents.length + 1} Modos</span>
       </div>
 
-      <!-- 1. CÚSPIDE (GOBERNANZA & ESTRATEGIA) -->
-      <div class="agent-cuspide-section">
-        <div class="agent-section-label">
-          <span>CÚSPIDE · GOBERNANZA & DIRECCIÓN</span>
-        </div>
-        <div class="cuspide-cards-grid">
-          ${cuspideAgents.map(renderCuspideCard).join('')}
-        </div>
+      <!-- SECCIÓN PRINCIPAL VISIBLE: 3 OPCIONES CLAVE -->
+      <div class="agent-primary-section">
+        ${defaultCardHtml}
+        ${cuspideAgents.map(renderCuspideCard).join('')}
       </div>
 
-      <!-- 2. SEGMENTED LEVEL TABS -->
-      <div class="agent-level-tabs">
-        <button 
-          type="button"
-          class="agent-tab-btn active" 
-          data-tab="micro" 
-          onclick="window.__switchAgentTab('micro')"
-        >
-          <span class="tab-icon">${renderAgentSvg('product-manager', 13, 2)}</span>
-          <span>Micro (${microAgents.length})</span>
-        </button>
-        <button 
-          type="button"
-          class="agent-tab-btn" 
-          data-tab="nano" 
-          onclick="window.__switchAgentTab('nano')"
-        >
-          <span class="tab-icon">${renderAgentSvg('sdd-apply', 13, 2)}</span>
-          <span>Nano (${nanoAgents.length})</span>
-        </button>
-        ${customAgents.length > 0 ? `
+      <!-- BOTÓN ACORDEÓN / TOGGLE DE CATÁLOGO EXTENDIDO -->
+      <button 
+        type="button" 
+        class="agent-catalog-toggle-btn" 
+        id="antigravity-agent-catalog-toggle"
+        onclick="window.__toggleAgentCatalog()"
+      >
+        <span class="catalog-toggle-text">▾ Ver Especialistas (Micro & Nano)</span>
+        <span class="catalog-toggle-count">${microAgents.length + nanoAgents.length}</span>
+      </button>
+
+      <!-- DRAWER / CATÁLOGO EXTENDIDO (COLAPSADO POR DEFECTO) -->
+      <div class="agent-catalog-drawer collapsed" id="antigravity-agent-catalog-drawer">
+        <!-- SEGMENTED LEVEL TABS -->
+        <div class="agent-level-tabs">
+          <button 
+            type="button"
+            class="agent-tab-btn active" 
+            data-tab="micro" 
+            onclick="window.__switchAgentTab('micro')"
+          >
+            <span class="tab-icon">${renderAgentSvg('product-manager', 13, 2)}</span>
+            <span>Micro (${microAgents.length})</span>
+          </button>
           <button 
             type="button"
             class="agent-tab-btn" 
-            data-tab="custom" 
-            onclick="window.__switchAgentTab('custom')"
+            data-tab="nano" 
+            onclick="window.__switchAgentTab('nano')"
           >
-            <span class="tab-icon">${renderAgentSvg('default-custom', 13, 2)}</span>
-            <span>Custom (${customAgents.length})</span>
+            <span class="tab-icon">${renderAgentSvg('sdd-apply', 13, 2)}</span>
+            <span>Nano (${nanoAgents.length})</span>
           </button>
-        ` : ''}
-      </div>
-
-      <!-- 3. TAB CONTENT PANELS -->
-      <div class="agent-tab-content active" data-tab-content="micro">
-        <div class="compact-grid">
-          ${microAgents.map(renderCompactItem).join('')}
+          ${customAgents.length > 0 ? `
+            <button 
+              type="button"
+              class="agent-tab-btn" 
+              data-tab="custom" 
+              onclick="window.__switchAgentTab('custom')"
+            >
+              <span class="tab-icon">${renderAgentSvg('default-custom', 13, 2)}</span>
+              <span>Custom (${customAgents.length})</span>
+            </button>
+          ` : ''}
         </div>
-      </div>
 
-      <div class="agent-tab-content" data-tab-content="nano">
-        <div class="compact-grid">
-          ${nanoAgents.map(renderCompactItem).join('')}
-        </div>
-      </div>
-
-      ${customAgents.length > 0 ? `
-        <div class="agent-tab-content" data-tab-content="custom">
+        <!-- TAB CONTENT PANELS -->
+        <div class="agent-tab-content active" data-tab-content="micro">
           <div class="compact-grid">
-            ${customAgents.map(renderCompactItem).join('')}
+            ${microAgents.map(renderCompactItem).join('')}
           </div>
         </div>
-      ` : ''}
+
+        <div class="agent-tab-content" data-tab-content="nano">
+          <div class="compact-grid">
+            ${nanoAgents.map(renderCompactItem).join('')}
+          </div>
+        </div>
+
+        ${customAgents.length > 0 ? `
+          <div class="agent-tab-content" data-tab-content="custom">
+            <div class="compact-grid">
+              ${customAgents.map(renderCompactItem).join('')}
+            </div>
+          </div>
+        ` : ''}
+      </div>
     </div>
   `.trim();
 }
@@ -2469,7 +2540,7 @@ class AgentSelectorMod extends AntigravityMod {
     });
 
     this.discoveryService = options.discoveryService || new AgentDiscoveryService();
-    this.cachedCss = "/* =========================================================================\n   ANTIGRAVITY AGENT SELECTOR MOD - STYLES\n   Hierarchical Layout: Cúspide (Planner & Builder), Micro, Nano (Lucide SVGs)\n   ========================================================================= */\n\n.antigravity-agent-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  height: 28px;\n  box-sizing: border-box;\n  padding: 0 10px 0 7px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n  font-size: 11px;\n  line-height: 28px;\n  color: #f4f4f5;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n  flex-shrink: 0;\n}\n\n.agent-badge-dot {\n  width: 6px;\n  height: 6px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n  transition: all 0.3s ease;\n}\n\n.antigravity-agent-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\n}\n\n.antigravity-agent-badge:active {\n  background: rgba(255, 255, 255, 0.14);\n}\n\n.antigravity-agent-badge.open {\n  background: rgba(255, 255, 255, 0.12) !important;\n  border-color: rgba(255, 255, 255, 0.3) !important;\n}\n\n.agent-label {\n  font-weight: 500;\n  letter-spacing: -0.01em;\n  color: #e4e4e7;\n  white-space: nowrap;\n}\n\n.agent-caret {\n  font-size: 8px;\n  color: #a1a1aa;\n  margin-left: 1px;\n  transition: transform 0.2s ease;\n}\n\n.antigravity-agent-badge.open .agent-caret {\n  transform: rotate(180deg);\n}\n\n/* Responsive compact mode */\n.antigravity-agent-badge.compact {\n  height: 28px !important;\n  box-sizing: border-box !important;\n  padding: 0 7px !important;\n  gap: 5px !important;\n  border-radius: 9999px !important;\n  justify-content: center !important;\n}\n.antigravity-agent-badge.compact .agent-label,\n.antigravity-agent-badge.compact .agent-caret {\n  display: none !important;\n}\n\n@media (max-width: 960px) {\n  .agent-label,\n  .agent-caret {\n    display: none !important;\n  }\n  .antigravity-agent-badge {\n    height: 28px !important;\n    box-sizing: border-box !important;\n    padding: 0 7px !important;\n    gap: 5px !important;\n    border-radius: 9999px !important;\n    justify-content: center !important;\n  }\n}\n\n/* =========================================================================\n   DROPDOWN PORTAL (FIXED TO VIEWPORT)\n   ========================================================================= */\n.antigravity-agent-dropdown-portal {\n  position: fixed !important;\n  z-index: 999999 !important;\n  display: none;\n  animation: agentFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\n}\n\n.antigravity-agent-dropdown-portal.open {\n  display: block !important;\n}\n\n.antigravity-agent-dropdown-wrapper {\n  display: none !important;\n}\n\n.antigravity-agent-dropdown {\n  width: 350px;\n  max-height: 480px;\n  background: #14151e;\n  color: #f4f4f5;\n  border: 1px solid rgba(255, 255, 255, 0.14);\n  border-radius: 12px;\n  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.75), 0 2px 8px rgba(0, 0, 0, 0.5);\n  backdrop-filter: blur(24px);\n  -webkit-backdrop-filter: blur(24px);\n  padding: 12px;\n  display: flex;\n  flex-direction: column;\n  gap: 10px;\n  pointer-events: auto;\n  box-sizing: border-box;\n}\n\n/* HEADER */\n.agent-dropdown-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding-bottom: 8px;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08);\n}\n\n.agent-dropdown-title {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.agent-header-icon-box {\n  width: 24px;\n  height: 24px;\n  border-radius: 6px;\n  background: rgba(122, 162, 247, 0.15);\n  color: #7aa2f7;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n}\n\n.agent-header-text {\n  display: flex;\n  flex-direction: column;\n  line-height: 1.2;\n}\n\n.agent-header-main {\n  font-size: 12px;\n  font-weight: 600;\n  color: #ffffff;\n}\n\n.agent-header-sub {\n  font-size: 9.5px;\n  color: #71717a;\n}\n\n.agent-dropdown-count {\n  font-size: 10px;\n  font-weight: 500;\n  padding: 2px 8px;\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, 0.08);\n  color: #a1a1aa;\n  border: 1px solid rgba(255, 255, 255, 0.06);\n}\n\n/* 1. CÚSPIDE (GOBERNANZA & DIRECCIÓN) */\n.agent-cuspide-section {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n}\n\n.agent-section-label {\n  font-size: 9.5px;\n  font-weight: 700;\n  letter-spacing: 0.06em;\n  color: #71717a;\n  text-transform: uppercase;\n}\n\n.cuspide-cards-grid {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: 8px;\n}\n\n.cuspide-hero-card {\n  display: flex;\n  flex-direction: column;\n  gap: 6px;\n  padding: 8px 10px;\n  background: rgba(255, 255, 255, 0.03);\n  border: 1px solid rgba(255, 255, 255, 0.09);\n  border-radius: 8px;\n  cursor: pointer;\n  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);\n  box-sizing: border-box;\n}\n\n.cuspide-hero-card:hover {\n  background: rgba(255, 255, 255, 0.07);\n  border-color: rgba(255, 255, 255, 0.2);\n  transform: translateY(-1px);\n}\n\n.cuspide-hero-card.selected {\n  background: rgba(255, 255, 255, 0.08);\n  border-color: var(--agent-theme-color, #38bdf8);\n  box-shadow: 0 0 12px rgba(56, 189, 248, 0.2);\n}\n\n.cuspide-top-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n}\n\n.cuspide-icon-box {\n  width: 28px;\n  height: 28px;\n  border-radius: 6px;\n  border: 1px solid transparent;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n}\n\n.cuspide-tag {\n  font-size: 8.5px;\n  font-weight: 700;\n  letter-spacing: 0.05em;\n  padding: 1px 6px;\n  border-radius: 4px;\n  border: 1px solid transparent;\n}\n\n.cuspide-info {\n  display: flex;\n  flex-direction: column;\n  gap: 1px;\n}\n\n.cuspide-name-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n}\n\n.cuspide-name {\n  font-size: 11.5px;\n  font-weight: 600;\n  color: #ffffff;\n}\n\n.cuspide-desc {\n  font-size: 9.5px;\n  color: #a1a1aa;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n/* 2. SEGMENTED LEVEL TABS */\n.agent-level-tabs {\n  display: flex;\n  gap: 4px;\n  padding: 3px;\n  background: rgba(0, 0, 0, 0.28);\n  border: 1px solid rgba(255, 255, 255, 0.07);\n  border-radius: 8px;\n}\n\n.agent-tab-btn {\n  flex: 1;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  gap: 6px;\n  height: 26px;\n  border: none;\n  background: transparent;\n  color: #71717a;\n  font-size: 11px;\n  font-weight: 500;\n  border-radius: 6px;\n  cursor: pointer;\n  transition: all 0.15s ease;\n  user-select: none;\n}\n\n.agent-tab-btn:hover {\n  color: #e4e4e7;\n  background: rgba(255, 255, 255, 0.04);\n}\n\n.agent-tab-btn.active {\n  background: rgba(255, 255, 255, 0.1);\n  color: #ffffff;\n  font-weight: 600;\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);\n}\n\n.tab-icon {\n  display: flex;\n  align-items: center;\n}\n\n/* 3. TAB CONTENT PANELS */\n.agent-tab-content {\n  display: none;\n  max-height: 220px;\n  overflow-y: auto;\n  padding-right: 2px;\n}\n\n.agent-tab-content.active {\n  display: block;\n}\n\n.agent-tab-content::-webkit-scrollbar {\n  width: 4px;\n}\n\n.agent-tab-content::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15);\n  border-radius: 4px;\n}\n\n/* COMPACT GRID */\n.compact-grid {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: 6px;\n}\n\n.compact-agent-card {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  padding: 6px 8px;\n  background: rgba(255, 255, 255, 0.02);\n  border: 1px solid rgba(255, 255, 255, 0.06);\n  border-radius: 6px;\n  cursor: pointer;\n  transition: all 0.12s ease;\n  box-sizing: border-box;\n}\n\n.compact-agent-card:hover {\n  background: rgba(255, 255, 255, 0.06);\n  border-color: rgba(255, 255, 255, 0.14);\n  transform: translateY(-0.5px);\n}\n\n.compact-agent-card.selected {\n  background: rgba(255, 255, 255, 0.08);\n  border-color: var(--agent-theme-color, #38bdf8);\n}\n\n.compact-icon-box {\n  width: 24px;\n  height: 24px;\n  border-radius: 5px;\n  border: 1px solid transparent;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  flex-shrink: 0;\n}\n\n.compact-details {\n  flex: 1;\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n}\n\n.compact-name-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n}\n\n.compact-name {\n  font-size: 11px;\n  font-weight: 600;\n  color: #f1f5f9;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.compact-sub {\n  font-size: 9px;\n  color: #71717a;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.agent-check {\n  font-size: 11px;\n  font-weight: bold;\n  width: 12px;\n  text-align: right;\n  flex-shrink: 0;\n}\n\n@keyframes agentFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
+    this.cachedCss = "/* =========================================================================\n   ANTIGRAVITY AGENT SELECTOR MOD - STYLES\n   Progressive Disclosure: Default Mode + Planner/Builder, Collapsible Catalog\n   ========================================================================= */\n\n.antigravity-agent-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  height: 28px;\n  box-sizing: border-box;\n  padding: 0 10px 0 7px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid rgba(255, 255, 255, 0.12);\n  border-radius: 9999px;\n  cursor: pointer;\n  user-select: none;\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n  font-size: 11px;\n  line-height: 28px;\n  color: #f4f4f5;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  position: relative;\n  flex-shrink: 0;\n}\n\n.agent-badge-dot {\n  width: 6px;\n  height: 6px;\n  border-radius: 9999px;\n  flex-shrink: 0;\n  transition: all 0.3s ease;\n}\n\n.antigravity-agent-badge:hover {\n  background: rgba(255, 255, 255, 0.1);\n  border-color: rgba(255, 255, 255, 0.25);\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\n}\n\n.antigravity-agent-badge:active {\n  background: rgba(255, 255, 255, 0.14);\n}\n\n.antigravity-agent-badge.open {\n  background: rgba(255, 255, 255, 0.12) !important;\n  border-color: rgba(255, 255, 255, 0.3) !important;\n}\n\n.agent-label {\n  font-weight: 500;\n  letter-spacing: -0.01em;\n  color: #e4e4e7;\n  white-space: nowrap;\n}\n\n.agent-caret {\n  font-size: 8px;\n  color: #a1a1aa;\n  margin-left: 1px;\n  transition: transform 0.2s ease;\n}\n\n.antigravity-agent-badge.open .agent-caret {\n  transform: rotate(180deg);\n}\n\n/* Responsive compact mode */\n.antigravity-agent-badge.compact {\n  height: 28px !important;\n  box-sizing: border-box !important;\n  padding: 0 7px !important;\n  gap: 5px !important;\n  border-radius: 9999px !important;\n  justify-content: center !important;\n}\n.antigravity-agent-badge.compact .agent-label,\n.antigravity-agent-badge.compact .agent-caret {\n  display: none !important;\n}\n\n@media (max-width: 960px) {\n  .agent-label,\n  .agent-caret {\n    display: none !important;\n  }\n  .antigravity-agent-badge {\n    height: 28px !important;\n    box-sizing: border-box !important;\n    padding: 0 7px !important;\n    gap: 5px !important;\n    border-radius: 9999px !important;\n    justify-content: center !important;\n  }\n}\n\n/* =========================================================================\n   DROPDOWN PORTAL (FIXED TO VIEWPORT)\n   ========================================================================= */\n.antigravity-agent-dropdown-portal {\n  position: fixed !important;\n  z-index: 999999 !important;\n  display: none;\n  animation: agentFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\n}\n\n.antigravity-agent-dropdown-portal.open {\n  display: block !important;\n}\n\n.antigravity-agent-dropdown-wrapper {\n  display: none !important;\n}\n\n.antigravity-agent-dropdown {\n  width: 320px;\n  background: #14151e;\n  color: #f4f4f5;\n  border: 1px solid rgba(255, 255, 255, 0.14);\n  border-radius: 12px;\n  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.75), 0 2px 8px rgba(0, 0, 0, 0.5);\n  backdrop-filter: blur(24px);\n  -webkit-backdrop-filter: blur(24px);\n  padding: 10px;\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  pointer-events: auto;\n  box-sizing: border-box;\n}\n\n/* HEADER */\n.agent-dropdown-header {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding-bottom: 6px;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08);\n}\n\n.agent-dropdown-title {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n.agent-header-icon-box {\n  width: 22px;\n  height: 22px;\n  border-radius: 5px;\n  background: rgba(122, 162, 247, 0.15);\n  color: #7aa2f7;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n}\n\n.agent-header-text {\n  display: flex;\n  flex-direction: column;\n  line-height: 1.15;\n}\n\n.agent-header-main {\n  font-size: 11.5px;\n  font-weight: 600;\n  color: #ffffff;\n}\n\n.agent-header-sub {\n  font-size: 9px;\n  color: #71717a;\n}\n\n.agent-dropdown-count {\n  font-size: 9.5px;\n  font-weight: 500;\n  padding: 2px 7px;\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, 0.08);\n  color: #a1a1aa;\n  border: 1px solid rgba(255, 255, 255, 0.06);\n}\n\n/* SECCIÓN PRINCIPAL: 3 OPCIONES VISIBLES */\n.agent-primary-section {\n  display: flex;\n  flex-direction: column;\n  gap: 5px;\n}\n\n.primary-hero-card {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 7px 9px;\n  background: rgba(255, 255, 255, 0.03);\n  border: 1px solid rgba(255, 255, 255, 0.08);\n  border-radius: 7px;\n  cursor: pointer;\n  transition: all 0.14s ease;\n  box-sizing: border-box;\n}\n\n.primary-hero-card:hover {\n  background: rgba(255, 255, 255, 0.07);\n  border-color: rgba(255, 255, 255, 0.18);\n  transform: translateX(1px);\n}\n\n.primary-hero-card.selected {\n  background: rgba(255, 255, 255, 0.08);\n  border-color: var(--agent-theme-color, #38bdf8);\n  box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);\n}\n\n.primary-hero-left {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  flex: 1;\n  min-width: 0;\n}\n\n.primary-icon-box {\n  width: 26px;\n  height: 26px;\n  border-radius: 6px;\n  border: 1px solid transparent;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  flex-shrink: 0;\n}\n\n.primary-info {\n  display: flex;\n  flex-direction: column;\n  line-height: 1.2;\n  min-width: 0;\n}\n\n.primary-title-row {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n}\n\n.primary-title {\n  font-size: 11.5px;\n  font-weight: 600;\n  color: #ffffff;\n  white-space: nowrap;\n}\n\n.primary-tag {\n  font-size: 8px;\n  font-weight: 700;\n  letter-spacing: 0.05em;\n  padding: 1px 5px;\n  border-radius: 3px;\n  border: 1px solid transparent;\n}\n\n.primary-sub {\n  font-size: 9px;\n  color: #a1a1aa;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n/* TOGGLE ACORDEÓN PARA CATÁLOGO EXTENDIDO */\n.agent-catalog-toggle-btn {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  width: 100%;\n  padding: 6px 9px;\n  background: rgba(255, 255, 255, 0.02);\n  border: 1px dashed rgba(255, 255, 255, 0.14);\n  border-radius: 6px;\n  color: #a1a1aa;\n  font-size: 10.5px;\n  font-weight: 500;\n  cursor: pointer;\n  transition: all 0.15s ease;\n  user-select: none;\n}\n\n.agent-catalog-toggle-btn:hover {\n  background: rgba(255, 255, 255, 0.06);\n  border-color: rgba(255, 255, 255, 0.25);\n  color: #e4e4e7;\n}\n\n.catalog-toggle-count {\n  font-size: 9px;\n  padding: 1px 5px;\n  border-radius: 9999px;\n  background: rgba(255, 255, 255, 0.08);\n  color: #71717a;\n}\n\n/* DRAWER COLAPSABLE */\n.agent-catalog-drawer {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n}\n\n.agent-catalog-drawer.collapsed {\n  display: none !important;\n}\n\n/* LEVEL TABS EN EL DRAWER */\n.agent-level-tabs {\n  display: flex;\n  gap: 4px;\n  padding: 3px;\n  background: rgba(0, 0, 0, 0.28);\n  border: 1px solid rgba(255, 255, 255, 0.07);\n  border-radius: 6px;\n}\n\n.agent-tab-btn {\n  flex: 1;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  gap: 5px;\n  height: 24px;\n  border: none;\n  background: transparent;\n  color: #71717a;\n  font-size: 10.5px;\n  font-weight: 500;\n  border-radius: 5px;\n  cursor: pointer;\n  transition: all 0.15s ease;\n  user-select: none;\n}\n\n.agent-tab-btn:hover {\n  color: #e4e4e7;\n  background: rgba(255, 255, 255, 0.04);\n}\n\n.agent-tab-btn.active {\n  background: rgba(255, 255, 255, 0.1);\n  color: #ffffff;\n  font-weight: 600;\n}\n\n.tab-icon {\n  display: flex;\n  align-items: center;\n}\n\n/* TAB PANELS */\n.agent-tab-content {\n  display: none;\n  max-height: 190px;\n  overflow-y: auto;\n  padding-right: 2px;\n}\n\n.agent-tab-content.active {\n  display: block;\n}\n\n.agent-tab-content::-webkit-scrollbar {\n  width: 4px;\n}\n\n.agent-tab-content::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15);\n  border-radius: 4px;\n}\n\n/* COMPACT GRID */\n.compact-grid {\n  display: grid;\n  grid-template-columns: 1fr 1fr;\n  gap: 5px;\n}\n\n.compact-agent-card {\n  display: flex;\n  align-items: center;\n  gap: 6px;\n  padding: 5px 7px;\n  background: rgba(255, 255, 255, 0.02);\n  border: 1px solid rgba(255, 255, 255, 0.06);\n  border-radius: 6px;\n  cursor: pointer;\n  transition: all 0.12s ease;\n  box-sizing: border-box;\n}\n\n.compact-agent-card:hover {\n  background: rgba(255, 255, 255, 0.06);\n  border-color: rgba(255, 255, 255, 0.14);\n}\n\n.compact-agent-card.selected {\n  background: rgba(255, 255, 255, 0.08);\n  border-color: var(--agent-theme-color, #38bdf8);\n}\n\n.compact-icon-box {\n  width: 22px;\n  height: 22px;\n  border-radius: 4px;\n  border: 1px solid transparent;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  flex-shrink: 0;\n}\n\n.compact-details {\n  flex: 1;\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n}\n\n.compact-name-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n}\n\n.compact-name {\n  font-size: 10.5px;\n  font-weight: 600;\n  color: #f1f5f9;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.compact-sub {\n  font-size: 8.5px;\n  color: #71717a;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n\n.agent-check {\n  font-size: 11px;\n  font-weight: bold;\n  width: 12px;\n  text-align: right;\n  flex-shrink: 0;\n}\n\n@keyframes agentFadeIn {\n  from {\n    opacity: 0;\n    transform: translateY(4px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n";
   }
 
   /**
