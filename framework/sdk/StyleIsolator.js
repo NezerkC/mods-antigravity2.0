@@ -69,6 +69,9 @@ export class StyleIsolator {
           if (
             sel.includes('-portal') ||
             sel.includes('antigravity-agent-dropdown') ||
+            sel.includes('antigravity-mods-manager-portal') ||
+            sel.startsWith('.mod-') ||
+            sel.startsWith('.mods-manager-') ||
             sel.startsWith('.agent-') ||
             sel.startsWith('.antigravity-agent-item') ||
             sel.startsWith('body') ||
