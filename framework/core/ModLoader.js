@@ -1,5 +1,6 @@
 import { SlotManager } from './SlotManager.js';
 import { StyleIsolator } from '../sdk/StyleIsolator.js';
+import { renderPopoverHtml } from '../../mods/context-tachometer/components/PopoverHtml.js';
 
 /**
  * Discovers, registers, and compiles UI mods into coordinated injection scripts.
@@ -194,6 +195,8 @@ export class ModLoader {
           });
         };
 
+        window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
+
         window.__showTachometerPopover = function(badge) {
           let portal = document.getElementById('antigravity-tachometer-popover-portal');
           if (!portal) {
@@ -203,11 +206,20 @@ export class ModLoader {
             document.body.appendChild(portal);
           }
 
-          if (!portal.firstElementChild) {
-            const template = document.querySelector('.antigravity-popover-template');
-            if (template) {
-              portal.innerHTML = template.innerHTML;
-            }
+          // Resolve active conversation metric for this badge
+          const cascadeEl = badge.closest('[data-cascade-id]');
+          const cascadeId = cascadeEl ? cascadeEl.getAttribute('data-cascade-id') : null;
+          const urlPath = window.location.pathname || '';
+          const pathParts = urlPath.split('/c/');
+          const urlPathId = (pathParts.length > 1 && pathParts[1]) ? pathParts[1].split('/')[0].split('?')[0] : null;
+          const searchMatch = (window.location.search || '').match(/[?&](?:focused|conversationId)=([0-9a-fA-F-]+)/);
+          const activeId = cascadeId || urlPathId || (searchMatch ? searchMatch[1] : null);
+
+          const all = window.__antigravityAllMetrics || {};
+          const m = (activeId && all[activeId]) ? all[activeId] : window.__antigravityLatestMetric;
+
+          if (m && window.__renderTachometerPopoverHtml) {
+            portal.innerHTML = window.__renderTachometerPopoverHtml(m);
           }
 
           const rect = badge.getBoundingClientRect();
@@ -271,6 +283,12 @@ export class ModLoader {
               needle.style.transform = 'rotate(' + angle.toFixed(1) + 'deg)';
               const poly = needle.querySelector('polygon');
               if (poly) poly.setAttribute('fill', statusColor);
+            }
+
+            // Update live popover content if currently open on screen
+            const portal = document.getElementById('antigravity-tachometer-popover-portal');
+            if (portal && portal.classList.contains('open') && window.__renderTachometerPopoverHtml) {
+              portal.innerHTML = window.__renderTachometerPopoverHtml(m);
             }
           });
         };
