@@ -14,6 +14,10 @@ export class SlotManager {
         selector: 'header, [role="banner"]',
         strategy: 'append'
       }],
+      ['menubar-actions', {
+        selector: '.shrink-0 > .bg-sidebar',
+        strategy: 'append'
+      }],
       ['status-bar', {
         selector: 'footer, [data-testid="status-bar"]',
         strategy: 'append'
@@ -88,29 +92,30 @@ export class SlotManager {
         });
 
         for (const anchor of anchors) {
-          // Resolve effective parent and sibling target
+          let parent;
           let targetItem = anchor;
-          let parent = anchor.parentElement;
-          if (!parent) continue;
 
-          // For slots targeting buttons inside UI toolbars (like header-actions / model-selector-trigger),
-          // anchor is often wrapped in block-level dropdown trigger divs (e.g. Radix/Base-UI popover trigger).
-          // We walk up from anchor.parentElement to find the flex row container so that the slot container
-          // is placed directly beside the model selector in the same flex row at the same horizontal level.
-          const candidateFlex = anchor.parentElement ? (
-            anchor.parentElement.closest('.flex.items-center.gap-1') || 
-            anchor.parentElement.closest('.flex.items-center') || 
-            anchor.parentElement.closest('.flex')
-          ) : null;
+          if ('${slot.strategy}' === 'append' || '${slot.strategy}' === 'prepend') {
+            parent = anchor;
+          } else {
+            parent = anchor.parentElement;
+            if (!parent) continue;
 
-          if (candidateFlex && candidateFlex.contains(anchor)) {
-            let curr = anchor;
-            while (curr.parentElement && curr.parentElement !== candidateFlex) {
-              curr = curr.parentElement;
-            }
-            if (curr.parentElement === candidateFlex) {
-              parent = candidateFlex;
-              targetItem = curr;
+            const candidateFlex = anchor.parentElement ? (
+              anchor.parentElement.closest('.flex.items-center.gap-1') || 
+              anchor.parentElement.closest('.flex.items-center') || 
+              anchor.parentElement.closest('.flex')
+            ) : null;
+
+            if (candidateFlex && candidateFlex.contains(anchor)) {
+              let curr = anchor;
+              while (curr.parentElement && curr.parentElement !== candidateFlex) {
+                curr = curr.parentElement;
+              }
+              if (curr.parentElement === candidateFlex) {
+                parent = candidateFlex;
+                targetItem = curr;
+              }
             }
           }
 
@@ -122,7 +127,8 @@ export class SlotManager {
             container.style.display = 'inline-flex';
             container.style.alignItems = 'center';
             container.style.gap = '6px';
-            container.style.height = '28px';
+            container.style.height = '100%';
+            container.style.setProperty('app-region', 'no-drag');
 
             if ('${slot.strategy}' === 'after') {
               if (targetItem.nextSibling) {
@@ -139,12 +145,14 @@ export class SlotManager {
             }
           } else {
             // Ensure slot container remains directly in parent flex row, right after targetItem
-            if (container.parentElement !== parent || ('${slot.strategy}' === 'after' && container.previousElementSibling !== targetItem)) {
+            if ('${slot.strategy}' === 'after' && (container.parentElement !== parent || container.previousElementSibling !== targetItem)) {
               if (targetItem.nextSibling) {
                 parent.insertBefore(container, targetItem.nextSibling);
               } else {
                 parent.appendChild(container);
               }
+            } else if (('${slot.strategy}' === 'append' || '${slot.strategy}' === 'prepend') && container.parentElement !== parent) {
+              parent.appendChild(container);
             }
           }
 

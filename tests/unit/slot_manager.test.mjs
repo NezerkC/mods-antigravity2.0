@@ -8,6 +8,10 @@ test('SlotManager - provides default slot definitions', () => {
   assert.ok(slot);
   assert.equal(slot.selector, 'button[data-testid="model-selector-trigger"]');
   assert.equal(slot.strategy, 'after');
+
+  const menubarSlot = manager.getSlot('menubar-actions');
+  assert.ok(menubarSlot);
+  assert.equal(menubarSlot.strategy, 'append');
 });
 
 test('SlotManager - registers custom slot', () => {
