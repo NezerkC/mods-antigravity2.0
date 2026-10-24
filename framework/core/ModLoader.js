@@ -477,6 +477,85 @@ export class ModLoader {
           }
         };
 
+        window.__toggleGitGraphPanel = function(e, btnEl) {
+          if (e) {
+            e.stopPropagation();
+            e.preventDefault();
+          }
+          const btn = btnEl || (e ? e.currentTarget : document.querySelector('#antigravity-git-tab-trigger'));
+          if (!btn) return;
+
+          const isCurrentActive = btn.classList.contains('active');
+          btn.classList.toggle('active', !isCurrentActive);
+
+          let auxContainer = document.querySelector('[data-testid="aux-pane-new-tab-button"]')?.closest('.flex.flex-col');
+          let auxBody = auxContainer ? auxContainer.querySelector('.flex-grow.overflow-hidden') : null;
+
+          let hostEl = document.getElementById('antigravity-git-panel-host');
+          if (!hostEl) {
+            hostEl = document.createElement('div');
+            hostEl.id = 'antigravity-git-panel-host';
+            hostEl.style.cssText = 'width:100%; height:100%; display:none; flex-direction:column; overflow:hidden; z-index:50;';
+            if (auxBody) {
+              auxBody.appendChild(hostEl);
+            } else {
+              hostEl.style.position = 'fixed';
+              hostEl.style.right = '0';
+              hostEl.style.top = '40px';
+              hostEl.style.bottom = '24px';
+              hostEl.style.width = '380px';
+              hostEl.style.boxShadow = '-12px 0 30px rgba(0,0,0,0.7)';
+              document.body.appendChild(hostEl);
+            }
+          }
+
+          if (isCurrentActive) {
+            hostEl.style.display = 'none';
+          } else {
+            const template = document.getElementById('antigravity-git-panel-template');
+            if (template) {
+              hostEl.innerHTML = template.innerHTML;
+            }
+            hostEl.style.display = 'flex';
+
+            hostEl.querySelectorAll('.git-commit-row').forEach(row => {
+              row.addEventListener('click', () => {
+                hostEl.querySelectorAll('.git-commit-row.selected').forEach(r => r.classList.remove('selected'));
+                row.classList.add('selected');
+                const hash = row.getAttribute('data-hash');
+                const inspector = hostEl.querySelector('#antigravity-git-inspector');
+                if (inspector && hash) {
+                  const authorEl = row.querySelector('.git-author-name');
+                  const subjectEl = row.querySelector('.git-commit-subject');
+                  const avatarEl = row.querySelector('.git-author-avatar');
+                  const authorName = authorEl ? authorEl.textContent : 'Unknown';
+                  const subject = subjectEl ? subjectEl.textContent : '';
+                  const avatarUrl = avatarEl ? avatarEl.getAttribute('src') : '';
+                  
+                  inspector.innerHTML = '<div class="git-inspector-header">' +
+                    '<div class="git-inspector-author">' +
+                    '<img class="git-inspector-avatar" src="' + avatarUrl + '" alt="' + authorName + '"/>' +
+                    '<div class="git-inspector-author-col">' +
+                    '<span class="git-inspector-author-name">' + authorName + '</span>' +
+                    '</div></div>' +
+                    '<span class="git-inspector-hash">' + hash.slice(0, 7) + '</span>' +
+                    '</div>' +
+                    '<div class="git-inspector-subject">' + subject + '</div>';
+                }
+              });
+            });
+
+            const refreshBtn = hostEl.querySelector('#antigravity-git-refresh-btn');
+            if (refreshBtn) {
+              refreshBtn.onclick = () => {
+                if (window.__antigravityMountAll) {
+                  window.__antigravityMountAll();
+                }
+              };
+            }
+          }
+        };
+
         window.__toggleTachometerPopover = function(e, badgeEl) {
           if (e) {
             e.stopPropagation();
@@ -728,6 +807,15 @@ export class ModLoader {
           });
 
           // Bind Mods Manager click handler
+          // Bind Git Graph Tab trigger
+          document.querySelectorAll('#antigravity-git-tab-trigger').forEach(btn => {
+            if (btn.__gitClickBound) return;
+            btn.__gitClickBound = true;
+            btn.addEventListener('click', (e) => {
+              window.__toggleGitGraphPanel(e, btn);
+            });
+          });
+
           document.querySelectorAll('.antigravity-mods-manager-btn').forEach(btn => {
             if (btn.__modsClickBound) return;
             btn.__modsClickBound = true;

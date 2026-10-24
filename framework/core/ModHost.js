@@ -2,6 +2,7 @@ import { ModLoader } from './ModLoader.js';
 import { SlotManager } from './SlotManager.js';
 import { TelemetryService } from '../services/TelemetryService.js';
 import { AgentSyncServer } from '../services/AgentSyncServer.js';
+import { GitService } from '../services/GitService.js';
 import { CdpPortResolver } from './CdpPortResolver.js';
 import { CdpWebSocketClient } from './CdpWebSocketClient.js';
 
@@ -23,6 +24,7 @@ export class ModHost {
     this.modLoader = options.modLoader || new ModLoader({ slotManager: this.slotManager });
     this.telemetryService = options.telemetryService || new TelemetryService();
     this.syncServer = options.syncServer || new AgentSyncServer();
+    this.gitService = options.gitService || new GitService();
     this.portResolver = options.portResolver || new CdpPortResolver();
   }
 
@@ -73,9 +75,23 @@ export class ModHost {
       }
     }
 
+    let gitLog = [];
+    let gitStatus = { branch: '', isClean: true, ahead: 0, behind: 0 };
+    let github = { isGitHub: false };
+    try {
+      gitLog = this.gitService.getGitLog({ limit: 40 });
+      gitStatus = this.gitService.getGitStatus();
+      github = this.gitService.getGitHubMetadata();
+    } catch (err) {}
+
     const hostContext = {
       telemetry: primaryMetric,
       allMetrics,
+      gitLog,
+      gitStatus,
+      github,
+      commits: gitLog,
+      status: gitStatus,
       timestamp: Date.now()
     };
 

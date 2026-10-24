@@ -4,6 +4,7 @@ import { CdpWebSocketClient } from './CdpWebSocketClient.js';
 import { ContextTachometerMod } from '../../mods/context-tachometer/index.js';
 import { AgentSelectorMod } from '../../mods/agent-selector/index.js';
 import { ModsManagerMod } from '../../mods/mods-manager/index.js';
+import { GitGraphMod } from '../../mods/git-graph/index.js';
 
 /**
  * Creates a ModHost instance pre-configured with default first-party mods.
@@ -15,6 +16,7 @@ export function createDefaultHost(options = {}) {
   host.registerMod(new ContextTachometerMod());
   host.registerMod(new AgentSelectorMod());
   host.registerMod(new ModsManagerMod());
+  host.registerMod(new GitGraphMod());
   return host;
 }
 
