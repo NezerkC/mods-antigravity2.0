@@ -107,3 +107,21 @@ test('AgentSelectorMod - renders harmonized card architecture with pin buttons a
   assert.ok(rendered.css.includes('.agent-pin-btn.active'));
   assert.ok(rendered.css.includes('width: 380px'));
 });
+
+test('AgentDropdownHtml - escapes malicious XSS payloads in agent name and role', () => {
+  const mod = new AgentSelectorMod();
+  const maliciousAgent = {
+    id: 'xss-agent',
+    name: '<script>alert("xss")</script>',
+    role: '<img src=x onerror=alert(1)>',
+    level: 'nano',
+    levelLabel: '<b onmouseover=evil()>NANO</b>',
+    levelDesc: 'Malicious description'
+  };
+
+  const rendered = mod.render({ dynamicAgents: [maliciousAgent] });
+  assert.ok(!rendered.html.includes('<script>alert("xss")</script>'));
+  assert.ok(rendered.html.includes('&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;'));
+  assert.ok(!rendered.html.includes('<img src=x onerror=alert(1)>'));
+  assert.ok(rendered.html.includes('&lt;img src=x onerror=alert(1)&gt;'));
+});

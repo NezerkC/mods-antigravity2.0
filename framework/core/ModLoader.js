@@ -516,23 +516,23 @@ export class ModLoader {
           const isCurrentActive = btn.classList.contains('active');
           btn.classList.toggle('active', !isCurrentActive);
 
-          let auxContainer = document.querySelector('[data-testid="aux-pane-new-tab-button"]')?.closest('.flex.flex-col');
+          const trigger = btn || document.querySelector('#antigravity-git-tab-trigger');
+          let auxContainer = trigger ? (trigger.closest('.h-full.w-full.flex.flex-col') || trigger.closest('.flex.flex-col')) : null;
+          if (!auxContainer) {
+            auxContainer = document.querySelector('[data-testid="aux-pane-new-tab-button"]')?.closest('.flex.flex-col');
+          }
           let auxBody = auxContainer ? auxContainer.querySelector('.flex-grow.overflow-hidden') : null;
 
           let hostEl = document.getElementById('antigravity-git-panel-host');
           if (!hostEl) {
             hostEl = document.createElement('div');
             hostEl.id = 'antigravity-git-panel-host';
-            hostEl.style.cssText = 'width:100%; height:100%; display:none; flex-direction:column; overflow:hidden; z-index:50;';
             if (auxBody) {
+              auxBody.style.position = 'relative';
+              hostEl.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:none; flex-direction:column; overflow:hidden; z-index:50; background:#0f111a;';
               auxBody.appendChild(hostEl);
             } else {
-              hostEl.style.position = 'fixed';
-              hostEl.style.right = '0';
-              hostEl.style.top = '40px';
-              hostEl.style.bottom = '24px';
-              hostEl.style.width = '380px';
-              hostEl.style.boxShadow = '-12px 0 30px rgba(0,0,0,0.7)';
+              hostEl.style.cssText = 'position:fixed; right:0; top:40px; bottom:24px; width:420px; display:none; flex-direction:column; overflow:hidden; z-index:99999; background:#0f111a; box-shadow:-12px 0 30px rgba(0,0,0,0.7); border-left:1px solid #1e2438;';
               document.body.appendChild(hostEl);
             }
           }
@@ -553,22 +553,42 @@ export class ModLoader {
                 const hash = row.getAttribute('data-hash');
                 const inspector = hostEl.querySelector('#antigravity-git-inspector');
                 if (inspector && hash) {
-                  const authorEl = row.querySelector('.git-author-name');
-                  const subjectEl = row.querySelector('.git-commit-subject');
-                  const avatarEl = row.querySelector('.git-author-avatar');
-                  const authorName = authorEl ? authorEl.textContent : 'Unknown';
-                  const subject = subjectEl ? subjectEl.textContent : '';
-                  const avatarUrl = avatarEl ? avatarEl.getAttribute('src') : '';
-                  
+                  const authorName = row.getAttribute('data-author') || (row.querySelector('.git-author-name')?.textContent) || 'Unknown';
+                  const authorEmail = row.getAttribute('data-email') || '';
+                  const avatarUrl = row.getAttribute('data-avatar') || (row.querySelector('.git-author-avatar')?.getAttribute('src')) || '';
+                  const commitUrl = row.getAttribute('data-commit-url') || '';
+                  const shortHash = row.getAttribute('data-short-hash') || hash.slice(0, 7);
+                  const subject = row.getAttribute('data-subject') || (row.querySelector('.git-commit-subject')?.textContent) || '';
+
+                  function esc(str) {
+                    return String(str || '')
+                      .replace(/&/g, '&amp;')
+                      .replace(/</g, '&lt;')
+                      .replace(/>/g, '&gt;')
+                      .replace(/"/g, '&quot;')
+                      .replace(/'/g, '&#039;');
+                  }
+
+                  const safeAuthor = esc(authorName);
+                  const safeEmail = authorEmail ? ('&lt;' + esc(authorEmail) + '&gt;') : '';
+                  const safeSubject = esc(subject);
+                  const safeShortHash = esc(shortHash);
+                  const linkHtml = commitUrl
+                    ? '<a href="' + esc(commitUrl) + '" target="_blank" rel="noopener" class="git-inspector-gh-link">View Commit ↗</a>'
+                    : '';
+
                   inspector.innerHTML = '<div class="git-inspector-header">' +
                     '<div class="git-inspector-author">' +
-                    '<img class="git-inspector-avatar" src="' + avatarUrl + '" alt="' + authorName + '"/>' +
+                    '<img class="git-inspector-avatar" src="' + avatarUrl + '" alt="' + safeAuthor + '"/>' +
                     '<div class="git-inspector-author-col">' +
-                    '<span class="git-inspector-author-name">' + authorName + '</span>' +
+                    '<span class="git-inspector-author-name">' + safeAuthor + '</span>' +
+                    (safeEmail ? '<span class="git-inspector-author-email">' + safeEmail + '</span>' : '') +
                     '</div></div>' +
-                    '<span class="git-inspector-hash">' + hash.slice(0, 7) + '</span>' +
-                    '</div>' +
-                    '<div class="git-inspector-subject">' + subject + '</div>';
+                    '<div class="git-inspector-hash-wrap">' +
+                    '<span class="git-inspector-hash" title="' + esc(hash) + '">' + safeShortHash + '</span>' +
+                    linkHtml +
+                    '</div></div>' +
+                    '<div class="git-inspector-subject">' + safeSubject + '</div>';
                 }
               });
             });
@@ -579,6 +599,14 @@ export class ModLoader {
                 if (window.__antigravityMountAll) {
                   window.__antigravityMountAll();
                 }
+              };
+            }
+
+            const closeBtn = hostEl.querySelector('#antigravity-git-close-btn');
+            if (closeBtn) {
+              closeBtn.onclick = (e) => {
+                e.stopPropagation();
+                window.__toggleGitPanel();
               };
             }
           }

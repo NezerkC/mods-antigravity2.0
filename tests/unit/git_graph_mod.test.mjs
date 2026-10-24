@@ -80,3 +80,41 @@ test('renderInspectorCard - formats author avatar, hash and GitHub link', () => 
   assert.ok(cardHtml.includes('dev@test.com'));
   assert.ok(cardHtml.includes('https://github.com/test/repo/commit/deadbeef12345678'));
 });
+
+test('GitGraphPanelHtml - escapes malicious XSS payloads in commit rows and inspector', () => {
+  const commit = {
+    hash: 'xss1234567890',
+    shortHash: 'xss1234',
+    author: { name: '<script>evil()</script>', email: 'bad@evil.com"><script>alert(1)</script>', avatarUrl: '' },
+    subject: '<img src=x onerror=hack()>'
+  };
+
+  const cardHtml = renderInspectorCard(commit);
+  assert.ok(!cardHtml.includes('<script>evil()</script>'));
+  assert.ok(cardHtml.includes('&lt;script&gt;evil()&lt;/script&gt;'));
+  assert.ok(!cardHtml.includes('<img src=x onerror=hack()>'));
+  assert.ok(cardHtml.includes('&lt;img src=x onerror=hack()&gt;'));
+});
+
+test('GitGraphPanelHtml - includes data-commit-url and data-email attributes on commit rows', () => {
+  const panelHtml = renderGitGraphPanelHtml({
+    commits: [
+      {
+        hash: 'abc123456789',
+        shortHash: 'abc1234',
+        author: { name: 'Alice', email: 'alice@test.com', avatarUrl: 'https://avatar/alice' },
+        subject: 'feat: add git graph',
+        relativeDate: '1h ago',
+        refs: []
+      }
+    ],
+    github: {
+      isGitHub: true,
+      getCommitUrl: (h) => `https://github.com/org/repo/commit/${h}`
+    }
+  });
+
+  assert.ok(panelHtml.includes('data-commit-url="https://github.com/org/repo/commit/abc123456789"'));
+  assert.ok(panelHtml.includes('data-email="alice@test.com"'));
+  assert.ok(panelHtml.includes('data-author="Alice"'));
+});

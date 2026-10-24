@@ -41,26 +41,38 @@ export function renderGitGraphPanelHtml(context = {}) {
   // Generate commit list rows
   const commitRowsHtml = commits.map((c, idx) => {
     const isSelected = idx === 0;
-    const author = c.author || { name: 'Unknown', avatarUrl: '' };
+    const author = c.author || { name: 'Unknown', email: '', avatarUrl: '' };
+    const commitUrl = github.isGitHub && typeof github.getCommitUrl === 'function' ? github.getCommitUrl(c.hash) : '';
     const refsHtml = (c.refs || []).map(ref => {
       const isHead = ref.includes('HEAD');
       const isTag = ref.includes('tag:');
       const cls = isHead ? 'git-ref-head' : isTag ? 'git-ref-tag' : 'git-ref-branch';
-      return `<span class="git-ref-badge ${cls}">${escapeHtml(ref)}</span>`;
+      return `<span class="git-ref-badge ${cls}">${escapeGitHtml(ref)}</span>`;
     }).join('');
 
     return `
-      <div class="git-commit-row ${isSelected ? 'selected' : ''}" data-hash="${c.hash}" data-index="${idx}" tabindex="0">
+      <div 
+        class="git-commit-row ${isSelected ? 'selected' : ''}" 
+        data-hash="${c.hash}" 
+        data-short-hash="${c.shortHash || c.hash.slice(0, 7)}"
+        data-author="${escapeGitHtml(author.name)}"
+        data-email="${escapeGitHtml(author.email || '')}"
+        data-avatar="${author.avatarUrl || ''}"
+        data-commit-url="${commitUrl}"
+        data-subject="${escapeGitHtml(c.subject || '')}"
+        data-index="${idx}" 
+        tabindex="0"
+      >
         <div class="git-commit-col-info">
           <div class="git-commit-top-row">
             ${refsHtml}
             <span class="git-commit-hash">${c.shortHash}</span>
             <span class="git-commit-time">${c.relativeDate || ''}</span>
           </div>
-          <div class="git-commit-subject" title="${escapeHtml(c.subject)}">${escapeHtml(c.subject)}</div>
+          <div class="git-commit-subject" title="${escapeGitHtml(c.subject)}">${escapeGitHtml(c.subject)}</div>
           <div class="git-commit-author-row">
-            <img class="git-author-avatar" src="${author.avatarUrl}" alt="${escapeHtml(author.name)}" loading="lazy"/>
-            <span class="git-author-name">${escapeHtml(author.name)}</span>
+            <img class="git-author-avatar" src="${author.avatarUrl}" alt="${escapeGitHtml(author.name)}" loading="lazy"/>
+            <span class="git-author-name">${escapeGitHtml(author.name)}</span>
           </div>
         </div>
       </div>
@@ -81,14 +93,15 @@ export function renderGitGraphPanelHtml(context = {}) {
             <path d="M6 9a9 9 0 0 1 9 9"></path>
             <circle cx="18" cy="18" r="3"></circle>
           </svg>
-          <span class="git-repo-badge" title="Active Repository">${escapeHtml(repoName)}</span>
-          <span class="git-branch-badge">${escapeHtml(status.branch)}${status.isClean ? '' : '*'}</span>
+          <span class="git-repo-badge" title="Active Repository">${escapeGitHtml(repoName)}</span>
+          <span class="git-branch-badge">${escapeGitHtml(status.branch)}${status.isClean ? '' : '*'}</span>
         </div>
         <div class="git-header-actions">
           ${status.ahead > 0 ? `<span class="git-sync-badge ahead" title="Ahead of upstream">↑${status.ahead}</span>` : ''}
           ${status.behind > 0 ? `<span class="git-sync-badge behind" title="Behind upstream">↓${status.behind}</span>` : ''}
           ${github.isGitHub ? `<a href="${github.webUrl}" target="_blank" rel="noopener" class="git-github-link" title="Open on GitHub">GitHub ↗</a>` : ''}
           <button class="git-refresh-btn" id="antigravity-git-refresh-btn" title="Refresh Git status">⟳</button>
+          <button class="git-close-btn" id="antigravity-git-close-btn" title="Close Git Graph">✕</button>
         </div>
       </div>
 
@@ -118,27 +131,27 @@ export function renderGitGraphPanelHtml(context = {}) {
  */
 export function renderInspectorCard(commit, github = {}) {
   const author = commit.author || { name: 'Unknown', email: '', avatarUrl: '' };
-  const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(commit.hash) : '';
+  const commitUrl = github.isGitHub && typeof github.getCommitUrl === 'function' ? github.getCommitUrl(commit.hash) : '';
 
   return `
     <div class="git-inspector-header">
       <div class="git-inspector-author">
-        <img class="git-inspector-avatar" src="${author.avatarUrl}" alt="${escapeHtml(author.name)}"/>
+        <img class="git-inspector-avatar" src="${author.avatarUrl}" alt="${escapeGitHtml(author.name)}"/>
         <div class="git-inspector-author-col">
-          <span class="git-inspector-author-name">${escapeHtml(author.name)}</span>
-          <span class="git-inspector-author-email">&lt;${escapeHtml(author.email)}&gt;</span>
+          <span class="git-inspector-author-name">${escapeGitHtml(author.name)}</span>
+          ${author.email ? `<span class="git-inspector-author-email">&lt;${escapeGitHtml(author.email)}&gt;</span>` : ''}
         </div>
       </div>
       <div class="git-inspector-hash-wrap">
-        <span class="git-inspector-hash" title="${commit.hash}">${commit.shortHash || commit.hash.slice(0, 7)}</span>
+        <span class="git-inspector-hash" title="${escapeGitHtml(commit.hash)}">${escapeGitHtml(commit.shortHash || commit.hash.slice(0, 7))}</span>
         ${commitUrl ? `<a href="${commitUrl}" target="_blank" rel="noopener" class="git-inspector-gh-link">View Commit ↗</a>` : ''}
       </div>
     </div>
-    <div class="git-inspector-subject">${escapeHtml(commit.subject)}</div>
+    <div class="git-inspector-subject">${escapeGitHtml(commit.subject)}</div>
   `.trim();
 }
 
-function escapeHtml(str = '') {
+export function escapeGitHtml(str = '') {
   return String(str)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')

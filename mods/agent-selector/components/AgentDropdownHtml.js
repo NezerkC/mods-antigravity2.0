@@ -370,8 +370,12 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
   const renderCuspideCard = (agent) => {
     const isSelected = agent.id === activeAgentId;
     const color = getAgentColor(agent.id);
-    const safeName = (agent.name || '').replace(/'/g, "\\'");
-    const safeFile = (agent.filePath || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    const safeName = escapeHtml(agent.name || '');
+    const safeRole = escapeHtml(agent.role || '');
+    const safeDesc = escapeHtml(agent.levelDesc || '');
+    const safeLabel = escapeHtml((agent.levelLabel || '').trim());
+    const safeFile = escapeHtml(agent.filePath || '');
+    const jsName = (agent.name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     const svgIcon = renderAgentSvg(agent.id, 16, 2, 'cuspide-svg-icon');
 
     return `
@@ -382,8 +386,8 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
         data-agent-color="${color}"
         data-agent-file="${safeFile}"
         style="--agent-theme-color: ${color};"
-        onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}', this.getAttribute('data-agent-file'))"
-        title="${agent.name} - ${agent.role}"
+        onclick="window.__selectAntigravityAgent(this.getAttribute('data-agent-id'), this.getAttribute('data-agent-name'), this.getAttribute('data-agent-color'), this.getAttribute('data-agent-file'))"
+        title="${safeName} - ${safeRole}"
       >
         <div class="agent-card-info">
           <div class="agent-icon-box" style="color: ${color}; background: ${color}1a; border-color: ${color}44;">
@@ -391,19 +395,19 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
           </div>
           <div class="agent-text-wrap">
             <div class="agent-title-row">
-              <span class="agent-title">${agent.name}</span>
+              <span class="agent-title">${safeName}</span>
               <span class="agent-tag" style="background: ${color}26; color: ${color}; border-color: ${color}55;">
-                ${agent.levelLabel.trim()}
+                ${safeLabel}
               </span>
             </div>
-            <div class="agent-subtitle">${agent.levelDesc}</div>
+            <div class="agent-subtitle">${safeDesc}</div>
           </div>
         </div>
         <button 
           type="button" 
           class="agent-pin-btn ${isSelected ? 'active' : ''}" 
           title="${isSelected ? 'Agente activo (Fijado)' : 'Fijar este agente'}"
-          aria-label="Fijar agente ${agent.name}"
+          aria-label="Fijar agente ${safeName}"
         >
           ${renderPinSvg(isSelected, 15)}
         </button>
@@ -415,8 +419,11 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
   const renderCompactItem = (agent) => {
     const isSelected = agent.id === activeAgentId;
     const color = getAgentColor(agent.id);
-    const safeName = (agent.name || '').replace(/'/g, "\\'");
-    const safeFile = (agent.filePath || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    const safeName = escapeHtml(agent.name || '');
+    const safeRole = escapeHtml(agent.role || '');
+    const safeDesc = escapeHtml(agent.levelDesc || agent.role || '');
+    const safeFile = escapeHtml(agent.filePath || '');
+    const jsName = (agent.name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     const svgIcon = renderAgentSvg(agent.id, 14, 2, 'compact-svg-icon');
 
     return `
@@ -427,23 +434,23 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
         data-agent-color="${color}"
         data-agent-file="${safeFile}"
         style="--agent-theme-color: ${color};"
-        onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}', this.getAttribute('data-agent-file'))"
-        title="${agent.name} - ${agent.role}"
+        onclick="window.__selectAntigravityAgent(this.getAttribute('data-agent-id'), this.getAttribute('data-agent-name'), this.getAttribute('data-agent-color'), this.getAttribute('data-agent-file'))"
+        title="${safeName} - ${safeRole}"
       >
         <div class="compact-icon-box" style="color: ${color}; background: ${color}18; border-color: ${color}33;">
           ${svgIcon}
         </div>
         <div class="compact-details">
           <div class="compact-name-row">
-            <span class="compact-name">${agent.name}</span>
+            <span class="compact-name">${safeName}</span>
           </div>
-          <div class="compact-sub">${agent.levelDesc || agent.role}</div>
+          <div class="compact-sub">${safeDesc}</div>
         </div>
         <button 
           type="button" 
           class="agent-pin-btn compact-pin-btn ${isSelected ? 'active' : ''}" 
           title="${isSelected ? 'Agente activo (Fijado)' : 'Fijar este agente'}"
-          aria-label="Fijar agente ${agent.name}"
+          aria-label="Fijar agente ${safeName}"
         >
           ${renderPinSvg(isSelected, 12)}
         </button>
@@ -562,4 +569,14 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
       </div>
     </div>
   `.trim();
+}
+
+
+export function escapeHtml(str = '') {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }

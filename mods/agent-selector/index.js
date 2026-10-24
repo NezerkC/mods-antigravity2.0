@@ -39,7 +39,7 @@ export class AgentSelectorMod extends AntigravityMod {
     const initialAgentName = 'Sin Agente';
     const initialColor = getAgentColor(initialAgentId);
     const iconSvg = `<span id="antigravity-active-agent-icon" class="antigravity-active-agent-icon" style="display: inline-flex; align-items: center; pointer-events: none;">${renderAgentSvg(initialAgentId, 14)}</span>`;
-    const discoveredAgents = this.discoveryService.discoverAgents();
+    const discoveredAgents = context.dynamicAgents || this.discoveryService.discoverAgents();
     const dropdownHtml = renderAgentDropdownHtml(initialAgentId, discoveredAgents);
 
     const html = `

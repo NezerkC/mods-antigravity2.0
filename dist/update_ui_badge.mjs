@@ -1147,23 +1147,23 @@ class ModLoader {
           const isCurrentActive = btn.classList.contains('active');
           btn.classList.toggle('active', !isCurrentActive);
 
-          let auxContainer = document.querySelector('[data-testid="aux-pane-new-tab-button"]')?.closest('.flex.flex-col');
+          const trigger = btn || document.querySelector('#antigravity-git-tab-trigger');
+          let auxContainer = trigger ? (trigger.closest('.h-full.w-full.flex.flex-col') || trigger.closest('.flex.flex-col')) : null;
+          if (!auxContainer) {
+            auxContainer = document.querySelector('[data-testid="aux-pane-new-tab-button"]')?.closest('.flex.flex-col');
+          }
           let auxBody = auxContainer ? auxContainer.querySelector('.flex-grow.overflow-hidden') : null;
 
           let hostEl = document.getElementById('antigravity-git-panel-host');
           if (!hostEl) {
             hostEl = document.createElement('div');
             hostEl.id = 'antigravity-git-panel-host';
-            hostEl.style.cssText = 'width:100%; height:100%; display:none; flex-direction:column; overflow:hidden; z-index:50;';
             if (auxBody) {
+              auxBody.style.position = 'relative';
+              hostEl.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:none; flex-direction:column; overflow:hidden; z-index:50; background:#0f111a;';
               auxBody.appendChild(hostEl);
             } else {
-              hostEl.style.position = 'fixed';
-              hostEl.style.right = '0';
-              hostEl.style.top = '40px';
-              hostEl.style.bottom = '24px';
-              hostEl.style.width = '380px';
-              hostEl.style.boxShadow = '-12px 0 30px rgba(0,0,0,0.7)';
+              hostEl.style.cssText = 'position:fixed; right:0; top:40px; bottom:24px; width:420px; display:none; flex-direction:column; overflow:hidden; z-index:99999; background:#0f111a; box-shadow:-12px 0 30px rgba(0,0,0,0.7); border-left:1px solid #1e2438;';
               document.body.appendChild(hostEl);
             }
           }
@@ -1184,22 +1184,42 @@ class ModLoader {
                 const hash = row.getAttribute('data-hash');
                 const inspector = hostEl.querySelector('#antigravity-git-inspector');
                 if (inspector && hash) {
-                  const authorEl = row.querySelector('.git-author-name');
-                  const subjectEl = row.querySelector('.git-commit-subject');
-                  const avatarEl = row.querySelector('.git-author-avatar');
-                  const authorName = authorEl ? authorEl.textContent : 'Unknown';
-                  const subject = subjectEl ? subjectEl.textContent : '';
-                  const avatarUrl = avatarEl ? avatarEl.getAttribute('src') : '';
-                  
+                  const authorName = row.getAttribute('data-author') || (row.querySelector('.git-author-name')?.textContent) || 'Unknown';
+                  const authorEmail = row.getAttribute('data-email') || '';
+                  const avatarUrl = row.getAttribute('data-avatar') || (row.querySelector('.git-author-avatar')?.getAttribute('src')) || '';
+                  const commitUrl = row.getAttribute('data-commit-url') || '';
+                  const shortHash = row.getAttribute('data-short-hash') || hash.slice(0, 7);
+                  const subject = row.getAttribute('data-subject') || (row.querySelector('.git-commit-subject')?.textContent) || '';
+
+                  function esc(str) {
+                    return String(str || '')
+                      .replace(/&/g, '&amp;')
+                      .replace(/</g, '&lt;')
+                      .replace(/>/g, '&gt;')
+                      .replace(/"/g, '&quot;')
+                      .replace(/'/g, '&#039;');
+                  }
+
+                  const safeAuthor = esc(authorName);
+                  const safeEmail = authorEmail ? ('&lt;' + esc(authorEmail) + '&gt;') : '';
+                  const safeSubject = esc(subject);
+                  const safeShortHash = esc(shortHash);
+                  const linkHtml = commitUrl
+                    ? '<a href="' + esc(commitUrl) + '" target="_blank" rel="noopener" class="git-inspector-gh-link">View Commit ↗</a>'
+                    : '';
+
                   inspector.innerHTML = '<div class="git-inspector-header">' +
                     '<div class="git-inspector-author">' +
-                    '<img class="git-inspector-avatar" src="' + avatarUrl + '" alt="' + authorName + '"/>' +
+                    '<img class="git-inspector-avatar" src="' + avatarUrl + '" alt="' + safeAuthor + '"/>' +
                     '<div class="git-inspector-author-col">' +
-                    '<span class="git-inspector-author-name">' + authorName + '</span>' +
+                    '<span class="git-inspector-author-name">' + safeAuthor + '</span>' +
+                    (safeEmail ? '<span class="git-inspector-author-email">' + safeEmail + '</span>' : '') +
                     '</div></div>' +
-                    '<span class="git-inspector-hash">' + hash.slice(0, 7) + '</span>' +
-                    '</div>' +
-                    '<div class="git-inspector-subject">' + subject + '</div>';
+                    '<div class="git-inspector-hash-wrap">' +
+                    '<span class="git-inspector-hash" title="' + esc(hash) + '">' + safeShortHash + '</span>' +
+                    linkHtml +
+                    '</div></div>' +
+                    '<div class="git-inspector-subject">' + safeSubject + '</div>';
                 }
               });
             });
@@ -1210,6 +1230,14 @@ class ModLoader {
                 if (window.__antigravityMountAll) {
                   window.__antigravityMountAll();
                 }
+              };
+            }
+
+            const closeBtn = hostEl.querySelector('#antigravity-git-close-btn');
+            if (closeBtn) {
+              closeBtn.onclick = (e) => {
+                e.stopPropagation();
+                window.__toggleGitPanel();
               };
             }
           }
@@ -3376,8 +3404,12 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
   const renderCuspideCard = (agent) => {
     const isSelected = agent.id === activeAgentId;
     const color = getAgentColor(agent.id);
-    const safeName = (agent.name || '').replace(/'/g, "\\'");
-    const safeFile = (agent.filePath || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    const safeName = escapeHtml(agent.name || '');
+    const safeRole = escapeHtml(agent.role || '');
+    const safeDesc = escapeHtml(agent.levelDesc || '');
+    const safeLabel = escapeHtml((agent.levelLabel || '').trim());
+    const safeFile = escapeHtml(agent.filePath || '');
+    const jsName = (agent.name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     const svgIcon = renderAgentSvg(agent.id, 16, 2, 'cuspide-svg-icon');
 
     return `
@@ -3388,8 +3420,8 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
         data-agent-color="${color}"
         data-agent-file="${safeFile}"
         style="--agent-theme-color: ${color};"
-        onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}', this.getAttribute('data-agent-file'))"
-        title="${agent.name} - ${agent.role}"
+        onclick="window.__selectAntigravityAgent(this.getAttribute('data-agent-id'), this.getAttribute('data-agent-name'), this.getAttribute('data-agent-color'), this.getAttribute('data-agent-file'))"
+        title="${safeName} - ${safeRole}"
       >
         <div class="agent-card-info">
           <div class="agent-icon-box" style="color: ${color}; background: ${color}1a; border-color: ${color}44;">
@@ -3397,19 +3429,19 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
           </div>
           <div class="agent-text-wrap">
             <div class="agent-title-row">
-              <span class="agent-title">${agent.name}</span>
+              <span class="agent-title">${safeName}</span>
               <span class="agent-tag" style="background: ${color}26; color: ${color}; border-color: ${color}55;">
-                ${agent.levelLabel.trim()}
+                ${safeLabel}
               </span>
             </div>
-            <div class="agent-subtitle">${agent.levelDesc}</div>
+            <div class="agent-subtitle">${safeDesc}</div>
           </div>
         </div>
         <button 
           type="button" 
           class="agent-pin-btn ${isSelected ? 'active' : ''}" 
           title="${isSelected ? 'Agente activo (Fijado)' : 'Fijar este agente'}"
-          aria-label="Fijar agente ${agent.name}"
+          aria-label="Fijar agente ${safeName}"
         >
           ${renderPinSvg(isSelected, 15)}
         </button>
@@ -3421,8 +3453,11 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
   const renderCompactItem = (agent) => {
     const isSelected = agent.id === activeAgentId;
     const color = getAgentColor(agent.id);
-    const safeName = (agent.name || '').replace(/'/g, "\\'");
-    const safeFile = (agent.filePath || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    const safeName = escapeHtml(agent.name || '');
+    const safeRole = escapeHtml(agent.role || '');
+    const safeDesc = escapeHtml(agent.levelDesc || agent.role || '');
+    const safeFile = escapeHtml(agent.filePath || '');
+    const jsName = (agent.name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     const svgIcon = renderAgentSvg(agent.id, 14, 2, 'compact-svg-icon');
 
     return `
@@ -3433,23 +3468,23 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
         data-agent-color="${color}"
         data-agent-file="${safeFile}"
         style="--agent-theme-color: ${color};"
-        onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}', this.getAttribute('data-agent-file'))"
-        title="${agent.name} - ${agent.role}"
+        onclick="window.__selectAntigravityAgent(this.getAttribute('data-agent-id'), this.getAttribute('data-agent-name'), this.getAttribute('data-agent-color'), this.getAttribute('data-agent-file'))"
+        title="${safeName} - ${safeRole}"
       >
         <div class="compact-icon-box" style="color: ${color}; background: ${color}18; border-color: ${color}33;">
           ${svgIcon}
         </div>
         <div class="compact-details">
           <div class="compact-name-row">
-            <span class="compact-name">${agent.name}</span>
+            <span class="compact-name">${safeName}</span>
           </div>
-          <div class="compact-sub">${agent.levelDesc || agent.role}</div>
+          <div class="compact-sub">${safeDesc}</div>
         </div>
         <button 
           type="button" 
           class="agent-pin-btn compact-pin-btn ${isSelected ? 'active' : ''}" 
           title="${isSelected ? 'Agente activo (Fijado)' : 'Fijar este agente'}"
-          aria-label="Fijar agente ${agent.name}"
+          aria-label="Fijar agente ${safeName}"
         >
           ${renderPinSvg(isSelected, 12)}
         </button>
@@ -3571,6 +3606,16 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
 }
 
 
+function escapeHtml(str = '') {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+
 
 
 
@@ -3605,7 +3650,7 @@ class AgentSelectorMod extends AntigravityMod {
     const initialAgentName = 'Sin Agente';
     const initialColor = getAgentColor(initialAgentId);
     const iconSvg = `<span id="antigravity-active-agent-icon" class="antigravity-active-agent-icon" style="display: inline-flex; align-items: center; pointer-events: none;">${renderAgentSvg(initialAgentId, 14)}</span>`;
-    const discoveredAgents = this.discoveryService.discoverAgents();
+    const discoveredAgents = context.dynamicAgents || this.discoveryService.discoverAgents();
     const dropdownHtml = renderAgentDropdownHtml(initialAgentId, discoveredAgents);
 
     const html = `
@@ -3981,26 +4026,38 @@ function renderGitGraphPanelHtml(context = {}) {
   // Generate commit list rows
   const commitRowsHtml = commits.map((c, idx) => {
     const isSelected = idx === 0;
-    const author = c.author || { name: 'Unknown', avatarUrl: '' };
+    const author = c.author || { name: 'Unknown', email: '', avatarUrl: '' };
+    const commitUrl = github.isGitHub && typeof github.getCommitUrl === 'function' ? github.getCommitUrl(c.hash) : '';
     const refsHtml = (c.refs || []).map(ref => {
       const isHead = ref.includes('HEAD');
       const isTag = ref.includes('tag:');
       const cls = isHead ? 'git-ref-head' : isTag ? 'git-ref-tag' : 'git-ref-branch';
-      return `<span class="git-ref-badge ${cls}">${escapeHtml(ref)}</span>`;
+      return `<span class="git-ref-badge ${cls}">${escapeGitHtml(ref)}</span>`;
     }).join('');
 
     return `
-      <div class="git-commit-row ${isSelected ? 'selected' : ''}" data-hash="${c.hash}" data-index="${idx}" tabindex="0">
+      <div 
+        class="git-commit-row ${isSelected ? 'selected' : ''}" 
+        data-hash="${c.hash}" 
+        data-short-hash="${c.shortHash || c.hash.slice(0, 7)}"
+        data-author="${escapeGitHtml(author.name)}"
+        data-email="${escapeGitHtml(author.email || '')}"
+        data-avatar="${author.avatarUrl || ''}"
+        data-commit-url="${commitUrl}"
+        data-subject="${escapeGitHtml(c.subject || '')}"
+        data-index="${idx}" 
+        tabindex="0"
+      >
         <div class="git-commit-col-info">
           <div class="git-commit-top-row">
             ${refsHtml}
             <span class="git-commit-hash">${c.shortHash}</span>
             <span class="git-commit-time">${c.relativeDate || ''}</span>
           </div>
-          <div class="git-commit-subject" title="${escapeHtml(c.subject)}">${escapeHtml(c.subject)}</div>
+          <div class="git-commit-subject" title="${escapeGitHtml(c.subject)}">${escapeGitHtml(c.subject)}</div>
           <div class="git-commit-author-row">
-            <img class="git-author-avatar" src="${author.avatarUrl}" alt="${escapeHtml(author.name)}" loading="lazy"/>
-            <span class="git-author-name">${escapeHtml(author.name)}</span>
+            <img class="git-author-avatar" src="${author.avatarUrl}" alt="${escapeGitHtml(author.name)}" loading="lazy"/>
+            <span class="git-author-name">${escapeGitHtml(author.name)}</span>
           </div>
         </div>
       </div>
@@ -4021,14 +4078,15 @@ function renderGitGraphPanelHtml(context = {}) {
             <path d="M6 9a9 9 0 0 1 9 9"></path>
             <circle cx="18" cy="18" r="3"></circle>
           </svg>
-          <span class="git-repo-badge" title="Active Repository">${escapeHtml(repoName)}</span>
-          <span class="git-branch-badge">${escapeHtml(status.branch)}${status.isClean ? '' : '*'}</span>
+          <span class="git-repo-badge" title="Active Repository">${escapeGitHtml(repoName)}</span>
+          <span class="git-branch-badge">${escapeGitHtml(status.branch)}${status.isClean ? '' : '*'}</span>
         </div>
         <div class="git-header-actions">
           ${status.ahead > 0 ? `<span class="git-sync-badge ahead" title="Ahead of upstream">↑${status.ahead}</span>` : ''}
           ${status.behind > 0 ? `<span class="git-sync-badge behind" title="Behind upstream">↓${status.behind}</span>` : ''}
           ${github.isGitHub ? `<a href="${github.webUrl}" target="_blank" rel="noopener" class="git-github-link" title="Open on GitHub">GitHub ↗</a>` : ''}
           <button class="git-refresh-btn" id="antigravity-git-refresh-btn" title="Refresh Git status">⟳</button>
+          <button class="git-close-btn" id="antigravity-git-close-btn" title="Close Git Graph">✕</button>
         </div>
       </div>
 
@@ -4058,27 +4116,27 @@ function renderGitGraphPanelHtml(context = {}) {
  */
 function renderInspectorCard(commit, github = {}) {
   const author = commit.author || { name: 'Unknown', email: '', avatarUrl: '' };
-  const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(commit.hash) : '';
+  const commitUrl = github.isGitHub && typeof github.getCommitUrl === 'function' ? github.getCommitUrl(commit.hash) : '';
 
   return `
     <div class="git-inspector-header">
       <div class="git-inspector-author">
-        <img class="git-inspector-avatar" src="${author.avatarUrl}" alt="${escapeHtml(author.name)}"/>
+        <img class="git-inspector-avatar" src="${author.avatarUrl}" alt="${escapeGitHtml(author.name)}"/>
         <div class="git-inspector-author-col">
-          <span class="git-inspector-author-name">${escapeHtml(author.name)}</span>
-          <span class="git-inspector-author-email">&lt;${escapeHtml(author.email)}&gt;</span>
+          <span class="git-inspector-author-name">${escapeGitHtml(author.name)}</span>
+          ${author.email ? `<span class="git-inspector-author-email">&lt;${escapeGitHtml(author.email)}&gt;</span>` : ''}
         </div>
       </div>
       <div class="git-inspector-hash-wrap">
-        <span class="git-inspector-hash" title="${commit.hash}">${commit.shortHash || commit.hash.slice(0, 7)}</span>
+        <span class="git-inspector-hash" title="${escapeGitHtml(commit.hash)}">${escapeGitHtml(commit.shortHash || commit.hash.slice(0, 7))}</span>
         ${commitUrl ? `<a href="${commitUrl}" target="_blank" rel="noopener" class="git-inspector-gh-link">View Commit ↗</a>` : ''}
       </div>
     </div>
-    <div class="git-inspector-subject">${escapeHtml(commit.subject)}</div>
+    <div class="git-inspector-subject">${escapeGitHtml(commit.subject)}</div>
   `.trim();
 }
 
-function escapeHtml(str = '') {
+function escapeGitHtml(str = '') {
   return String(str)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
