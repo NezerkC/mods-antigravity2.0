@@ -80,6 +80,42 @@ export class ModDaemon {
   }
 
   /**
+   * Refreshes telemetry metrics and live data in the active Electron DOM session
+   * without re-injecting entire mod styles and DOM shells.
+   * @param {CdpWebSocketClient} client
+   * @returns {Promise<boolean>}
+   */
+  async refreshTelemetry(client) {
+    try {
+      if (!this.modHost || !this.modHost.telemetryService) {
+        return false;
+      }
+      const allMetrics = (typeof this.modHost.telemetryService.getAllMetrics === 'function')
+        ? this.modHost.telemetryService.getAllMetrics()
+        : {};
+      const convIds = Object.keys(allMetrics);
+      const primaryMetric = convIds.length > 0
+        ? allMetrics[convIds[0]]
+        : (typeof this.modHost.telemetryService.getEmptySnapshot === 'function' ? this.modHost.telemetryService.getEmptySnapshot() : {});
+
+      const refreshScript = `
+        (() => {
+          if (typeof window.__updateAntigravityTelemetry === 'function') {
+            window.__antigravityAllMetrics = ${JSON.stringify(allMetrics)};
+            window.__antigravityLatestMetric = ${JSON.stringify(primaryMetric)};
+            window.__updateAntigravityTelemetry();
+          }
+        })()
+      `;
+      await client.evaluate(refreshScript);
+      return true;
+    } catch (err) {
+      this.logger.warn(`[ModDaemon] refreshTelemetry error: ${err.message}`);
+      return false;
+    }
+  }
+
+  /**
    * Single polling tick to verify CDP availability and inject mods if missing.
    * @returns {Promise<{ status: string, port?: number|null, error?: string }>}
    */
@@ -117,6 +153,7 @@ export class ModDaemon {
         return { status: 'injected', port };
       }
 
+      await this.refreshTelemetry(client);
       return { status: 'active', port };
     } catch (err) {
       this.logger.error(`[ModDaemon] Error during poll tick: ${err.message}`);

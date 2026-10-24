@@ -902,6 +902,7 @@ export class ModLoader {
           }
         });
 
+        window.__antigravityMountAll = mountAllMods;
         mountAllMods();
 
         // 4. Observe DOM mutations with smart slot check to avoid DOM thrashing

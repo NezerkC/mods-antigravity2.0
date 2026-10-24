@@ -123,3 +123,9 @@ test('ModLoader - generates agent tab switcher and catalog toggle functions', ()
 
 
 
+
+test('ModLoader - exposes window.__antigravityMountAll in client script', () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({});
+  assert.ok(script.includes('window.__antigravityMountAll = mountAllMods;'));
+});

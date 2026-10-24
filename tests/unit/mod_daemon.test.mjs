@@ -169,3 +169,41 @@ test('ModDaemon - handles dispatch errors gracefully without crashing', async ()
   assert.ok(result.error.includes('CDP connection timeout'));
   assert.equal(daemon.getStatus().isRunning, false);
 });
+
+test('ModDaemon - tick invokes refreshTelemetry when mods are already present in DOM', async () => {
+  const mockResolver = {
+    resolvePort: async () => 53908,
+    probePort: async () => true
+  };
+
+  const evaluateCalls = [];
+  const mockCdpClient = {
+    evaluate: async (script) => {
+      evaluateCalls.push(script);
+      return { value: true };
+    }
+  };
+
+  const mockTelemetryService = {
+    getAllMetrics: () => ({ 'conv-1': { displayTokens: '42k', pct: '21.0' } }),
+    getEmptySnapshot: () => ({ displayTokens: '0', pct: '0.0' })
+  };
+
+  const mockHost = {
+    telemetryService: mockTelemetryService,
+    dispatch: async () => {}
+  };
+
+  const daemon = new ModDaemon({
+    portResolver: mockResolver,
+    modHost: mockHost,
+    cdpClientFactory: () => mockCdpClient
+  });
+
+  const result = await daemon.tick();
+
+  assert.equal(result.status, 'active');
+  assert.equal(evaluateCalls.length, 2);
+  assert.ok(evaluateCalls[1].includes('__updateAntigravityTelemetry'));
+  assert.ok(evaluateCalls[1].includes('conv-1'));
+});
