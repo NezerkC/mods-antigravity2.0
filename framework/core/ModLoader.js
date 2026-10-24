@@ -102,6 +102,40 @@ export class ModLoader {
         styleTag.textContent = ${JSON.stringify(cssBundle)};
 
         // 2. Global Agent Selector & Tachometer Portal Handlers
+        window.__applyAgentToBadge = function(badge, agent) {
+          if (!badge || !agent) return;
+          const name = agent.name || 'Sin Agente';
+          const color = agent.color || '#94a3b8';
+          badge.setAttribute('title', 'Modo Activo: ' + name);
+          badge.style.borderColor = color + '66';
+          badge.style.boxShadow = '0 0 8px ' + color + '33';
+
+          const label = badge.querySelector('.antigravity-active-agent-name');
+          if (label) label.textContent = name;
+
+          const dot = badge.querySelector('.antigravity-active-agent-dot');
+          if (dot) {
+            dot.style.background = color;
+            dot.style.boxShadow = '0 0 6px ' + color;
+          }
+
+          const iconWrap = badge.querySelector('.antigravity-active-agent-icon');
+          if (iconWrap && agent.id) {
+            const item = document.querySelector('.antigravity-agent-item[data-agent-id="' + agent.id + '"]');
+            if (item) {
+              const svg = item.querySelector('svg');
+              if (svg) {
+                iconWrap.innerHTML = svg.outerHTML;
+                const innerSvg = iconWrap.querySelector('svg');
+                if (innerSvg) {
+                  innerSvg.setAttribute('width', '14');
+                  innerSvg.setAttribute('height', '14');
+                }
+              }
+            }
+          }
+        };
+
         window.__toggleAgentDropdown = function(e, badgeEl) {
           if (e) {
             e.stopPropagation();
@@ -123,6 +157,9 @@ export class ModLoader {
             portal.innerHTML = template.innerHTML;
           }
 
+          const cascade = badge.closest('[data-cascade-id]');
+          const cascadeId = cascade ? cascade.getAttribute('data-cascade-id') : null;
+
           const isCurrentOpen = portal.classList.contains('open') && portal.__currentBadge === badge;
 
           // Close other popovers if open
@@ -143,10 +180,43 @@ export class ModLoader {
           document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
           portal.classList.remove('open');
           portal.__currentBadge = null;
+          portal.__currentCascadeId = null;
 
           if (!isCurrentOpen) {
             badge.classList.add('open');
             portal.__currentBadge = badge;
+            portal.__currentCascadeId = cascadeId;
+
+            // Determine active agent for THIS chat
+            let activeId = 'default';
+            let activeName = 'Sin Agente';
+            try {
+              const map = JSON.parse(localStorage.getItem('__antigravity_selected_agents_map') || '{}');
+              if (cascadeId && map[cascadeId]) {
+                activeId = map[cascadeId].id;
+                activeName = map[cascadeId].name;
+              }
+            } catch (err) {}
+
+            // Update item highlights inside portal
+            portal.querySelectorAll('.antigravity-agent-item').forEach(el => {
+              const isMatch = el.getAttribute('data-agent-id') === activeId;
+              el.classList.toggle('selected', isMatch);
+              const pinBtn = el.querySelector('.agent-pin-btn');
+              if (pinBtn) {
+                pinBtn.classList.toggle('active', isMatch);
+                pinBtn.setAttribute('title', isMatch ? 'Agente activo (Fijado)' : 'Fijar este agente');
+                const pinIcon = pinBtn.querySelector('.agent-pin-icon');
+                if (pinIcon) {
+                  pinIcon.setAttribute('fill', isMatch ? 'currentColor' : 'none');
+                }
+              }
+            });
+
+            const footerText = portal.querySelector('.agent-footer-text');
+            if (footerText) {
+              footerText.textContent = 'Modo ' + activeName + ' activo en este chat';
+            }
 
             const rect = badge.getBoundingClientRect();
             const portalHeight = 390;
@@ -169,81 +239,99 @@ export class ModLoader {
               closeBtn.onclick = () => {
                 portal.classList.remove('open');
                 portal.__currentBadge = null;
+                portal.__currentCascadeId = null;
                 badge.classList.remove('open');
               };
             }
           }
         };
 
-        window.__selectAntigravityAgent = function(agentId, agentName, agentColor) {
-          document.querySelectorAll('.antigravity-active-agent-name, #antigravity-active-agent-name').forEach(label => {
-            label.textContent = agentName;
-          });
-
-          // Sync Lucide SVG icon into active badge
-          const item = document.querySelector('.antigravity-agent-item[data-agent-id="' + agentId + '"]');
-          if (item) {
-            const svg = item.querySelector('svg');
-            if (svg) {
-              const svgMarkup = svg.outerHTML;
-              document.querySelectorAll('.antigravity-active-agent-icon, #antigravity-active-agent-icon').forEach(iconWrap => {
-                iconWrap.innerHTML = svgMarkup;
-                const innerSvg = iconWrap.querySelector('svg');
-                if (innerSvg) {
-                  innerSvg.setAttribute('width', '14');
-                  innerSvg.setAttribute('height', '14');
-                }
-              });
-            }
-          }
-
-          document.querySelectorAll('.antigravity-agent-badge, #antigravity-agent-badge').forEach(badge => {
-            badge.setAttribute('title', 'Modo Activo: ' + agentName);
-            badge.classList.remove('open');
-            if (agentColor) {
-              badge.style.borderColor = agentColor + '66';
-              badge.style.boxShadow = '0 0 8px ' + agentColor + '33';
-            }
-          });
-
-          document.querySelectorAll('.antigravity-active-agent-dot, #antigravity-active-agent-dot').forEach(dot => {
-            if (agentColor) {
-              dot.style.background = agentColor;
-              dot.style.boxShadow = '0 0 6px ' + agentColor;
-            }
-          });
-
+        window.__selectAntigravityAgent = function(agentId, agentName, agentColor, agentFilePath) {
           const portal = document.getElementById('antigravity-agent-dropdown-portal');
-          if (portal) {
-            const footerText = portal.querySelector('.agent-footer-text');
-            if (footerText) {
-              footerText.textContent = 'Modo ' + agentName + ' activo en tiempo real';
+          const currentBadge = portal ? portal.__currentBadge : null;
+          const cascadeId = (portal && portal.__currentCascadeId) ||
+            (currentBadge && currentBadge.closest('[data-cascade-id]')?.getAttribute('data-cascade-id')) ||
+            null;
+
+          const agentData = {
+            id: agentId,
+            name: agentName,
+            color: agentColor,
+            filePath: agentFilePath || ''
+          };
+
+          // Find target badge scoped to this chat
+          let targetBadge = currentBadge;
+          if (cascadeId) {
+            const container = document.querySelector('[data-cascade-id="' + cascadeId + '"]');
+            if (container) {
+              targetBadge = container.querySelector('.antigravity-agent-badge') || currentBadge;
             }
           }
 
+          if (targetBadge) {
+            window.__applyAgentToBadge(targetBadge, agentData);
+            targetBadge.classList.remove('open');
+          } else {
+            // Fallback for standalone badge
+            document.querySelectorAll('.antigravity-agent-badge').forEach(b => {
+              window.__applyAgentToBadge(b, agentData);
+              b.classList.remove('open');
+            });
+          }
+
+          // Save scoped per-chat state in localStorage
           try {
-            localStorage.setItem('__antigravity_selected_agent', JSON.stringify({ 
-              id: agentId, 
-              name: agentName,
-              color: agentColor 
-            }));
+            const map = JSON.parse(localStorage.getItem('__antigravity_selected_agents_map') || '{}');
+            if (cascadeId) {
+              map[cascadeId] = agentData;
+              localStorage.setItem('__antigravity_selected_agents_map', JSON.stringify(map));
+            }
+            // Keep legacy single-entry fallback
+            localStorage.setItem('__antigravity_selected_agent', JSON.stringify(agentData));
           } catch (e) {}
 
-          document.querySelectorAll('.antigravity-agent-item').forEach(el => {
-            const isMatch = el.getAttribute('data-agent-id') === agentId;
-            el.classList.toggle('selected', isMatch);
-            const check = el.querySelector('.agent-check');
-            if (check) check.textContent = isMatch ? '✓' : '';
-            const pinBtn = el.querySelector('.agent-pin-btn');
-            if (pinBtn) {
-              pinBtn.classList.toggle('active', isMatch);
-              pinBtn.setAttribute('title', isMatch ? 'Agente activo (Fijado)' : 'Fijar este agente');
-              const pinIcon = pinBtn.querySelector('.agent-pin-icon');
-              if (pinIcon) {
-                pinIcon.setAttribute('fill', isMatch ? 'currentColor' : 'none');
-              }
+          // Non-blocking sync to local bridge server (active_agents.json)
+          try {
+            if (cascadeId) {
+              fetch('http://127.0.0.1:53912/active-agent', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  cascadeId: cascadeId,
+                  agent: agentData
+                })
+              }).catch(function() {});
             }
-          });
+          } catch (e) {}
+
+          // Update portal UI state
+          if (portal) {
+            portal.classList.remove('open');
+            portal.__currentBadge = null;
+            portal.__currentCascadeId = null;
+
+            const footerText = portal.querySelector('.agent-footer-text');
+            if (footerText) {
+              footerText.textContent = 'Modo ' + agentName + ' activo en este chat';
+            }
+
+            portal.querySelectorAll('.antigravity-agent-item').forEach(el => {
+              const isMatch = el.getAttribute('data-agent-id') === agentId;
+              el.classList.toggle('selected', isMatch);
+              const check = el.querySelector('.agent-check');
+              if (check) check.textContent = isMatch ? '✓' : '';
+              const pinBtn = el.querySelector('.agent-pin-btn');
+              if (pinBtn) {
+                pinBtn.classList.toggle('active', isMatch);
+                pinBtn.setAttribute('title', isMatch ? 'Agente activo (Fijado)' : 'Fijar este agente');
+                const pinIcon = pinBtn.querySelector('.agent-pin-icon');
+                if (pinIcon) {
+                  pinIcon.setAttribute('fill', isMatch ? 'currentColor' : 'none');
+                }
+              }
+            });
+          }
         };
 
         window.__switchAgentTab = function(tabId) {
@@ -651,15 +739,21 @@ export class ModLoader {
           // Restore saved mod visibility states
           window.__applyModsVisibility();
 
-          // Restore saved agent selection across all mounted badges
+          // Restore saved agent selection across mounted badges (scoped per chat)
           try {
-            const saved = localStorage.getItem('__antigravity_selected_agent');
-            if (saved) {
-              const parsed = JSON.parse(saved);
-              if (parsed && parsed.name) {
-                window.__selectAntigravityAgent(parsed.id, parsed.name, parsed.color);
+            const mapRaw = localStorage.getItem('__antigravity_selected_agents_map');
+            const map = mapRaw ? JSON.parse(mapRaw) : {};
+            const fallbackRaw = localStorage.getItem('__antigravity_selected_agent');
+            const fallbackAgent = fallbackRaw ? JSON.parse(fallbackRaw) : null;
+
+            document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {
+              const cascade = badge.closest('[data-cascade-id]');
+              const cId = cascade ? cascade.getAttribute('data-cascade-id') : null;
+              const agentToApply = (cId && map[cId]) ? map[cId] : (fallbackAgent || null);
+              if (agentToApply && agentToApply.name) {
+                window.__applyAgentToBadge(badge, agentToApply);
               }
-            }
+            });
           } catch (e) {}
 
           // Apply current telemetry

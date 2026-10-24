@@ -245,7 +245,17 @@ export function renderPinSvg(isActive, size = 15) {
 export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) {
   const mergedMap = new Map();
   for (const a of AGENT_REGISTRY) {
-    mergedMap.set(a.id, a);
+    let filePath = a.filePath || '';
+    if (!filePath && Array.isArray(dynamicAgents)) {
+      const match = dynamicAgents.find(d => 
+        d.id === a.id || 
+        d.id.includes(a.id.replace(/-/g, '_')) ||
+        (d.name && d.name.toLowerCase().includes(a.name.toLowerCase())) ||
+        (d.filePath && d.filePath.toLowerCase().includes(a.id.replace(/-/g, '_')))
+      );
+      if (match) filePath = match.filePath;
+    }
+    mergedMap.set(a.id, { ...a, filePath });
   }
   if (Array.isArray(dynamicAgents)) {
     for (const a of dynamicAgents) {
@@ -276,8 +286,9 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
       data-agent-id="default"
       data-agent-name="Sin Agente"
       data-agent-color="${defaultColor}"
+      data-agent-file=""
       style="--agent-theme-color: ${defaultColor};"
-      onclick="window.__selectAntigravityAgent('default', 'Sin Agente', '${defaultColor}')"
+      onclick="window.__selectAntigravityAgent('default', 'Sin Agente', '${defaultColor}', '')"
       title="Asistente Antigravity Estándar sin rol especializado"
     >
       <div class="agent-card-info">
@@ -308,6 +319,7 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
     const isSelected = agent.id === activeAgentId;
     const color = getAgentColor(agent.id);
     const safeName = (agent.name || '').replace(/'/g, "\\'");
+    const safeFile = (agent.filePath || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
     const svgIcon = renderAgentSvg(agent.id, 16, 2, 'cuspide-svg-icon');
 
     return `
@@ -316,8 +328,9 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
         data-agent-id="${agent.id}"
         data-agent-name="${safeName}"
         data-agent-color="${color}"
+        data-agent-file="${safeFile}"
         style="--agent-theme-color: ${color};"
-        onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}')"
+        onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}', this.getAttribute('data-agent-file'))"
         title="${agent.name} - ${agent.role}"
       >
         <div class="agent-card-info">
@@ -351,6 +364,7 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
     const isSelected = agent.id === activeAgentId;
     const color = getAgentColor(agent.id);
     const safeName = (agent.name || '').replace(/'/g, "\\'");
+    const safeFile = (agent.filePath || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
     const svgIcon = renderAgentSvg(agent.id, 14, 2, 'compact-svg-icon');
 
     return `
@@ -359,8 +373,9 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
         data-agent-id="${agent.id}"
         data-agent-name="${safeName}"
         data-agent-color="${color}"
+        data-agent-file="${safeFile}"
         style="--agent-theme-color: ${color};"
-        onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}')"
+        onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}', this.getAttribute('data-agent-file'))"
         title="${agent.name} - ${agent.role}"
       >
         <div class="compact-icon-box" style="color: ${color}; background: ${color}18; border-color: ${color}33;">
