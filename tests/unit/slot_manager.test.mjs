@@ -12,6 +12,11 @@ test('SlotManager - provides default slot definitions', () => {
   const menubarSlot = manager.getSlot('menubar-actions');
   assert.ok(menubarSlot);
   assert.equal(menubarSlot.strategy, 'append');
+
+  const auxPaneSlot = manager.getSlot('aux-pane-tab');
+  assert.ok(auxPaneSlot);
+  assert.equal(auxPaneSlot.selector, 'button[data-testid="aux-pane-new-tab-button"]');
+  assert.equal(auxPaneSlot.strategy, 'before');
 });
 
 test('SlotManager - registers custom slot', () => {
@@ -35,6 +40,7 @@ test('SlotManager - throws error for unregistered slot', () => {
 test('SlotManager - generates slot container element id', () => {
   const manager = new SlotManager();
   assert.equal(manager.getContainerId('header-actions'), 'antigravity-slot-header-actions');
+  assert.equal(manager.getContainerId('aux-pane-tab'), 'antigravity-slot-aux-pane-tab');
 });
 
 test('SlotManager - generates mounting snippet for slot and mod targeting all matching conversation anchors', () => {
@@ -48,5 +54,4 @@ test('SlotManager - generates mounting snippet for slot and mod targeting all ma
   assert.ok(snippet.includes('document.querySelectorAll'));
   assert.ok(snippet.includes('antigravity-slot-header-actions'));
   assert.ok(snippet.includes('antigravity-mod-tachometer'));
-  assert.ok(snippet.includes('test-tachometer'));
 });

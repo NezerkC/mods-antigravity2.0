@@ -25,6 +25,10 @@ export class SlotManager {
       ['floating-dock', {
         selector: 'body',
         strategy: 'append'
+      }],
+      ['aux-pane-tab', {
+        selector: 'button[data-testid="aux-pane-new-tab-button"]',
+        strategy: 'before'
       }]
     ]);
   }
