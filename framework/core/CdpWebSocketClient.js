@@ -45,7 +45,8 @@ export class CdpWebSocketClient {
       method: 'Runtime.evaluate',
       params: {
         expression,
-        returnByValue: true
+        returnByValue: true,
+        awaitPromise: true
       }
     };
   }
