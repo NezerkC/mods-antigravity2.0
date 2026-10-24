@@ -68,10 +68,10 @@ mods/my-custom-mod/
 
 ## 4. The `AntigravityMod` Lifecycle
 
-Subclass `AntigravityMod` from `src/sdk/AntigravityMod.js`:
+Subclass `AntigravityMod` from `framework/sdk/AntigravityMod.js`:
 
 ```javascript
-import { AntigravityMod } from '../../src/sdk/AntigravityMod.js';
+import { AntigravityMod } from '../../framework/sdk/AntigravityMod.js';
 
 export class MyQuickActionsMod extends AntigravityMod {
   constructor() {

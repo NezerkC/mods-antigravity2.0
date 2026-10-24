@@ -29,6 +29,18 @@ export const DEFAULT_AGENT = {
   iconName: 'default'
 };
 
+export const AUTO_AGENT = {
+  id: 'auto',
+  name: 'Auto (Plan / Build)',
+  level: 'auto',
+  levelLabel: 'AUTO',
+  levelDesc: 'Clasificador Heurístico según Prompt',
+  role: 'Enrutador dinámico entre Plan y Build con reglas de permisos',
+  category: 'Smart Router',
+  suite: 'Antigravity Core',
+  iconName: 'auto'
+};
+
 export const AGENT_REGISTRY = [
   // =========================================================================
   // 1. CÚSPIDE (GOBERNANZA GLOBAL & DIRECCIÓN DE OBRA)
@@ -206,6 +218,9 @@ export function getAgentColor(agentId) {
   if (agentId === 'default') {
     return 'hsl(215, 16%, 65%)';
   }
+  if (agentId === 'auto') {
+    return 'hsl(265, 89%, 66%)';
+  }
   const index = AGENT_REGISTRY.findIndex(a => a.id === agentId);
   if (index !== -1 && index < PALETTE.length) {
     return PALETTE[index];
@@ -276,6 +291,43 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
   const microAgents = allAgents.filter(a => a.level === 'micro');
   const nanoAgents = allAgents.filter(a => a.level === 'nano');
   const customAgents = allAgents.filter(a => a.level === 'custom');
+
+  // Render Auto (Plan / Build) Smart Router card
+  const isAutoSelected = activeAgentId === 'auto';
+  const autoColor = getAgentColor('auto');
+  const autoCardHtml = `
+    <div 
+      class="antigravity-agent-item agent-card primary-hero-card auto-mode-card ${isAutoSelected ? 'selected' : ''}" 
+      data-agent-id="auto"
+      data-agent-name="Auto (Plan/Build)"
+      data-agent-color="${autoColor}"
+      data-agent-file=""
+      style="--agent-theme-color: ${autoColor};"
+      onclick="window.__selectAntigravityAgent('auto', 'Auto (Plan/Build)', '${autoColor}', '')"
+      title="Enrutador Inteligente: Clasifica entre PLAN y BUILD según tu prompt con guardián de permisos"
+    >
+      <div class="agent-card-info">
+        <div class="agent-icon-box" style="color: ${autoColor}; background: ${autoColor}1a; border-color: ${autoColor}44;">
+          ${renderAgentSvg('auto', 16, 2)}
+        </div>
+        <div class="agent-text-wrap">
+          <div class="agent-title-row">
+            <span class="agent-title">Auto (Plan / Build)</span>
+            <span class="agent-tag" style="background: ${autoColor}26; color: ${autoColor}; border-color: ${autoColor}55;">AUTO</span>
+          </div>
+          <div class="agent-subtitle">Clasificador heurístico + permisos</div>
+        </div>
+      </div>
+      <button 
+        type="button" 
+        class="agent-pin-btn ${isAutoSelected ? 'active' : ''}" 
+        title="${isAutoSelected ? 'Agente activo (Fijado)' : 'Fijar modo Auto'}"
+        aria-label="Fijar modo Auto"
+      >
+        ${renderPinSvg(isAutoSelected, 15)}
+      </button>
+    </div>
+  `.trim();
 
   // Render Default (Vanilla) card
   const isDefaultSelected = activeAgentId === 'default';
@@ -421,6 +473,7 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
       <!-- 2. SECCIÓN PRINCIPAL: 3 CARDS DIRECTAS CON PIN -->
       <div class="agent-primary-section agent-cards-list">
         ${defaultCardHtml}
+        ${autoCardHtml}
         ${cuspideAgents.map(renderCuspideCard).join('\n')}
       </div>
 

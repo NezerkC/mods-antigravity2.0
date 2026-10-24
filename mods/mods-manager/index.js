@@ -16,7 +16,7 @@ export class ModsManagerMod extends AntigravityMod {
     super({
       id: 'mods-manager',
       name: 'Mods Manager & Persistence Control',
-      version: '1.0.0',
+      version: '2.0.0',
       slot: 'menubar-actions',
       priority: 100
     });

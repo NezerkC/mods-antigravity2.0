@@ -2834,6 +2834,7 @@ class ContextTachometerMod extends AntigravityMod {
 const AGENT_SVG_PATHS = {
   // --- Modo Default (Sin Agente) & Cúspide (Orquestadores) ---
   'default': `<path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>`,
+  'auto': `<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m12 8 1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1z"/>`,
   'lead-architect': `<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>`,
   'sdd-orchestrator': `<circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>`,
 
@@ -2946,6 +2947,18 @@ const DEFAULT_AGENT = {
   category: 'Standard',
   suite: 'Standard',
   iconName: 'default'
+};
+
+const AUTO_AGENT = {
+  id: 'auto',
+  name: 'Auto (Plan / Build)',
+  level: 'auto',
+  levelLabel: 'AUTO',
+  levelDesc: 'Clasificador Heurístico según Prompt',
+  role: 'Enrutador dinámico entre Plan y Build con reglas de permisos',
+  category: 'Smart Router',
+  suite: 'Antigravity Core',
+  iconName: 'auto'
 };
 
 const AGENT_REGISTRY = [
@@ -3125,6 +3138,9 @@ function getAgentColor(agentId) {
   if (agentId === 'default') {
     return 'hsl(215, 16%, 65%)';
   }
+  if (agentId === 'auto') {
+    return 'hsl(265, 89%, 66%)';
+  }
   const index = AGENT_REGISTRY.findIndex(a => a.id === agentId);
   if (index !== -1 && index < PALETTE.length) {
     return PALETTE[index];
@@ -3195,6 +3211,43 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
   const microAgents = allAgents.filter(a => a.level === 'micro');
   const nanoAgents = allAgents.filter(a => a.level === 'nano');
   const customAgents = allAgents.filter(a => a.level === 'custom');
+
+  // Render Auto (Plan / Build) Smart Router card
+  const isAutoSelected = activeAgentId === 'auto';
+  const autoColor = getAgentColor('auto');
+  const autoCardHtml = `
+    <div 
+      class="antigravity-agent-item agent-card primary-hero-card auto-mode-card ${isAutoSelected ? 'selected' : ''}" 
+      data-agent-id="auto"
+      data-agent-name="Auto (Plan/Build)"
+      data-agent-color="${autoColor}"
+      data-agent-file=""
+      style="--agent-theme-color: ${autoColor};"
+      onclick="window.__selectAntigravityAgent('auto', 'Auto (Plan/Build)', '${autoColor}', '')"
+      title="Enrutador Inteligente: Clasifica entre PLAN y BUILD según tu prompt con guardián de permisos"
+    >
+      <div class="agent-card-info">
+        <div class="agent-icon-box" style="color: ${autoColor}; background: ${autoColor}1a; border-color: ${autoColor}44;">
+          ${renderAgentSvg('auto', 16, 2)}
+        </div>
+        <div class="agent-text-wrap">
+          <div class="agent-title-row">
+            <span class="agent-title">Auto (Plan / Build)</span>
+            <span class="agent-tag" style="background: ${autoColor}26; color: ${autoColor}; border-color: ${autoColor}55;">AUTO</span>
+          </div>
+          <div class="agent-subtitle">Clasificador heurístico + permisos</div>
+        </div>
+      </div>
+      <button 
+        type="button" 
+        class="agent-pin-btn ${isAutoSelected ? 'active' : ''}" 
+        title="${isAutoSelected ? 'Agente activo (Fijado)' : 'Fijar modo Auto'}"
+        aria-label="Fijar modo Auto"
+      >
+        ${renderPinSvg(isAutoSelected, 15)}
+      </button>
+    </div>
+  `.trim();
 
   // Render Default (Vanilla) card
   const isDefaultSelected = activeAgentId === 'default';
@@ -3340,6 +3393,7 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
       <!-- 2. SECCIÓN PRINCIPAL: 3 CARDS DIRECTAS CON PIN -->
       <div class="agent-primary-section agent-cards-list">
         ${defaultCardHtml}
+        ${autoCardHtml}
         ${cuspideAgents.map(renderCuspideCard).join('\n')}
       </div>
 
@@ -3446,7 +3500,7 @@ class AgentSelectorMod extends AntigravityMod {
     super({
       id: 'agent-selector',
       name: 'Agent Role Selector',
-      version: '1.0.0',
+      version: '2.0.0',
       slot: 'header-actions',
       priority: 45
     });
@@ -3645,7 +3699,7 @@ class ModsManagerMod extends AntigravityMod {
     super({
       id: 'mods-manager',
       name: 'Mods Manager & Persistence Control',
-      version: '1.0.0',
+      version: '2.0.0',
       slot: 'menubar-actions',
       priority: 100
     });
