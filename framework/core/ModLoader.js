@@ -529,16 +529,25 @@ export class ModLoader {
             hostEl.id = 'antigravity-git-panel-host';
             if (auxBody) {
               auxBody.style.position = 'relative';
-              hostEl.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:none; flex-direction:column; overflow:hidden; z-index:50; background:#0f111a;';
               auxBody.appendChild(hostEl);
             } else {
-              hostEl.style.cssText = 'position:fixed; right:0; top:40px; bottom:24px; width:420px; display:none; flex-direction:column; overflow:hidden; z-index:99999; background:#0f111a; box-shadow:-12px 0 30px rgba(0,0,0,0.7); border-left:1px solid #1e2438;';
               document.body.appendChild(hostEl);
             }
           }
 
+          if (auxBody && hostEl.parentElement !== auxBody) {
+            auxBody.style.position = 'relative';
+            auxBody.appendChild(hostEl);
+          }
+
+          if (hostEl.parentElement === auxBody) {
+            hostEl.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:' + (isCurrentActive ? 'none' : 'flex') + '; flex-direction:column; overflow:hidden; z-index:50; background:#0f111a;';
+          } else {
+            hostEl.style.cssText = 'position:fixed; right:0; top:40px; bottom:24px; width:420px; display:' + (isCurrentActive ? 'none' : 'flex') + '; flex-direction:column; overflow:hidden; z-index:99999; background:#0f111a; box-shadow:-12px 0 30px rgba(0,0,0,0.7); border-left:1px solid #1e2438;';
+          }
+
           if (isCurrentActive) {
-            hostEl.style.display = 'none';
+            // panel closed
           } else {
             const template = document.getElementById('antigravity-git-panel-template');
             if (template) {

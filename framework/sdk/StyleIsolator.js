@@ -70,6 +70,8 @@ export class StyleIsolator {
             sel.includes('-portal') ||
             sel.includes('antigravity-agent-dropdown') ||
             sel.includes('antigravity-mods-manager-portal') ||
+            sel.includes('antigravity-git') ||
+            sel.includes('git-') ||
             sel.startsWith('.mod-') ||
             sel.startsWith('.mods-manager-') ||
             sel.startsWith('.agent-') ||
