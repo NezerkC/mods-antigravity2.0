@@ -25,6 +25,7 @@ async function build() {
   const telemetryService = cleanModuleCode('framework/services/TelemetryService.js');
   const agentSyncServer = cleanModuleCode('framework/services/AgentSyncServer.js');
   const agentDiscoveryService = cleanModuleCode('framework/services/AgentDiscoveryService.js');
+  const gitService = cleanModuleCode('framework/services/GitService.js');
   const modHost = cleanModuleCode('framework/core/ModHost.js');
 
   // 2. Read Context Tachometer Mod sources
@@ -58,9 +59,21 @@ async function build() {
     .replace(/const __dirname = .*?;/, '')
     .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(modsManagerCss)};`);
 
-  // 5. Assemble Standalone Bundle
+  // 5. Read Git Graph Mod sources
+  const gitGraphSvg = cleanModuleCode('mods/git-graph/components/GitGraphSvg.js');
+  const gitGraphPanelHtml = cleanModuleCode('mods/git-graph/components/GitGraphPanelHtml.js');
+  const gitGraphCss = fs.readFileSync(path.resolve('mods/git-graph/styles.css'), 'utf-8');
+
+  const gitGraphIndex = cleanModuleCode('mods/git-graph/index.js')
+    .replace(/const __filename = .*?;/, '')
+    .replace(/const __dirname = .*?;/, '')
+    .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(gitGraphCss)};`);
+
+  // 6. Assemble Standalone Bundle
   const bundle = `// Antigravity Mod Framework Runtime Host (Bundle)
 import http from 'node:http';
+import crypto from 'node:crypto';
+import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -85,6 +98,8 @@ ${agentSyncServer}
 
 ${agentDiscoveryService}
 
+${gitService}
+
 ${modHost}
 
 // ==================== Context Tachometer Mod ====================
@@ -108,6 +123,13 @@ ${modsManagerHtml}
 
 ${modsManagerIndex}
 
+// ===================== Git Graph Mod =====================
+${gitGraphSvg}
+
+${gitGraphPanelHtml}
+
+${gitGraphIndex}
+
 // ======================= Entrypoint Execution =======================
 async function main() {
   try {
@@ -115,6 +137,7 @@ async function main() {
     host.registerMod(new ContextTachometerMod());
     host.registerMod(new AgentSelectorMod());
     host.registerMod(new ModsManagerMod());
+    host.registerMod(new GitGraphMod());
     await host.dispatch();
   } catch (err) {
     // Fail silently in background hook context
