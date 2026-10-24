@@ -8,7 +8,7 @@ fs.mkdirSync(releaseDir, { recursive: true });
 console.log('📦 Packaging release v2.0.0 assets...');
 
 // 1. Package individual mods
-const mods = ['context-tachometer', 'agent-selector', 'mods-manager'];
+const mods = ['context-tachometer', 'agent-selector', 'mods-manager', 'git-graph'];
 for (const mod of mods) {
   const modDir = path.resolve(`mods/${mod}`);
   const zipPath = path.join(releaseDir, `mod-${mod}-v2.0.0.zip`);

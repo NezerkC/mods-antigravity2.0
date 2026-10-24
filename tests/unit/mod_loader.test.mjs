@@ -100,6 +100,8 @@ test('ModLoader - generates mods manager panel and visibility synchronization lo
   assert.ok(script.includes('__modsClickBound'));
   assert.ok(script.includes('antigravity-mods-manager-portal'));
   assert.ok(script.includes('__antigravity_daemon_enabled'));
+  assert.ok(script.includes('mod-toggle-git-graph'));
+  assert.ok(script.includes('#antigravity-git-tab-trigger'));
 });
 
 test('ModLoader - mutation observer traverses parent to prevent self-closest infinite loop', () => {

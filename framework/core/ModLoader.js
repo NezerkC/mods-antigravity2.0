@@ -384,6 +384,10 @@ export class ModLoader {
           document.querySelectorAll('.antigravity-agent-badge').forEach(b => {
             b.style.display = agentEnabled ? 'inline-flex' : 'none';
           });
+          const gitGraphEnabled = localStorage.getItem('__antigravity_mod_enabled_git-graph') !== 'false';
+          document.querySelectorAll('#antigravity-git-tab-trigger, .antigravity-git-tab-trigger').forEach(b => {
+            b.style.display = gitGraphEnabled ? 'inline-flex' : 'none';
+          });
         };
 
         window.__toggleModsManagerPanel = function(e, btnEl) {
@@ -450,6 +454,16 @@ export class ModLoader {
               agentInput.checked = agentEnabled;
               agentInput.onchange = (ev) => {
                 localStorage.setItem('__antigravity_mod_enabled_agent-selector', ev.target.checked);
+                window.__applyModsVisibility();
+              };
+            }
+
+            const gitGraphEnabled = localStorage.getItem('__antigravity_mod_enabled_git-graph') !== 'false';
+            const gitGraphInput = portal.querySelector('#mod-toggle-git-graph');
+            if (gitGraphInput) {
+              gitGraphInput.checked = gitGraphEnabled;
+              gitGraphInput.onchange = (ev) => {
+                localStorage.setItem('__antigravity_mod_enabled_git-graph', ev.target.checked);
                 window.__applyModsVisibility();
               };
             }

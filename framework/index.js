@@ -9,3 +9,5 @@ export { TelemetryService } from './services/TelemetryService.js';
 export { AgentDiscoveryService } from './services/AgentDiscoveryService.js';
 export { ModDaemon, createDefaultHost } from './core/ModDaemon.js';
 export { WindowsDaemonService } from './services/WindowsDaemonService.js';
+export { GitService } from './services/GitService.js';
+export { AgentSyncServer } from './services/AgentSyncServer.js';

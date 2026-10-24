@@ -26,9 +26,11 @@ test('ModsManagerMod - panel renders cards for all mods and daemon switch', () =
   assert.ok(panelHtml.includes('Antigravity Mods'));
   assert.ok(panelHtml.includes('Tacómetro de Contexto'));
   assert.ok(panelHtml.includes('Selector de Agentes'));
+  assert.ok(panelHtml.includes('Git Graph Visualizer'));
   assert.ok(panelHtml.includes('Auto-Inyección en Background'));
   assert.ok(panelHtml.includes('id="mod-toggle-context-tachometer"'));
   assert.ok(panelHtml.includes('id="mod-toggle-agent-selector"'));
+  assert.ok(panelHtml.includes('id="mod-toggle-git-graph"'));
   assert.ok(panelHtml.includes('id="mod-toggle-daemon"'));
   assert.ok(panelHtml.includes('daemon-status-pill'));
   assert.ok(panelHtml.includes('mods-manager-header-card'));
@@ -36,4 +38,3 @@ test('ModsManagerMod - panel renders cards for all mods and daemon switch', () =
   assert.ok(panelHtml.includes('mods-manager-footer-card'));
   assert.ok(panelHtml.includes('mod-card'));
 });
-

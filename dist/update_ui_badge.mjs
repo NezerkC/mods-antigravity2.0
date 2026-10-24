@@ -1015,6 +1015,10 @@ class ModLoader {
           document.querySelectorAll('.antigravity-agent-badge').forEach(b => {
             b.style.display = agentEnabled ? 'inline-flex' : 'none';
           });
+          const gitGraphEnabled = localStorage.getItem('__antigravity_mod_enabled_git-graph') !== 'false';
+          document.querySelectorAll('#antigravity-git-tab-trigger, .antigravity-git-tab-trigger').forEach(b => {
+            b.style.display = gitGraphEnabled ? 'inline-flex' : 'none';
+          });
         };
 
         window.__toggleModsManagerPanel = function(e, btnEl) {
@@ -1081,6 +1085,16 @@ class ModLoader {
               agentInput.checked = agentEnabled;
               agentInput.onchange = (ev) => {
                 localStorage.setItem('__antigravity_mod_enabled_agent-selector', ev.target.checked);
+                window.__applyModsVisibility();
+              };
+            }
+
+            const gitGraphEnabled = localStorage.getItem('__antigravity_mod_enabled_git-graph') !== 'false';
+            const gitGraphInput = portal.querySelector('#mod-toggle-git-graph');
+            if (gitGraphInput) {
+              gitGraphInput.checked = gitGraphEnabled;
+              gitGraphInput.onchange = (ev) => {
+                localStorage.setItem('__antigravity_mod_enabled_git-graph', ev.target.checked);
                 window.__applyModsVisibility();
               };
             }
@@ -2451,6 +2465,9 @@ class GitService {
 
 
 
+
+
+
 /**
  * Central orchestrator host for Antigravity Mod Framework.
  * Coordinates telemetry extraction, mod lifecycle, and CDP DOM dispatching.
@@ -2462,6 +2479,7 @@ class ModHost {
    * @param {ModLoader} [options.modLoader]
    * @param {TelemetryService} [options.telemetryService]
    * @param {AgentSyncServer} [options.syncServer]
+   * @param {GitService} [options.gitService]
    * @param {CdpPortResolver} [options.portResolver]
    */
   constructor(options = {}) {
@@ -2491,6 +2509,69 @@ class ModHost {
   }
 
   /**
+   * Resolves the active Git repository root directory.
+   * Checks CDP renderer tab URLs, transcript metadata, cwd, and known project paths.
+   * @param {CdpWebSocketClient} [cdpClient]
+   * @param {string} [explicitTranscriptPath]
+   * @returns {Promise<string>}
+   */
+  async resolveRepoPath(cdpClient, explicitTranscriptPath) {
+    // 1. Try resolving via live CDP renderer tab query parameter or open file
+    if (cdpClient) {
+      try {
+        const res = await cdpClient.evaluate(`
+          (() => {
+            const search = window.location.search || '';
+            const match = search.match(/tab=file__file%3A%2F%2F%2F([^&]+)/i);
+            if (match && match[1]) {
+              return decodeURIComponent(match[1]);
+            }
+            return null;
+          })()
+        `);
+        if (res && res.value) {
+          let currentDir = path.dirname(res.value);
+          while (currentDir && currentDir !== path.dirname(currentDir)) {
+            if (fs.existsSync(path.join(currentDir, '.git'))) {
+              return currentDir;
+            }
+            currentDir = path.dirname(currentDir);
+          }
+        }
+      } catch {}
+    }
+
+    // 2. Try resolving via explicit transcript path
+    if (explicitTranscriptPath && fs.existsSync(explicitTranscriptPath)) {
+      try {
+        const sample = fs.readFileSync(explicitTranscriptPath, 'utf-8').slice(0, 10000);
+        const match = sample.match(/Command Working Directory:\s*([^\r\n]+)/i) ||
+                      sample.match(/Active Workspaces:\s*\n-\s*([^\r\n]+)/i);
+        if (match && match[1] && fs.existsSync(match[1].trim())) {
+          return match[1].trim();
+        }
+      } catch {}
+    }
+
+    // 3. Check process.cwd() or parent directory with .git
+    let cwd = process.cwd();
+    while (cwd && cwd !== path.dirname(cwd)) {
+      if (fs.existsSync(path.join(cwd, '.git'))) {
+        return cwd;
+      }
+      cwd = path.dirname(cwd);
+    }
+
+    // 4. Default project directory
+    const defaultWorkspace = path.join(os.homedir(), 'Documents', 'antigravity', 'joyful-chandrasekhar');
+    if (fs.existsSync(path.join(defaultWorkspace, '.git'))) {
+      return defaultWorkspace;
+    }
+
+    return process.cwd();
+  }
+
+  /**
    * Executes the full host lifecycle: extracts telemetry, compiles registered
    * mods, resolves CDP port, and dispatches the payload to the Electron renderer.
    * @returns {Promise<any>}
@@ -2505,9 +2586,10 @@ class ModHost {
 
     // Check if a specific transcript was passed via CLI argument (--transcript <path>)
     let primaryMetric = null;
+    let explicitPath = null;
     const transcriptArgIdx = process.argv.indexOf('--transcript');
     if (transcriptArgIdx !== -1 && process.argv[transcriptArgIdx + 1]) {
-      const explicitPath = process.argv[transcriptArgIdx + 1];
+      explicitPath = process.argv[transcriptArgIdx + 1];
       primaryMetric = this.telemetryService.parseTranscriptFile(explicitPath);
     }
 
@@ -2520,13 +2602,18 @@ class ModHost {
       }
     }
 
+    const port = await this.portResolver.resolvePort();
+    const cdpClient = new CdpWebSocketClient({ port });
+
+    const repoPath = await this.resolveRepoPath(cdpClient, explicitPath);
+
     let gitLog = [];
     let gitStatus = { branch: '', isClean: true, ahead: 0, behind: 0 };
     let github = { isGitHub: false };
     try {
-      gitLog = this.gitService.getGitLog({ limit: 40 });
-      gitStatus = this.gitService.getGitStatus();
-      github = this.gitService.getGitHubMetadata();
+      gitLog = this.gitService.getGitLog({ repoPath, limit: 40 });
+      gitStatus = this.gitService.getGitStatus({ repoPath });
+      github = this.gitService.getGitHubMetadata({ repoPath });
     } catch (err) {}
 
     const hostContext = {
@@ -2537,13 +2624,11 @@ class ModHost {
       github,
       commits: gitLog,
       status: gitStatus,
+      activeRepo: github.fullName || path.basename(repoPath),
       timestamp: Date.now()
     };
 
     const payload = this.compilePayload(hostContext);
-    const port = await this.portResolver.resolvePort();
-    const cdpClient = new CdpWebSocketClient({ port });
-
     const evalRes = await cdpClient.evaluate(payload);
 
     // Sync selected agents from renderer localStorage to disk
@@ -3641,6 +3726,28 @@ function renderModsManagerPanelHtml() {
         </div>
         <label class="mod-switch">
           <input type="checkbox" id="mod-toggle-agent-selector" data-mod="agent-selector" checked>
+          <span class="mod-slider"></span>
+        </label>
+      </div>
+
+      <!-- Mod Card: Git Graph -->
+      <div class="mod-card">
+        <div class="mod-info">
+          <div class="mod-icon-box git-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="18" cy="18" r="3"></circle>
+              <circle cx="6" cy="6" r="3"></circle>
+              <path d="M18 15V9a9 9 0 0 0-9-9"></path>
+              <path d="M6 9v12"></path>
+            </svg>
+          </div>
+          <div class="mod-text">
+            <div class="mod-title">Git Graph Visualizer</div>
+            <div class="mod-desc">Visualizador de ramas, commits e historial de git en el panel auxiliar.</div>
+          </div>
+        </div>
+        <label class="mod-switch">
+          <input type="checkbox" id="mod-toggle-git-graph" data-mod="git-graph" checked>
           <span class="mod-slider"></span>
         </label>
       </div>

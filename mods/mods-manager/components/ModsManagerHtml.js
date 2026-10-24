@@ -89,6 +89,28 @@ export function renderModsManagerPanelHtml() {
         </label>
       </div>
 
+      <!-- Mod Card: Git Graph -->
+      <div class="mod-card">
+        <div class="mod-info">
+          <div class="mod-icon-box git-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="18" cy="18" r="3"></circle>
+              <circle cx="6" cy="6" r="3"></circle>
+              <path d="M18 15V9a9 9 0 0 0-9-9"></path>
+              <path d="M6 9v12"></path>
+            </svg>
+          </div>
+          <div class="mod-text">
+            <div class="mod-title">Git Graph Visualizer</div>
+            <div class="mod-desc">Visualizador de ramas, commits e historial de git en el panel auxiliar.</div>
+          </div>
+        </div>
+        <label class="mod-switch">
+          <input type="checkbox" id="mod-toggle-git-graph" data-mod="git-graph" checked>
+          <span class="mod-slider"></span>
+        </label>
+      </div>
+
       <!-- Mod Card: Background Persistence (Daemon Kill-Switch) -->
       <div class="mod-card daemon-card">
         <div class="mod-info">
