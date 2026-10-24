@@ -23,6 +23,7 @@ async function build() {
   const antigravityMod = cleanModuleCode('framework/sdk/AntigravityMod.js');
   const modLoader = cleanModuleCode('framework/core/ModLoader.js');
   const telemetryService = cleanModuleCode('framework/services/TelemetryService.js');
+  const agentSyncServer = cleanModuleCode('framework/services/AgentSyncServer.js');
   const agentDiscoveryService = cleanModuleCode('framework/services/AgentDiscoveryService.js');
   const modHost = cleanModuleCode('framework/core/ModHost.js');
 
@@ -59,6 +60,7 @@ async function build() {
 
   // 5. Assemble Standalone Bundle
   const bundle = `// Antigravity Mod Framework Runtime Host (Bundle)
+import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -78,6 +80,8 @@ ${antigravityMod}
 ${modLoader}
 
 ${telemetryService}
+
+${agentSyncServer}
 
 ${agentDiscoveryService}
 

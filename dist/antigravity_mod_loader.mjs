@@ -1,4 +1,5 @@
 // Antigravity Mod Framework Runtime Host (Bundle)
+import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -218,7 +219,8 @@ class CdpWebSocketClient {
       method: 'Runtime.evaluate',
       params: {
         expression,
-        returnByValue: true
+        returnByValue: true,
+        awaitPromise: true
       }
     };
   }
@@ -725,6 +727,40 @@ class ModLoader {
         styleTag.textContent = ${JSON.stringify(cssBundle)};
 
         // 2. Global Agent Selector & Tachometer Portal Handlers
+        window.__applyAgentToBadge = function(badge, agent) {
+          if (!badge || !agent) return;
+          const name = agent.name || 'Sin Agente';
+          const color = agent.color || '#94a3b8';
+          badge.setAttribute('title', 'Modo Activo: ' + name);
+          badge.style.borderColor = color + '66';
+          badge.style.boxShadow = '0 0 8px ' + color + '33';
+
+          const label = badge.querySelector('.antigravity-active-agent-name');
+          if (label) label.textContent = name;
+
+          const dot = badge.querySelector('.antigravity-active-agent-dot');
+          if (dot) {
+            dot.style.background = color;
+            dot.style.boxShadow = '0 0 6px ' + color;
+          }
+
+          const iconWrap = badge.querySelector('.antigravity-active-agent-icon');
+          if (iconWrap && agent.id) {
+            const item = document.querySelector('.antigravity-agent-item[data-agent-id="' + agent.id + '"]');
+            if (item) {
+              const svg = item.querySelector('svg');
+              if (svg) {
+                iconWrap.innerHTML = svg.outerHTML;
+                const innerSvg = iconWrap.querySelector('svg');
+                if (innerSvg) {
+                  innerSvg.setAttribute('width', '14');
+                  innerSvg.setAttribute('height', '14');
+                }
+              }
+            }
+          }
+        };
+
         window.__toggleAgentDropdown = function(e, badgeEl) {
           if (e) {
             e.stopPropagation();
@@ -746,6 +782,9 @@ class ModLoader {
             portal.innerHTML = template.innerHTML;
           }
 
+          const cascade = badge.closest('[data-cascade-id]');
+          const cascadeId = cascade ? cascade.getAttribute('data-cascade-id') : null;
+
           const isCurrentOpen = portal.classList.contains('open') && portal.__currentBadge === badge;
 
           // Close other popovers if open
@@ -766,10 +805,43 @@ class ModLoader {
           document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
           portal.classList.remove('open');
           portal.__currentBadge = null;
+          portal.__currentCascadeId = null;
 
           if (!isCurrentOpen) {
             badge.classList.add('open');
             portal.__currentBadge = badge;
+            portal.__currentCascadeId = cascadeId;
+
+            // Determine active agent for THIS chat
+            let activeId = 'default';
+            let activeName = 'Sin Agente';
+            try {
+              const map = JSON.parse(localStorage.getItem('__antigravity_selected_agents_map') || '{}');
+              if (cascadeId && map[cascadeId]) {
+                activeId = map[cascadeId].id;
+                activeName = map[cascadeId].name;
+              }
+            } catch (err) {}
+
+            // Update item highlights inside portal
+            portal.querySelectorAll('.antigravity-agent-item').forEach(el => {
+              const isMatch = el.getAttribute('data-agent-id') === activeId;
+              el.classList.toggle('selected', isMatch);
+              const pinBtn = el.querySelector('.agent-pin-btn');
+              if (pinBtn) {
+                pinBtn.classList.toggle('active', isMatch);
+                pinBtn.setAttribute('title', isMatch ? 'Agente activo (Fijado)' : 'Fijar este agente');
+                const pinIcon = pinBtn.querySelector('.agent-pin-icon');
+                if (pinIcon) {
+                  pinIcon.setAttribute('fill', isMatch ? 'currentColor' : 'none');
+                }
+              }
+            });
+
+            const footerText = portal.querySelector('.agent-footer-text');
+            if (footerText) {
+              footerText.textContent = 'Modo ' + activeName + ' activo en este chat';
+            }
 
             const rect = badge.getBoundingClientRect();
             const portalHeight = 390;
@@ -792,81 +864,99 @@ class ModLoader {
               closeBtn.onclick = () => {
                 portal.classList.remove('open');
                 portal.__currentBadge = null;
+                portal.__currentCascadeId = null;
                 badge.classList.remove('open');
               };
             }
           }
         };
 
-        window.__selectAntigravityAgent = function(agentId, agentName, agentColor) {
-          document.querySelectorAll('.antigravity-active-agent-name, #antigravity-active-agent-name').forEach(label => {
-            label.textContent = agentName;
-          });
-
-          // Sync Lucide SVG icon into active badge
-          const item = document.querySelector('.antigravity-agent-item[data-agent-id="' + agentId + '"]');
-          if (item) {
-            const svg = item.querySelector('svg');
-            if (svg) {
-              const svgMarkup = svg.outerHTML;
-              document.querySelectorAll('.antigravity-active-agent-icon, #antigravity-active-agent-icon').forEach(iconWrap => {
-                iconWrap.innerHTML = svgMarkup;
-                const innerSvg = iconWrap.querySelector('svg');
-                if (innerSvg) {
-                  innerSvg.setAttribute('width', '14');
-                  innerSvg.setAttribute('height', '14');
-                }
-              });
-            }
-          }
-
-          document.querySelectorAll('.antigravity-agent-badge, #antigravity-agent-badge').forEach(badge => {
-            badge.setAttribute('title', 'Modo Activo: ' + agentName);
-            badge.classList.remove('open');
-            if (agentColor) {
-              badge.style.borderColor = agentColor + '66';
-              badge.style.boxShadow = '0 0 8px ' + agentColor + '33';
-            }
-          });
-
-          document.querySelectorAll('.antigravity-active-agent-dot, #antigravity-active-agent-dot').forEach(dot => {
-            if (agentColor) {
-              dot.style.background = agentColor;
-              dot.style.boxShadow = '0 0 6px ' + agentColor;
-            }
-          });
-
+        window.__selectAntigravityAgent = function(agentId, agentName, agentColor, agentFilePath) {
           const portal = document.getElementById('antigravity-agent-dropdown-portal');
-          if (portal) {
-            const footerText = portal.querySelector('.agent-footer-text');
-            if (footerText) {
-              footerText.textContent = 'Modo ' + agentName + ' activo en tiempo real';
+          const currentBadge = portal ? portal.__currentBadge : null;
+          const cascadeId = (portal && portal.__currentCascadeId) ||
+            (currentBadge && currentBadge.closest('[data-cascade-id]')?.getAttribute('data-cascade-id')) ||
+            null;
+
+          const agentData = {
+            id: agentId,
+            name: agentName,
+            color: agentColor,
+            filePath: agentFilePath || ''
+          };
+
+          // Find target badge scoped to this chat
+          let targetBadge = currentBadge;
+          if (cascadeId) {
+            const container = document.querySelector('[data-cascade-id="' + cascadeId + '"]');
+            if (container) {
+              targetBadge = container.querySelector('.antigravity-agent-badge') || currentBadge;
             }
           }
 
+          if (targetBadge) {
+            window.__applyAgentToBadge(targetBadge, agentData);
+            targetBadge.classList.remove('open');
+          } else {
+            // Fallback for standalone badge
+            document.querySelectorAll('.antigravity-agent-badge').forEach(b => {
+              window.__applyAgentToBadge(b, agentData);
+              b.classList.remove('open');
+            });
+          }
+
+          // Save scoped per-chat state in localStorage
           try {
-            localStorage.setItem('__antigravity_selected_agent', JSON.stringify({ 
-              id: agentId, 
-              name: agentName,
-              color: agentColor 
-            }));
+            const map = JSON.parse(localStorage.getItem('__antigravity_selected_agents_map') || '{}');
+            if (cascadeId) {
+              map[cascadeId] = agentData;
+              localStorage.setItem('__antigravity_selected_agents_map', JSON.stringify(map));
+            }
+            // Keep legacy single-entry fallback
+            localStorage.setItem('__antigravity_selected_agent', JSON.stringify(agentData));
           } catch (e) {}
 
-          document.querySelectorAll('.antigravity-agent-item').forEach(el => {
-            const isMatch = el.getAttribute('data-agent-id') === agentId;
-            el.classList.toggle('selected', isMatch);
-            const check = el.querySelector('.agent-check');
-            if (check) check.textContent = isMatch ? '✓' : '';
-            const pinBtn = el.querySelector('.agent-pin-btn');
-            if (pinBtn) {
-              pinBtn.classList.toggle('active', isMatch);
-              pinBtn.setAttribute('title', isMatch ? 'Agente activo (Fijado)' : 'Fijar este agente');
-              const pinIcon = pinBtn.querySelector('.agent-pin-icon');
-              if (pinIcon) {
-                pinIcon.setAttribute('fill', isMatch ? 'currentColor' : 'none');
-              }
+          // Non-blocking sync to local bridge server (active_agents.json)
+          try {
+            if (cascadeId) {
+              fetch('http://127.0.0.1:53912/active-agent', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  cascadeId: cascadeId,
+                  agent: agentData
+                })
+              }).catch(function() {});
             }
-          });
+          } catch (e) {}
+
+          // Update portal UI state
+          if (portal) {
+            portal.classList.remove('open');
+            portal.__currentBadge = null;
+            portal.__currentCascadeId = null;
+
+            const footerText = portal.querySelector('.agent-footer-text');
+            if (footerText) {
+              footerText.textContent = 'Modo ' + agentName + ' activo en este chat';
+            }
+
+            portal.querySelectorAll('.antigravity-agent-item').forEach(el => {
+              const isMatch = el.getAttribute('data-agent-id') === agentId;
+              el.classList.toggle('selected', isMatch);
+              const check = el.querySelector('.agent-check');
+              if (check) check.textContent = isMatch ? '✓' : '';
+              const pinBtn = el.querySelector('.agent-pin-btn');
+              if (pinBtn) {
+                pinBtn.classList.toggle('active', isMatch);
+                pinBtn.setAttribute('title', isMatch ? 'Agente activo (Fijado)' : 'Fijar este agente');
+                const pinIcon = pinBtn.querySelector('.agent-pin-icon');
+                if (pinIcon) {
+                  pinIcon.setAttribute('fill', isMatch ? 'currentColor' : 'none');
+                }
+              }
+            });
+          }
         };
 
         window.__switchAgentTab = function(tabId) {
@@ -1274,15 +1364,21 @@ class ModLoader {
           // Restore saved mod visibility states
           window.__applyModsVisibility();
 
-          // Restore saved agent selection across all mounted badges
+          // Restore saved agent selection across mounted badges (scoped per chat)
           try {
-            const saved = localStorage.getItem('__antigravity_selected_agent');
-            if (saved) {
-              const parsed = JSON.parse(saved);
-              if (parsed && parsed.name) {
-                window.__selectAntigravityAgent(parsed.id, parsed.name, parsed.color);
+            const mapRaw = localStorage.getItem('__antigravity_selected_agents_map');
+            const map = mapRaw ? JSON.parse(mapRaw) : {};
+            const fallbackRaw = localStorage.getItem('__antigravity_selected_agent');
+            const fallbackAgent = fallbackRaw ? JSON.parse(fallbackRaw) : null;
+
+            document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {
+              const cascade = badge.closest('[data-cascade-id]');
+              const cId = cascade ? cascade.getAttribute('data-cascade-id') : null;
+              const agentToApply = (cId && map[cId]) ? map[cId] : (fallbackAgent || null);
+              if (agentToApply && agentToApply.name) {
+                window.__applyAgentToBadge(badge, agentToApply);
               }
-            }
+            });
           } catch (e) {}
 
           // Apply current telemetry
@@ -1560,6 +1656,157 @@ class TelemetryService {
 
 
 
+
+/**
+ * Lightweight local HTTP bridge server for synchronizing active agent selections
+ * from the Electron renderer directly to disk (~/.gemini/config/mods/active_agents.json).
+ */
+class AgentSyncServer {
+  /**
+   * @param {Object} [options]
+   * @param {number} [options.port] Port to listen on (default 53912)
+   * @param {string} [options.host] Host address (default 127.0.0.1)
+   * @param {string} [options.configPath] Path to active_agents.json
+   */
+  constructor(options = {}) {
+    this.port = options.port ?? 53912;
+    this.host = options.host || '127.0.0.1';
+    this.configPath = options.configPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'active_agents.json');
+    this.server = null;
+  }
+
+  /**
+   * Reads active agents map from disk.
+   * @returns {Object}
+   */
+  readActiveAgents() {
+    try {
+      if (fs.existsSync(this.configPath)) {
+        const raw = fs.readFileSync(this.configPath, 'utf-8');
+        return JSON.parse(raw);
+      }
+    } catch {}
+    return {};
+  }
+
+  /**
+   * Saves active agents map to disk atomically.
+   * @param {Object} data
+   */
+  writeActiveAgents(data) {
+    try {
+      const dir = path.dirname(this.configPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const tmpPath = `${this.configPath}.tmp.${Date.now()}`;
+      fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+      fs.renameSync(tmpPath, this.configPath);
+    } catch (err) {
+      // Fallback direct write
+      try {
+        fs.writeFileSync(this.configPath, JSON.stringify(data, null, 2), 'utf-8');
+      } catch {}
+    }
+  }
+
+  /**
+   * Updates an agent entry for a specific conversation cascadeId.
+   * @param {string} cascadeId
+   * @param {Object} agent
+   */
+  updateAgentForCascade(cascadeId, agent) {
+    if (!cascadeId) return;
+    const current = this.readActiveAgents();
+    current[cascadeId] = agent;
+    this.writeActiveAgents(current);
+  }
+
+  /**
+   * Starts the HTTP bridge server if not already running.
+   * @returns {Promise<boolean>}
+   */
+  async start() {
+    if (this.server) return true;
+
+    return new Promise((resolve) => {
+      this.server = http.createServer((req, res) => {
+        // Set CORS headers
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+        if (req.method === 'OPTIONS') {
+          res.writeHead(200);
+          res.end();
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/active-agent') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            try {
+              const payload = JSON.parse(body);
+              if (payload.cascadeId && payload.agent) {
+                this.updateAgentForCascade(payload.cascadeId, payload.agent);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, cascadeId: payload.cascadeId }));
+                return;
+              }
+            } catch {}
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid payload' }));
+          });
+          return;
+        }
+
+        if (req.method === 'GET' && req.url === '/active-agents') {
+          const data = this.readActiveAgents();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(data));
+          return;
+        }
+
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not found' }));
+      });
+
+      this.server.on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+          // Port already in use by another instance or daemon, which is fine
+          this.server = null;
+          resolve(false);
+        } else {
+          resolve(false);
+        }
+      });
+
+      this.server.listen(this.port, this.host, () => {
+        resolve(true);
+      });
+    });
+  }
+
+  /**
+   * Stops the server if running.
+   * @returns {Promise<void>}
+   */
+  async stop() {
+    if (!this.server) return;
+    return new Promise((resolve) => {
+      this.server.close(() => {
+        this.server = null;
+        resolve();
+      });
+    });
+  }
+}
+
+
+
+
+
 /**
  * Service responsible for discovering and parsing agent markdown files (*.agent.md, agent.md, Agente *.md, SKILL.md)
  * across workspace directories and global Antigravity/Gemini configuration vaults.
@@ -1743,6 +1990,7 @@ class AgentDiscoveryService {
 
 
 
+
 /**
  * Central orchestrator host for Antigravity Mod Framework.
  * Coordinates telemetry extraction, mod lifecycle, and CDP DOM dispatching.
@@ -1753,12 +2001,14 @@ class ModHost {
    * @param {SlotManager} [options.slotManager]
    * @param {ModLoader} [options.modLoader]
    * @param {TelemetryService} [options.telemetryService]
+   * @param {AgentSyncServer} [options.syncServer]
    * @param {CdpPortResolver} [options.portResolver]
    */
   constructor(options = {}) {
     this.slotManager = options.slotManager || new SlotManager();
     this.modLoader = options.modLoader || new ModLoader({ slotManager: this.slotManager });
     this.telemetryService = options.telemetryService || new TelemetryService();
+    this.syncServer = options.syncServer || new AgentSyncServer();
     this.portResolver = options.portResolver || new CdpPortResolver();
   }
 
@@ -1785,6 +2035,11 @@ class ModHost {
    * @returns {Promise<any>}
    */
   async dispatch() {
+    // Ensure agent sync bridge server is active
+    try {
+      await this.syncServer.start();
+    } catch {}
+
     const allMetrics = this.telemetryService.getAllMetrics();
 
     // Check if a specific transcript was passed via CLI argument (--transcript <path>)
@@ -1814,7 +2069,22 @@ class ModHost {
     const port = await this.portResolver.resolvePort();
     const cdpClient = new CdpWebSocketClient({ port });
 
-    return await cdpClient.evaluate(payload);
+    const evalRes = await cdpClient.evaluate(payload);
+
+    // Sync selected agents from renderer localStorage to disk
+    try {
+      const mapRes = await cdpClient.evaluate("localStorage.getItem('__antigravity_selected_agents_map')");
+      if (mapRes && mapRes.value) {
+        const parsed = JSON.parse(mapRes.value);
+        if (parsed && typeof parsed === 'object') {
+          const current = this.syncServer.readActiveAgents();
+          const merged = { ...current, ...parsed };
+          this.syncServer.writeActiveAgents(merged);
+        }
+      }
+    } catch {}
+
+    return evalRes;
   }
 }
 
@@ -2420,7 +2690,17 @@ function renderPinSvg(isActive, size = 15) {
 function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) {
   const mergedMap = new Map();
   for (const a of AGENT_REGISTRY) {
-    mergedMap.set(a.id, a);
+    let filePath = a.filePath || '';
+    if (!filePath && Array.isArray(dynamicAgents)) {
+      const match = dynamicAgents.find(d => 
+        d.id === a.id || 
+        d.id.includes(a.id.replace(/-/g, '_')) ||
+        (d.name && d.name.toLowerCase().includes(a.name.toLowerCase())) ||
+        (d.filePath && d.filePath.toLowerCase().includes(a.id.replace(/-/g, '_')))
+      );
+      if (match) filePath = match.filePath;
+    }
+    mergedMap.set(a.id, { ...a, filePath });
   }
   if (Array.isArray(dynamicAgents)) {
     for (const a of dynamicAgents) {
@@ -2451,8 +2731,9 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
       data-agent-id="default"
       data-agent-name="Sin Agente"
       data-agent-color="${defaultColor}"
+      data-agent-file=""
       style="--agent-theme-color: ${defaultColor};"
-      onclick="window.__selectAntigravityAgent('default', 'Sin Agente', '${defaultColor}')"
+      onclick="window.__selectAntigravityAgent('default', 'Sin Agente', '${defaultColor}', '')"
       title="Asistente Antigravity Estándar sin rol especializado"
     >
       <div class="agent-card-info">
@@ -2483,6 +2764,7 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
     const isSelected = agent.id === activeAgentId;
     const color = getAgentColor(agent.id);
     const safeName = (agent.name || '').replace(/'/g, "\\'");
+    const safeFile = (agent.filePath || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
     const svgIcon = renderAgentSvg(agent.id, 16, 2, 'cuspide-svg-icon');
 
     return `
@@ -2491,8 +2773,9 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
         data-agent-id="${agent.id}"
         data-agent-name="${safeName}"
         data-agent-color="${color}"
+        data-agent-file="${safeFile}"
         style="--agent-theme-color: ${color};"
-        onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}')"
+        onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}', this.getAttribute('data-agent-file'))"
         title="${agent.name} - ${agent.role}"
       >
         <div class="agent-card-info">
@@ -2526,6 +2809,7 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
     const isSelected = agent.id === activeAgentId;
     const color = getAgentColor(agent.id);
     const safeName = (agent.name || '').replace(/'/g, "\\'");
+    const safeFile = (agent.filePath || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
     const svgIcon = renderAgentSvg(agent.id, 14, 2, 'compact-svg-icon');
 
     return `
@@ -2534,8 +2818,9 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
         data-agent-id="${agent.id}"
         data-agent-name="${safeName}"
         data-agent-color="${color}"
+        data-agent-file="${safeFile}"
         style="--agent-theme-color: ${color};"
-        onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}')"
+        onclick="window.__selectAntigravityAgent('${agent.id}', '${safeName}', '${color}', this.getAttribute('data-agent-file'))"
         title="${agent.name} - ${agent.role}"
       >
         <div class="compact-icon-box" style="color: ${color}; background: ${color}18; border-color: ${color}33;">
