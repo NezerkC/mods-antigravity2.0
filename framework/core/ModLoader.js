@@ -106,17 +106,31 @@ export class ModLoader {
           if (!badge || !agent) return;
           const name = agent.name || 'Sin Agente';
           const color = agent.color || '#94a3b8';
-          badge.setAttribute('title', 'Modo Activo: ' + name);
-          badge.style.borderColor = color + '66';
-          badge.style.boxShadow = '0 0 8px ' + color + '33';
-
           const label = badge.querySelector('.antigravity-active-agent-name');
-          if (label) label.textContent = name;
-
           const dot = badge.querySelector('.antigravity-active-agent-dot');
-          if (dot) {
-            dot.style.background = color;
-            dot.style.boxShadow = '0 0 6px ' + color;
+
+          if (agent.id === 'auto') {
+            badge.classList.add('mode-auto');
+            badge.setAttribute('title', 'Modo Automático: Oscilando entre Plan y Build');
+            badge.style.borderColor = '';
+            badge.style.boxShadow = '';
+            if (label) {
+              label.innerHTML = '<span class="auto-oscillate-track"><span class="auto-oscillate-step plan">Plan</span><span class="auto-oscillate-step build">Build</span></span>';
+            }
+            if (dot) {
+              dot.style.background = '';
+              dot.style.boxShadow = '';
+            }
+          } else {
+            badge.classList.remove('mode-auto');
+            badge.setAttribute('title', 'Modo Activo: ' + name);
+            badge.style.borderColor = color + '66';
+            badge.style.boxShadow = '0 0 8px ' + color + '33';
+            if (label) label.textContent = name;
+            if (dot) {
+              dot.style.background = color;
+              dot.style.boxShadow = '0 0 6px ' + color;
+            }
           }
 
           const iconWrap = badge.querySelector('.antigravity-active-agent-icon');
