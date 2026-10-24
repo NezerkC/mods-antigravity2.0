@@ -89,6 +89,7 @@ test('GitService - getGitLog reads live repository commits', () => {
   assert.ok(head.author.name);
   assert.ok(head.author.avatarUrl);
   assert.ok(head.subject);
+  assert.ok(Array.isArray(head.files));
   assert.ok(typeof head.lane === 'number');
 });
 

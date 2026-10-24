@@ -559,6 +559,17 @@ export class ModLoader {
               row.addEventListener('click', () => {
                 hostEl.querySelectorAll('.git-commit-row.selected').forEach(r => r.classList.remove('selected'));
                 row.classList.add('selected');
+
+                const item = row.closest('.git-commit-item');
+                if (item) {
+                  const filesContainer = item.querySelector('.git-commit-files-container');
+                  if (filesContainer) {
+                    const isNowOpen = filesContainer.style.display !== 'none';
+                    filesContainer.style.display = isNowOpen ? 'none' : 'block';
+                    item.classList.toggle('is-expanded', !isNowOpen);
+                  }
+                }
+
                 const hash = row.getAttribute('data-hash');
                 const inspector = hostEl.querySelector('#antigravity-git-inspector');
                 if (inspector && hash) {

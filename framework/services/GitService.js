@@ -163,50 +163,68 @@ export class GitService {
     const limit = options.limit ?? 50;
 
     try {
-      // Format delimiter %x00 (null character):
-      // %H: commit hash
-      // %P: parent hashes
-      // %an: author name
-      // %ae: author email
-      // %at: author date UNIX timestamp
-      // %s: subject
-      // %D: ref names
-      const format = '%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%D';
-      const rawLog = execSync(`git log --format="${format}" -n ${limit}`, {
+      const format = 'COMMIT:%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%D';
+      const rawLog = execSync(`git log --format="${format}" --name-status -n ${limit}`, {
         cwd: repoPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore']
       });
 
-      const lines = rawLog.split('\n').filter(Boolean);
-      const rawCommits = lines.map(line => {
-        const parts = line.split('\0');
-        const hash = parts[0] || '';
-        const parents = parts[1] ? parts[1].split(' ').filter(Boolean) : [];
-        const authorName = parts[2] || 'Unknown';
-        const authorEmail = parts[3] || '';
-        const timestamp = parseInt(parts[4], 10) || Math.floor(Date.now() / 1000);
-        const subject = parts[5] || '';
-        const refNamesStr = parts[6] || '';
-        const refs = refNamesStr
-          ? refNamesStr.split(',').map(r => r.trim()).filter(Boolean)
-          : [];
+      const rawCommits = [];
+      let currentCommit = null;
 
-        return {
-          hash,
-          shortHash: hash.slice(0, 7),
-          parents,
-          author: {
-            name: authorName,
-            email: authorEmail,
-            avatarUrl: this.computeAvatarUrl(authorEmail)
-          },
-          date: timestamp,
-          relativeDate: this._formatRelativeTime(timestamp),
-          subject,
-          refs
-        };
-      });
+      const lines = rawLog.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        if (trimmed.startsWith('COMMIT:')) {
+          const parts = trimmed.slice(7).split('\0');
+          const hash = parts[0] || '';
+          const parents = parts[1] ? parts[1].split(' ').filter(Boolean) : [];
+          const authorName = parts[2] || 'Unknown';
+          const authorEmail = parts[3] || '';
+          const timestamp = parseInt(parts[4], 10) || Math.floor(Date.now() / 1000);
+          const subject = parts[5] || '';
+          const refNamesStr = parts[6] || '';
+          const refs = refNamesStr
+            ? refNamesStr.split(',').map(r => r.trim()).filter(Boolean)
+            : [];
+
+          currentCommit = {
+            hash,
+            shortHash: hash.slice(0, 7),
+            parents,
+            author: {
+              name: authorName,
+              email: authorEmail,
+              avatarUrl: this.computeAvatarUrl(authorEmail)
+            },
+            date: timestamp,
+            relativeDate: this._formatRelativeTime(timestamp),
+            subject,
+            refs,
+            files: []
+          };
+          rawCommits.push(currentCommit);
+        } else if (currentCommit) {
+          const parts = trimmed.split('\t');
+          if (parts.length >= 2) {
+            const status = parts[0].trim();
+            const filePath = parts[1].trim();
+            const fileName = path.basename(filePath);
+            const normDir = path.dirname(filePath).replace(/\//g, '\\');
+            const ext = path.extname(fileName).replace('.', '').toUpperCase() || 'FILE';
+            currentCommit.files.push({
+              status,
+              path: filePath,
+              fileName,
+              dir: normDir === '.' ? '' : normDir,
+              ext
+            });
+          }
+        }
+      }
 
       return this.computeTopology(rawCommits);
     } catch (err) {

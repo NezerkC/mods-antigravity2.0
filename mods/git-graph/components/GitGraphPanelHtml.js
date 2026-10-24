@@ -7,7 +7,7 @@ import { renderGitGraphSvg } from './GitGraphSvg.js';
 export function renderGitGraphTabButton() {
   return `
     <div class="antigravity-git-tab-wrapper">
-      <button class="antigravity-git-tab-btn" id="antigravity-git-tab-trigger" title="Git & GitHub Graph">
+      <button class="antigravity-git-tab-btn" id="antigravity-git-tab-trigger" title="Git &amp; GitHub Graph">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="6" y1="3" x2="6" y2="15"></line>
           <circle cx="6" cy="18" r="3"></circle>
@@ -22,7 +22,7 @@ export function renderGitGraphTabButton() {
 }
 
 /**
- * Generates HTML for the full Git & GitHub DAG visualizer panel.
+ * Generates HTML for the compact VS Code-style Git Graph visualizer panel.
  * @param {Object} context
  * @param {Array<Object>} [context.commits=[]]
  * @param {Object} [context.status={}]
@@ -36,76 +36,95 @@ export function renderGitGraphPanelHtml(context = {}) {
   const github = context.github || { isGitHub: false };
   const repoName = context.activeRepo || (github.fullName || 'workspace');
 
-  const svgGraph = renderGitGraphSvg(commits, { rowHeight: 44, laneWidth: 18, startX: 16 });
+  // By default expand the second commit if it has files (matching user screenshot), or none
+  commits.forEach((c, idx) => {
+    if (c.expanded === undefined) {
+      c.expanded = idx === 1 && Array.isArray(c.files) && c.files.length > 0;
+    }
+  });
 
-  // Generate commit list rows
+  const svgGraph = renderGitGraphSvg(commits, { rowHeight: 26, fileRowHeight: 22, laneWidth: 14, startX: 14 });
+
+  // Generate commit list items
   const commitRowsHtml = commits.map((c, idx) => {
     const isSelected = idx === 0;
-    const author = c.author || { name: 'Unknown', email: '', avatarUrl: '' };
-    const commitUrl = github.isGitHub && typeof github.getCommitUrl === 'function' ? github.getCommitUrl(c.hash) : '';
+    const isExpanded = !!c.expanded;
+    const files = Array.isArray(c.files) ? c.files : [];
+
+    // Ref Badges (branch pills)
     const refsHtml = (c.refs || []).map(ref => {
       const isHead = ref.includes('HEAD');
+      const isOrigin = ref.includes('origin/');
       const isTag = ref.includes('tag:');
-      const cls = isHead ? 'git-ref-head' : isTag ? 'git-ref-tag' : 'git-ref-branch';
-      return `<span class="git-ref-badge ${cls}">${escapeGitHtml(ref)}</span>`;
+      const cleanRef = ref.replace('HEAD -> ', '').replace('tag: ', '');
+
+      if (isOrigin) {
+        return `<span class="git-pill-branch git-pill-origin" title="${escapeGitHtml(ref)}"><span class="git-icon-cloud">☁</span>${escapeGitHtml(cleanRef)}</span>`;
+      }
+      return `<span class="git-pill-branch ${isHead ? 'git-pill-head' : 'git-pill-local'}" title="${escapeGitHtml(ref)}"><span class="git-icon-dot">⦿</span>${escapeGitHtml(cleanRef)}</span>`;
     }).join('');
 
+    // Inline file diff list
+    const filesListHtml = files.map(f => {
+      const extCls = getExtClass(f.ext);
+      const statusCls = f.status === 'A' ? 'status-added' : f.status === 'D' ? 'status-deleted' : 'status-modified';
+      return `
+        <div class="git-file-row">
+          <span class="git-file-ext ${extCls}">${escapeGitHtml(f.ext)}</span>
+          <span class="git-file-name" title="${escapeGitHtml(f.path)}">${escapeGitHtml(f.fileName)}</span>
+          <span class="git-file-dir">${escapeGitHtml(f.dir)}</span>
+          <span class="git-file-status ${statusCls}">${escapeGitHtml(f.status)}</span>
+        </div>
+      `;
+    }).join('');
+
+const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(c.hash) : '';
+    const author = c.author || { name: 'Unknown', email: '', avatarUrl: '' };
+
     return `
-      <div 
-        class="git-commit-row ${isSelected ? 'selected' : ''}" 
-        data-hash="${c.hash}" 
-        data-short-hash="${c.shortHash || c.hash.slice(0, 7)}"
-        data-author="${escapeGitHtml(author.name)}"
-        data-email="${escapeGitHtml(author.email || '')}"
-        data-avatar="${author.avatarUrl || ''}"
-        data-commit-url="${commitUrl}"
-        data-subject="${escapeGitHtml(c.subject || '')}"
-        data-index="${idx}" 
-        tabindex="0"
-      >
-        <div class="git-commit-col-info">
-          <div class="git-commit-top-row">
-            ${refsHtml}
-            <span class="git-commit-hash">${c.shortHash}</span>
-            <span class="git-commit-time">${c.relativeDate || ''}</span>
+      <div class="git-commit-item ${isExpanded ? 'is-expanded' : ''}" data-hash="${c.hash}" data-index="${idx}">
+        <div class="git-commit-row ${isSelected ? 'selected' : ''}" 
+             data-hash="${c.hash}" 
+             data-index="${idx}" 
+             data-short-hash="${c.shortHash}" 
+             data-commit-url="${commitUrl}" 
+             data-email="${escapeGitHtml(author.email)}" 
+             data-author="${escapeGitHtml(author.name)}" 
+             data-subject="${escapeGitHtml(c.subject)}" 
+             tabindex="0">
+          <div class="git-commit-main">
+            <span class="git-commit-subject" title="${escapeGitHtml(c.subject)}">${escapeGitHtml(c.subject)}</span>
+            <div class="git-commit-badges">
+              ${refsHtml}
+              ${files.length > 0 ? `<span class="git-pill-files" title="${files.length} changed files">📄${files.length}</span>` : ''}
+            </div>
           </div>
-          <div class="git-commit-subject" title="${escapeGitHtml(c.subject)}">${escapeGitHtml(c.subject)}</div>
-          <div class="git-commit-author-row">
-            <img class="git-author-avatar" src="${author.avatarUrl}" alt="${escapeGitHtml(author.name)}" loading="lazy"/>
-            <span class="git-author-name">${escapeGitHtml(author.name)}</span>
-          </div>
+        </div>
+        <div class="git-commit-files-container" style="display: ${isExpanded ? 'block' : 'none'};">
+          ${filesListHtml}
         </div>
       </div>
     `;
   }).join('');
 
-  const headCommit = commits[0] || null;
-
   return `
     <div class="antigravity-git-panel" id="antigravity-git-panel-root">
-      <!-- Header Bar -->
+      <!-- VS Code Style Minimal Header -->
       <div class="git-panel-header">
         <div class="git-panel-title-wrap">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="git-header-icon">
-            <line x1="6" y1="3" x2="6" y2="15"></line>
-            <circle cx="6" cy="18" r="3"></circle>
-            <circle cx="6" cy="6" r="3"></circle>
-            <path d="M6 9a9 9 0 0 1 9 9"></path>
-            <circle cx="18" cy="18" r="3"></circle>
-          </svg>
-          <span class="git-repo-badge" title="Active Repository">${escapeGitHtml(repoName)}</span>
-          <span class="git-branch-badge">${escapeGitHtml(status.branch)}${status.isClean ? '' : '*'}</span>
+          <span class="git-header-caret">⌄</span>
+          <span class="git-header-title">Graph</span>
+          <span class="git-header-repo" title="Active Repository">${escapeGitHtml(repoName)}</span>
+          <span class="git-branch-pill">${escapeGitHtml(status.branch)}${status.isClean ? '' : '*'}</span>
         </div>
         <div class="git-header-actions">
-          ${status.ahead > 0 ? `<span class="git-sync-badge ahead" title="Ahead of upstream">↑${status.ahead}</span>` : ''}
-          ${status.behind > 0 ? `<span class="git-sync-badge behind" title="Behind upstream">↓${status.behind}</span>` : ''}
-          ${github.isGitHub ? `<a href="${github.webUrl}" target="_blank" rel="noopener" class="git-github-link" title="Open on GitHub">GitHub ↗</a>` : ''}
-          <button class="git-refresh-btn" id="antigravity-git-refresh-btn" title="Refresh Git status">⟳</button>
-          <button class="git-close-btn" id="antigravity-git-close-btn" title="Close Git Graph">✕</button>
+          <span class="git-pill-auto">Auto</span>
+          <button class="git-tool-btn" id="antigravity-git-refresh-btn" title="Refresh Git status">↻</button>
+          <button class="git-tool-btn git-tool-close" id="antigravity-git-close-btn" title="Close Git Graph">✕</button>
         </div>
       </div>
 
-      <!-- Graph & Commit Tree Viewport -->
+      <!-- Graph & Commits Viewport -->
       <div class="git-graph-container">
         <div class="git-svg-column">
           ${svgGraph}
@@ -113,11 +132,6 @@ export function renderGitGraphPanelHtml(context = {}) {
         <div class="git-commits-column">
           ${commitRowsHtml}
         </div>
-      </div>
-
-      <!-- Bottom Selected Commit Inspector -->
-      <div class="git-commit-inspector" id="antigravity-git-inspector">
-        ${headCommit ? renderInspectorCard(headCommit, github) : '<div class="git-inspector-empty">No commit selected</div>'}
       </div>
     </div>
   `.trim();
@@ -131,7 +145,7 @@ export function renderGitGraphPanelHtml(context = {}) {
  */
 export function renderInspectorCard(commit, github = {}) {
   const author = commit.author || { name: 'Unknown', email: '', avatarUrl: '' };
-  const commitUrl = github.isGitHub && typeof github.getCommitUrl === 'function' ? github.getCommitUrl(commit.hash) : '';
+  const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(commit.hash) : '';
 
   return `
     <div class="git-inspector-header">
@@ -149,6 +163,17 @@ export function renderInspectorCard(commit, github = {}) {
     </div>
     <div class="git-inspector-subject">${escapeGitHtml(commit.subject)}</div>
   `.trim();
+}
+
+function getExtClass(ext = '') {
+  const e = String(ext).toUpperCase();
+  if (e === 'JS' || e === 'MJS' || e === 'CJS') return 'ext-js';
+  if (e === 'TS' || e === 'TSX') return 'ext-ts';
+  if (e === 'JSON') return 'ext-json';
+  if (e === 'CSS' || e === 'SCSS') return 'ext-css';
+  if (e === 'MD') return 'ext-md';
+  if (e === 'HTML') return 'ext-html';
+  return 'ext-default';
 }
 
 export function escapeGitHtml(str = '') {
