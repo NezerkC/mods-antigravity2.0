@@ -1,0 +1,8 @@
+{
+  "id": "git-graph",
+  "name": "Git & GitHub Topological Graph",
+  "version": "2.0.0",
+  "description": "Live DAG topology branch graph, collaborator avatars, and GitHub integration",
+  "slot": "aux-pane-tab",
+  "priority": 60
+}
