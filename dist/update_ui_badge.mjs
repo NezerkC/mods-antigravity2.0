@@ -28,7 +28,7 @@ class CdpPortResolver {
     this.host = options.host || '127.0.0.1';
     this.logDir = options.logDir || path.join(os.homedir(), 'AppData', 'Roaming', 'Antigravity', 'logs');
     this.defaultPort = options.defaultPort ?? 53908;
-    this.candidatePorts = options.candidatePorts || [53908, 9222, 9229, 53909, 53910];
+    this.candidatePorts = options.candidatePorts || [56547, 53908, 9222, 9229, 53909, 53910];
     this.probeTimeoutMs = options.probeTimeoutMs ?? 150;
   }
 
@@ -370,8 +370,15 @@ class SlotManager {
 
     return `
       (() => {
-        const anchors = Array.from(document.querySelectorAll('${slot.selector}'));
-        if (!anchors.length) return;
+        let anchors = Array.from(document.querySelectorAll('${slot.selector}'));
+        if (!anchors.length && '${slotId}' === 'aux-pane-tab') {
+          const auxBar = document.querySelector('[data-active-tab-id]') ||
+                         document.querySelector('.shrink-0.flex.items-center.gap-0\\\\.5.border-b') ||
+                         document.querySelector('div[class*="shrink-0"][class*="border-b"]');
+          if (auxBar) {
+            anchors = [auxBar.querySelector('.overflow-x-auto') || auxBar];
+          }
+        }
 
         // Clean up any misplaced legacy slot containers that were injected directly inside non-flex wrappers
         document.querySelectorAll('#${containerId}').forEach(el => {
@@ -379,6 +386,24 @@ class SlotManager {
             el.remove();
           }
         });
+
+        // If containers already exist in the DOM, ensure mod nodes are refreshed immediately
+        document.querySelectorAll('#${containerId}').forEach(container => {
+          let modNode = container.querySelector('#${modWrapperId}');
+          if (!modNode) {
+            modNode = document.createElement('div');
+            modNode.id = '${modWrapperId}';
+            modNode.className = '${modWrapperId}';
+            modNode.style.display = 'inline-flex';
+            modNode.style.alignItems = 'center';
+            modNode.style.height = '28px';
+            container.appendChild(modNode);
+          }
+          modNode.setAttribute('data-version', '2');
+          modNode.innerHTML = ${JSON.stringify(htmlContent)};
+        });
+
+        if (!anchors.length) return;
 
         for (const anchor of anchors) {
           let parent;
@@ -446,19 +471,17 @@ class SlotManager {
           }
 
           let modNode = container.querySelector('#${modWrapperId}');
-          if (!modNode || modNode.getAttribute('data-version') !== '2') {
-            if (!modNode) {
-              modNode = document.createElement('div');
-              modNode.id = '${modWrapperId}';
-              modNode.className = '${modWrapperId}';
-              modNode.style.display = 'inline-flex';
-              modNode.style.alignItems = 'center';
-              modNode.style.height = '28px';
-              container.appendChild(modNode);
-            }
-            modNode.setAttribute('data-version', '2');
-            modNode.innerHTML = ${JSON.stringify(htmlContent)};
+          if (!modNode) {
+            modNode = document.createElement('div');
+            modNode.id = '${modWrapperId}';
+            modNode.className = '${modWrapperId}';
+            modNode.style.display = 'inline-flex';
+            modNode.style.alignItems = 'center';
+            modNode.style.height = '28px';
+            container.appendChild(modNode);
           }
+          modNode.setAttribute('data-version', '2');
+          modNode.innerHTML = ${JSON.stringify(htmlContent)};
         }
       })();
     `;
@@ -538,6 +561,8 @@ class StyleIsolator {
             sel.includes('-portal') ||
             sel.includes('antigravity-agent-dropdown') ||
             sel.includes('antigravity-mods-manager-portal') ||
+            sel.includes('antigravity-git') ||
+            sel.includes('git-') ||
             sel.startsWith('.mod-') ||
             sel.startsWith('.mods-manager-') ||
             sel.startsWith('.agent-') ||
@@ -1160,16 +1185,25 @@ class ModLoader {
             hostEl.id = 'antigravity-git-panel-host';
             if (auxBody) {
               auxBody.style.position = 'relative';
-              hostEl.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:none; flex-direction:column; overflow:hidden; z-index:50; background:#0f111a;';
               auxBody.appendChild(hostEl);
             } else {
-              hostEl.style.cssText = 'position:fixed; right:0; top:40px; bottom:24px; width:420px; display:none; flex-direction:column; overflow:hidden; z-index:99999; background:#0f111a; box-shadow:-12px 0 30px rgba(0,0,0,0.7); border-left:1px solid #1e2438;';
               document.body.appendChild(hostEl);
             }
           }
 
+          if (auxBody && hostEl.parentElement !== auxBody) {
+            auxBody.style.position = 'relative';
+            auxBody.appendChild(hostEl);
+          }
+
+          if (hostEl.parentElement === auxBody) {
+            hostEl.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:' + (isCurrentActive ? 'none' : 'flex') + '; flex-direction:column; overflow:hidden; z-index:50; background:#0f111a;';
+          } else {
+            hostEl.style.cssText = 'position:fixed; right:0; top:40px; bottom:24px; width:420px; display:' + (isCurrentActive ? 'none' : 'flex') + '; flex-direction:column; overflow:hidden; z-index:99999; background:#0f111a; box-shadow:-12px 0 30px rgba(0,0,0,0.7); border-left:1px solid #1e2438;';
+          }
+
           if (isCurrentActive) {
-            hostEl.style.display = 'none';
+            // panel closed
           } else {
             const template = document.getElementById('antigravity-git-panel-template');
             if (template) {
