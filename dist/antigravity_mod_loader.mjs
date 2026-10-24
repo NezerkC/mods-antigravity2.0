@@ -1215,6 +1215,17 @@ class ModLoader {
               row.addEventListener('click', () => {
                 hostEl.querySelectorAll('.git-commit-row.selected').forEach(r => r.classList.remove('selected'));
                 row.classList.add('selected');
+
+                const item = row.closest('.git-commit-item');
+                if (item) {
+                  const filesContainer = item.querySelector('.git-commit-files-container');
+                  if (filesContainer) {
+                    const isNowOpen = filesContainer.style.display !== 'none';
+                    filesContainer.style.display = isNowOpen ? 'none' : 'block';
+                    item.classList.toggle('is-expanded', !isNowOpen);
+                  }
+                }
+
                 const hash = row.getAttribute('data-hash');
                 const inspector = hostEl.querySelector('#antigravity-git-inspector');
                 if (inspector && hash) {
@@ -2334,50 +2345,68 @@ class GitService {
     const limit = options.limit ?? 50;
 
     try {
-      // Format delimiter %x00 (null character):
-      // %H: commit hash
-      // %P: parent hashes
-      // %an: author name
-      // %ae: author email
-      // %at: author date UNIX timestamp
-      // %s: subject
-      // %D: ref names
-      const format = '%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%D';
-      const rawLog = execSync(`git log --format="${format}" -n ${limit}`, {
+      const format = 'COMMIT:%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%D';
+      const rawLog = execSync(`git log --format="${format}" --name-status -n ${limit}`, {
         cwd: repoPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore']
       });
 
-      const lines = rawLog.split('\n').filter(Boolean);
-      const rawCommits = lines.map(line => {
-        const parts = line.split('\0');
-        const hash = parts[0] || '';
-        const parents = parts[1] ? parts[1].split(' ').filter(Boolean) : [];
-        const authorName = parts[2] || 'Unknown';
-        const authorEmail = parts[3] || '';
-        const timestamp = parseInt(parts[4], 10) || Math.floor(Date.now() / 1000);
-        const subject = parts[5] || '';
-        const refNamesStr = parts[6] || '';
-        const refs = refNamesStr
-          ? refNamesStr.split(',').map(r => r.trim()).filter(Boolean)
-          : [];
+      const rawCommits = [];
+      let currentCommit = null;
 
-        return {
-          hash,
-          shortHash: hash.slice(0, 7),
-          parents,
-          author: {
-            name: authorName,
-            email: authorEmail,
-            avatarUrl: this.computeAvatarUrl(authorEmail)
-          },
-          date: timestamp,
-          relativeDate: this._formatRelativeTime(timestamp),
-          subject,
-          refs
-        };
-      });
+      const lines = rawLog.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        if (trimmed.startsWith('COMMIT:')) {
+          const parts = trimmed.slice(7).split('\0');
+          const hash = parts[0] || '';
+          const parents = parts[1] ? parts[1].split(' ').filter(Boolean) : [];
+          const authorName = parts[2] || 'Unknown';
+          const authorEmail = parts[3] || '';
+          const timestamp = parseInt(parts[4], 10) || Math.floor(Date.now() / 1000);
+          const subject = parts[5] || '';
+          const refNamesStr = parts[6] || '';
+          const refs = refNamesStr
+            ? refNamesStr.split(',').map(r => r.trim()).filter(Boolean)
+            : [];
+
+          currentCommit = {
+            hash,
+            shortHash: hash.slice(0, 7),
+            parents,
+            author: {
+              name: authorName,
+              email: authorEmail,
+              avatarUrl: this.computeAvatarUrl(authorEmail)
+            },
+            date: timestamp,
+            relativeDate: this._formatRelativeTime(timestamp),
+            subject,
+            refs,
+            files: []
+          };
+          rawCommits.push(currentCommit);
+        } else if (currentCommit) {
+          const parts = trimmed.split('\t');
+          if (parts.length >= 2) {
+            const status = parts[0].trim();
+            const filePath = parts[1].trim();
+            const fileName = path.basename(filePath);
+            const normDir = path.dirname(filePath).replace(/\//g, '\\');
+            const ext = path.extname(fileName).replace('.', '').toUpperCase() || 'FILE';
+            currentCommit.files.push({
+              status,
+              path: filePath,
+              fileName,
+              dir: normDir === '.' ? '' : normDir,
+              ext
+            });
+          }
+        }
+      }
 
       return this.computeTopology(rawCommits);
     } catch (err) {
@@ -3910,16 +3939,17 @@ class ModsManagerMod extends AntigravityMod {
 
 // ===================== Git Graph Mod =====================
 /**
- * Generates dynamic SVG topology graph paths and nodes for Git branches and commits.
+ * Generates dynamic SVG topology graph paths and nodes for Git branches and commits
+ * matching the compact VS Code Git Graph aesthetic.
  */
 
 const LANE_COLORS = [
-  '#38bdf8', // Cyan (Main)
+  '#38bdf8', // Sky Blue (Feature / Current branch)
+  '#f97316', // Orange (main / remote)
   '#a855f7', // Purple
   '#22c55e', // Emerald
-  '#f59e0b', // Amber
   '#ec4899', // Pink
-  '#06b6d4'  // Teal
+  '#06b6d4'  // Cyan
 ];
 
 /**
@@ -3935,10 +3965,11 @@ function getLaneColor(lane = 0) {
  * Renders topological SVG curves, lines, and nodes for an array of commits.
  * @param {Array<Object>} commits
  * @param {Object} [options]
- * @param {number} [options.rowHeight=44]
- * @param {number} [options.laneWidth=20]
- * @param {number} [options.startX=20]
- * @param {number} [options.startY=22]
+ * @param {number} [options.rowHeight=26] Base header row height
+ * @param {number} [options.fileRowHeight=22] Height per expanded file row
+ * @param {number} [options.laneWidth=14] Width per branch lane
+ * @param {number} [options.startX=14] Left margin for lane 0
+ * @param {number} [options.startY=13] Y-center of first row
  * @returns {string} SVG markup string
  */
 function renderGitGraphSvg(commits = [], options = {}) {
@@ -3946,10 +3977,11 @@ function renderGitGraphSvg(commits = [], options = {}) {
     return '';
   }
 
-  const rowHeight = options.rowHeight ?? 44;
-  const laneWidth = options.laneWidth ?? 20;
-  const startX = options.startX ?? 20;
-  const startY = options.startY ?? 22;
+  const rowHeight = options.rowHeight ?? 26;
+  const fileRowHeight = options.fileRowHeight ?? 22;
+  const laneWidth = options.laneWidth ?? 14;
+  const startX = options.startX ?? (options.laneWidth ? options.laneWidth : 14);
+  const startY = options.startY ?? 13;
 
   let maxLane = 0;
   for (const c of commits) {
@@ -3958,37 +3990,64 @@ function renderGitGraphSvg(commits = [], options = {}) {
     }
   }
 
-  const svgWidth = startX + (maxLane + 1) * laneWidth + 10;
-  const svgHeight = commits.length * rowHeight;
+  const svgWidth = Math.max(32, startX + (maxLane + 1) * laneWidth + 8);
+
+  // Compute Y-center coordinates for each commit taking expanded files into account
+  const commitCoords = [];
+  let currentY = 0;
+
+  for (let i = 0; i < commits.length; i++) {
+    const commit = commits[i];
+    const isExpanded = !!commit.expanded;
+    const fileCount = Array.isArray(commit.files) ? commit.files.length : 0;
+    const extraHeight = isExpanded ? fileCount * fileRowHeight : 0;
+
+    const cy = currentY + startY;
+    commitCoords.push({
+      cy,
+      lane: commit.lane ?? 0,
+      totalHeight: rowHeight + extraHeight
+    });
+
+    currentY += rowHeight + extraHeight;
+  }
+
+  const svgHeight = Math.max(currentY, commits.length * rowHeight);
 
   let pathsMarkup = '';
   let nodesMarkup = '';
 
   for (let i = 0; i < commits.length; i++) {
     const commit = commits[i];
-    const lane = commit.lane ?? 0;
+    const coord = commitCoords[i];
+    const lane = coord.lane;
     const cx = startX + lane * laneWidth;
-    const cy = startY + i * rowHeight;
+    const cy = coord.cy;
     const color = getLaneColor(lane);
 
-    // Draw connecting routes down to next rows
+    // Draw connecting routes down to next commit rows
     if (Array.isArray(commit.routes)) {
       for (const route of commit.routes) {
+        const nextIdx = i + 1;
+        if (nextIdx >= commits.length) continue;
+
+        const nextCoord = commitCoords[nextIdx];
         const fromX = startX + route.fromLane * laneWidth;
         const fromY = cy;
         const toX = startX + route.toLane * laneWidth;
-        const toY = cy + rowHeight;
+        const toY = nextCoord.cy;
         const routeColor = getLaneColor(Math.min(route.fromLane, route.toLane));
 
         if (route.fromLane === route.toLane) {
-          // Straight trunk line
+          // Straight vertical trunk line
           pathsMarkup += `
             <line x1="${fromX}" y1="${fromY}" x2="${toX}" y2="${toY}" stroke="${routeColor}" stroke-width="2" stroke-linecap="round"/>
           `;
         } else {
           // Curved Bezier branch or merge
-          const cpY1 = fromY + rowHeight * 0.5;
-          const cpY2 = toY - rowHeight * 0.5;
+          const deltaY = toY - fromY;
+          const cpY1 = fromY + deltaY * 0.45;
+          const cpY2 = toY - deltaY * 0.45;
           pathsMarkup += `
             <path d="M ${fromX} ${fromY} C ${fromX} ${cpY1}, ${toX} ${cpY2}, ${toX} ${toY}" fill="none" stroke="${routeColor}" stroke-width="2" stroke-linecap="round"/>
           `;
@@ -3997,22 +4056,28 @@ function renderGitGraphSvg(commits = [], options = {}) {
     }
 
     // Node Circle
-    const isHead = Array.isArray(commit.refs) && commit.refs.some(r => r.includes('HEAD'));
+    const isHead = (Array.isArray(commit.refs) && commit.refs.some(r => r.includes('HEAD'))) || i === 0;
     if (isHead) {
+      // Glowing halo ring around current/HEAD commit
       nodesMarkup += `
-        <circle cx="${cx}" cy="${cy}" r="7" fill="${color}" opacity="0.35"/>
+        <circle cx="${cx}" cy="${cy}" r="6.5" fill="none" stroke="${color}" stroke-width="1.8" class="git-node-halo"/>
+        <circle cx="${cx}" cy="${cy}" r="3" fill="${color}" class="git-node-head" data-hash="${commit.hash}"/>
+      `;
+    } else {
+      nodesMarkup += `
+        <circle cx="${cx}" cy="${cy}" r="3.5" fill="${color}" stroke="#181a1f" stroke-width="1.5" class="git-node" data-hash="${commit.hash}"/>
       `;
     }
-
-    nodesMarkup += `
-      <circle cx="${cx}" cy="${cy}" r="${isHead ? 5 : 4}" fill="${color}" stroke="#0f111a" stroke-width="2" class="git-node" data-hash="${commit.hash}"/>
-    `;
   }
 
   return `
-    <svg class="git-graph-svg" width="${svgWidth}" height="${svgHeight}" viewBox="0 0 ${svgWidth} ${svgHeight}">
-      <g class="git-routes">${pathsMarkup}</g>
-      <g class="git-nodes">${nodesMarkup}</g>
+    <svg class="git-graph-svg" width="${svgWidth}" height="${svgHeight}" viewBox="0 0 ${svgWidth} ${svgHeight}" style="min-width: ${svgWidth}px; height: ${svgHeight}px;" xmlns="http://www.w3.org/2000/svg">
+      <g class="git-graph-routes">
+        ${pathsMarkup}
+      </g>
+      <g class="git-graph-nodes">
+        ${nodesMarkup}
+      </g>
     </svg>
   `.trim();
 }
@@ -4026,7 +4091,7 @@ function renderGitGraphSvg(commits = [], options = {}) {
 function renderGitGraphTabButton() {
   return `
     <div class="antigravity-git-tab-wrapper">
-      <button class="antigravity-git-tab-btn" id="antigravity-git-tab-trigger" title="Git & GitHub Graph">
+      <button class="antigravity-git-tab-btn" id="antigravity-git-tab-trigger" title="Git &amp; GitHub Graph">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="6" y1="3" x2="6" y2="15"></line>
           <circle cx="6" cy="18" r="3"></circle>
@@ -4041,7 +4106,7 @@ function renderGitGraphTabButton() {
 }
 
 /**
- * Generates HTML for the full Git & GitHub DAG visualizer panel.
+ * Generates HTML for the compact VS Code-style Git Graph visualizer panel.
  * @param {Object} context
  * @param {Array<Object>} [context.commits=[]]
  * @param {Object} [context.status={}]
@@ -4055,76 +4120,95 @@ function renderGitGraphPanelHtml(context = {}) {
   const github = context.github || { isGitHub: false };
   const repoName = context.activeRepo || (github.fullName || 'workspace');
 
-  const svgGraph = renderGitGraphSvg(commits, { rowHeight: 44, laneWidth: 18, startX: 16 });
+  // By default expand the second commit if it has files (matching user screenshot), or none
+  commits.forEach((c, idx) => {
+    if (c.expanded === undefined) {
+      c.expanded = idx === 1 && Array.isArray(c.files) && c.files.length > 0;
+    }
+  });
 
-  // Generate commit list rows
+  const svgGraph = renderGitGraphSvg(commits, { rowHeight: 26, fileRowHeight: 22, laneWidth: 14, startX: 14 });
+
+  // Generate commit list items
   const commitRowsHtml = commits.map((c, idx) => {
     const isSelected = idx === 0;
-    const author = c.author || { name: 'Unknown', email: '', avatarUrl: '' };
-    const commitUrl = github.isGitHub && typeof github.getCommitUrl === 'function' ? github.getCommitUrl(c.hash) : '';
+    const isExpanded = !!c.expanded;
+    const files = Array.isArray(c.files) ? c.files : [];
+
+    // Ref Badges (branch pills)
     const refsHtml = (c.refs || []).map(ref => {
       const isHead = ref.includes('HEAD');
+      const isOrigin = ref.includes('origin/');
       const isTag = ref.includes('tag:');
-      const cls = isHead ? 'git-ref-head' : isTag ? 'git-ref-tag' : 'git-ref-branch';
-      return `<span class="git-ref-badge ${cls}">${escapeGitHtml(ref)}</span>`;
+      const cleanRef = ref.replace('HEAD -> ', '').replace('tag: ', '');
+
+      if (isOrigin) {
+        return `<span class="git-pill-branch git-pill-origin" title="${escapeGitHtml(ref)}"><span class="git-icon-cloud">☁</span>${escapeGitHtml(cleanRef)}</span>`;
+      }
+      return `<span class="git-pill-branch ${isHead ? 'git-pill-head' : 'git-pill-local'}" title="${escapeGitHtml(ref)}"><span class="git-icon-dot">⦿</span>${escapeGitHtml(cleanRef)}</span>`;
     }).join('');
 
+    // Inline file diff list
+    const filesListHtml = files.map(f => {
+      const extCls = getExtClass(f.ext);
+      const statusCls = f.status === 'A' ? 'status-added' : f.status === 'D' ? 'status-deleted' : 'status-modified';
+      return `
+        <div class="git-file-row">
+          <span class="git-file-ext ${extCls}">${escapeGitHtml(f.ext)}</span>
+          <span class="git-file-name" title="${escapeGitHtml(f.path)}">${escapeGitHtml(f.fileName)}</span>
+          <span class="git-file-dir">${escapeGitHtml(f.dir)}</span>
+          <span class="git-file-status ${statusCls}">${escapeGitHtml(f.status)}</span>
+        </div>
+      `;
+    }).join('');
+
+const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(c.hash) : '';
+    const author = c.author || { name: 'Unknown', email: '', avatarUrl: '' };
+
     return `
-      <div 
-        class="git-commit-row ${isSelected ? 'selected' : ''}" 
-        data-hash="${c.hash}" 
-        data-short-hash="${c.shortHash || c.hash.slice(0, 7)}"
-        data-author="${escapeGitHtml(author.name)}"
-        data-email="${escapeGitHtml(author.email || '')}"
-        data-avatar="${author.avatarUrl || ''}"
-        data-commit-url="${commitUrl}"
-        data-subject="${escapeGitHtml(c.subject || '')}"
-        data-index="${idx}" 
-        tabindex="0"
-      >
-        <div class="git-commit-col-info">
-          <div class="git-commit-top-row">
-            ${refsHtml}
-            <span class="git-commit-hash">${c.shortHash}</span>
-            <span class="git-commit-time">${c.relativeDate || ''}</span>
+      <div class="git-commit-item ${isExpanded ? 'is-expanded' : ''}" data-hash="${c.hash}" data-index="${idx}">
+        <div class="git-commit-row ${isSelected ? 'selected' : ''}" 
+             data-hash="${c.hash}" 
+             data-index="${idx}" 
+             data-short-hash="${c.shortHash}" 
+             data-commit-url="${commitUrl}" 
+             data-email="${escapeGitHtml(author.email)}" 
+             data-author="${escapeGitHtml(author.name)}" 
+             data-subject="${escapeGitHtml(c.subject)}" 
+             tabindex="0">
+          <div class="git-commit-main">
+            <span class="git-commit-subject" title="${escapeGitHtml(c.subject)}">${escapeGitHtml(c.subject)}</span>
+            <div class="git-commit-badges">
+              ${refsHtml}
+              ${files.length > 0 ? `<span class="git-pill-files" title="${files.length} changed files">📄${files.length}</span>` : ''}
+            </div>
           </div>
-          <div class="git-commit-subject" title="${escapeGitHtml(c.subject)}">${escapeGitHtml(c.subject)}</div>
-          <div class="git-commit-author-row">
-            <img class="git-author-avatar" src="${author.avatarUrl}" alt="${escapeGitHtml(author.name)}" loading="lazy"/>
-            <span class="git-author-name">${escapeGitHtml(author.name)}</span>
-          </div>
+        </div>
+        <div class="git-commit-files-container" style="display: ${isExpanded ? 'block' : 'none'};">
+          ${filesListHtml}
         </div>
       </div>
     `;
   }).join('');
 
-  const headCommit = commits[0] || null;
-
   return `
     <div class="antigravity-git-panel" id="antigravity-git-panel-root">
-      <!-- Header Bar -->
+      <!-- VS Code Style Minimal Header -->
       <div class="git-panel-header">
         <div class="git-panel-title-wrap">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="git-header-icon">
-            <line x1="6" y1="3" x2="6" y2="15"></line>
-            <circle cx="6" cy="18" r="3"></circle>
-            <circle cx="6" cy="6" r="3"></circle>
-            <path d="M6 9a9 9 0 0 1 9 9"></path>
-            <circle cx="18" cy="18" r="3"></circle>
-          </svg>
-          <span class="git-repo-badge" title="Active Repository">${escapeGitHtml(repoName)}</span>
-          <span class="git-branch-badge">${escapeGitHtml(status.branch)}${status.isClean ? '' : '*'}</span>
+          <span class="git-header-caret">⌄</span>
+          <span class="git-header-title">Graph</span>
+          <span class="git-header-repo" title="Active Repository">${escapeGitHtml(repoName)}</span>
+          <span class="git-branch-pill">${escapeGitHtml(status.branch)}${status.isClean ? '' : '*'}</span>
         </div>
         <div class="git-header-actions">
-          ${status.ahead > 0 ? `<span class="git-sync-badge ahead" title="Ahead of upstream">↑${status.ahead}</span>` : ''}
-          ${status.behind > 0 ? `<span class="git-sync-badge behind" title="Behind upstream">↓${status.behind}</span>` : ''}
-          ${github.isGitHub ? `<a href="${github.webUrl}" target="_blank" rel="noopener" class="git-github-link" title="Open on GitHub">GitHub ↗</a>` : ''}
-          <button class="git-refresh-btn" id="antigravity-git-refresh-btn" title="Refresh Git status">⟳</button>
-          <button class="git-close-btn" id="antigravity-git-close-btn" title="Close Git Graph">✕</button>
+          <span class="git-pill-auto">Auto</span>
+          <button class="git-tool-btn" id="antigravity-git-refresh-btn" title="Refresh Git status">↻</button>
+          <button class="git-tool-btn git-tool-close" id="antigravity-git-close-btn" title="Close Git Graph">✕</button>
         </div>
       </div>
 
-      <!-- Graph & Commit Tree Viewport -->
+      <!-- Graph & Commits Viewport -->
       <div class="git-graph-container">
         <div class="git-svg-column">
           ${svgGraph}
@@ -4132,11 +4216,6 @@ function renderGitGraphPanelHtml(context = {}) {
         <div class="git-commits-column">
           ${commitRowsHtml}
         </div>
-      </div>
-
-      <!-- Bottom Selected Commit Inspector -->
-      <div class="git-commit-inspector" id="antigravity-git-inspector">
-        ${headCommit ? renderInspectorCard(headCommit, github) : '<div class="git-inspector-empty">No commit selected</div>'}
       </div>
     </div>
   `.trim();
@@ -4150,7 +4229,7 @@ function renderGitGraphPanelHtml(context = {}) {
  */
 function renderInspectorCard(commit, github = {}) {
   const author = commit.author || { name: 'Unknown', email: '', avatarUrl: '' };
-  const commitUrl = github.isGitHub && typeof github.getCommitUrl === 'function' ? github.getCommitUrl(commit.hash) : '';
+  const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(commit.hash) : '';
 
   return `
     <div class="git-inspector-header">
@@ -4168,6 +4247,17 @@ function renderInspectorCard(commit, github = {}) {
     </div>
     <div class="git-inspector-subject">${escapeGitHtml(commit.subject)}</div>
   `.trim();
+}
+
+function getExtClass(ext = '') {
+  const e = String(ext).toUpperCase();
+  if (e === 'JS' || e === 'MJS' || e === 'CJS') return 'ext-js';
+  if (e === 'TS' || e === 'TSX') return 'ext-ts';
+  if (e === 'JSON') return 'ext-json';
+  if (e === 'CSS' || e === 'SCSS') return 'ext-css';
+  if (e === 'MD') return 'ext-md';
+  if (e === 'HTML') return 'ext-html';
+  return 'ext-default';
 }
 
 function escapeGitHtml(str = '') {
@@ -4201,7 +4291,7 @@ class GitGraphMod extends AntigravityMod {
       priority: 60
     });
 
-    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY GIT & GITHUB GRAPH MOD - STYLES\r\n   Native Auxiliary Pane Tab & Lazygit-style DAG visualizer\r\n   ========================================================================= */\r\n\r\n/* Tab Button in Auxiliary Pane Header */\r\n.antigravity-git-tab-wrapper {\r\n  display: inline-flex;\r\n  align-items: center;\r\n}\r\n\r\n.antigravity-git-tab-btn {\r\n  height: 28px !important;\r\n  padding: 0 8px !important;\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #94a3b8 !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.antigravity-git-tab-btn:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  color: #f8fafc !important;\r\n}\r\n\r\n.antigravity-git-tab-btn.active {\r\n  background: #1e2438 !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n/* Full Auxiliary Panel Body */\r\n.antigravity-git-panel {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  background: #0f111a !important;\r\n  color: #e2e8f0 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, monospace, sans-serif !important;\r\n  overflow: hidden !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* Header Bar */\r\n.git-panel-header {\r\n  height: 40px !important;\r\n  min-height: 40px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  padding: 0 12px !important;\r\n  background: #151824 !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-panel-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-header-icon {\r\n  color: #38bdf8 !important;\r\n}\r\n\r\n.git-repo-badge {\r\n  font-size: 12px !important;\r\n  font-weight: 700 !important;\r\n  color: #f1f5f9 !important;\r\n  letter-spacing: -0.01em !important;\r\n}\r\n\r\n.git-branch-badge {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: #18273d !important;\r\n  border: 1px solid rgba(14, 165, 233, 0.4) !important;\r\n  color: #38bdf8 !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-header-actions {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-sync-badge {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n.git-sync-badge.ahead {\r\n  background: #064e3b !important;\r\n  color: #34d399 !important;\r\n}\r\n\r\n.git-sync-badge.behind {\r\n  background: #7f1d1d !important;\r\n  color: #f87171 !important;\r\n}\r\n\r\n.git-github-link {\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  color: #94a3b8 !important;\r\n  text-decoration: none !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n.git-github-link:hover {\r\n  color: #f1f5f9 !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-refresh-btn {\r\n  background: transparent !important;\r\n  border: none !important;\r\n  color: #94a3b8 !important;\r\n  font-size: 14px !important;\r\n  cursor: pointer !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n.git-refresh-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n/* Graph & Commit Tree Split Container */\r\n.git-graph-container {\r\n  display: flex !important;\r\n  flex: 1 1 auto !important;\r\n  overflow-y: auto !important;\r\n  overflow-x: hidden !important;\r\n  position: relative !important;\r\n  background: #0d0f17 !important;\r\n}\r\n\r\n.git-svg-column {\r\n  flex: 0 0 auto !important;\r\n  position: sticky !important;\r\n  left: 0 !important;\r\n  z-index: 2 !important;\r\n}\r\n\r\n.git-commits-column {\r\n  flex: 1 1 auto !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n/* Commit Row: exactly 44px height to match SVG topology node alignment */\r\n.git-commit-row {\r\n  height: 44px !important;\r\n  min-height: 44px !important;\r\n  max-height: 44px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  padding: 0 8px 0 4px !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.03) !important;\r\n  cursor: pointer !important;\r\n  transition: background 0.1s ease !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.git-commit-row:hover {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.git-commit-row.selected {\r\n  background: #182238 !important;\r\n  border-left: 2px solid #38bdf8 !important;\r\n}\r\n\r\n.git-commit-col-info {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  width: 100% !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-commit-top-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-ref-badge {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 4px !important;\r\n  border-radius: 3px !important;\r\n  line-height: 1 !important;\r\n}\r\n\r\n.git-ref-head {\r\n  background: #0284c7 !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.git-ref-branch {\r\n  background: #1e293b !important;\r\n  border: 1px solid #38bdf8 !important;\r\n  color: #7dd3fc !important;\r\n}\r\n\r\n.git-ref-tag {\r\n  background: #064e3b !important;\r\n  border: 1px solid #34d399 !important;\r\n  color: #a7f3d0 !important;\r\n}\r\n\r\n.git-commit-hash {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n}\r\n\r\n.git-commit-time {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n  margin-left: auto !important;\r\n}\r\n\r\n.git-commit-subject {\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  color: #cbd5e1 !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.git-commit-author-row {\r\n  display: none !important; /* available in inspector */\r\n}\r\n\r\n/* Bottom Inspector */\r\n.git-commit-inspector {\r\n  flex: 0 0 auto !important;\r\n  height: 90px !important;\r\n  min-height: 90px !important;\r\n  background: #141724 !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  padding: 8px 12px !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  justify-content: space-between !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.git-inspector-header {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.git-inspector-author {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-inspector-avatar {\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 50% !important;\r\n  background: #1e293b !important;\r\n}\r\n\r\n.git-inspector-author-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n.git-inspector-author-name {\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  color: #f8fafc !important;\r\n}\r\n\r\n.git-inspector-author-email {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n}\r\n\r\n.git-inspector-hash-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-inspector-hash {\r\n  font-family: monospace !important;\r\n  font-size: 11px !important;\r\n  color: #38bdf8 !important;\r\n}\r\n\r\n.git-inspector-gh-link {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  color: #7dd3fc !important;\r\n  text-decoration: none !important;\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n.git-inspector-subject {\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #e2e8f0 !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.git-inspector-empty {\r\n  font-size: 11px !important;\r\n  color: #64748b !important;\r\n  text-align: center !important;\r\n  padding-top: 24px !important;\r\n}\r\n";
+    this.cachedCss = "/* =========================================================================\n   ANTIGRAVITY GIT & GITHUB GRAPH MOD - VS CODE STYLE\n   Ultra-compact, lightweight DAG commit tree & inline file diff visualizer\n   ========================================================================= */\n\n/* Tab Button in Auxiliary Pane Header */\n.antigravity-git-tab-wrapper {\n  display: inline-flex;\n  align-items: center;\n}\n\n.antigravity-git-tab-btn {\n  height: 28px !important;\n  padding: 0 8px !important;\n  font-size: 12px !important;\n  font-weight: 500 !important;\n  color: #94a3b8 !important;\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  transition: all 0.15s ease !important;\n  user-select: none !important;\n}\n\n.antigravity-git-tab-btn:hover {\n  background: rgba(255, 255, 255, 0.06) !important;\n  color: #f8fafc !important;\n}\n\n.antigravity-git-tab-btn.active {\n  background: #1e2438 !important;\n  color: #38bdf8 !important;\n  border-color: rgba(56, 189, 248, 0.25) !important;\n}\n\n/* Full Auxiliary Panel Body */\n.antigravity-git-panel {\n  display: flex !important;\n  flex-direction: column !important;\n  width: 100% !important;\n  height: 100% !important;\n  background: #181a1f !important;\n  color: #e2e8f0 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, monospace, sans-serif !important;\n  overflow: hidden !important;\n  box-sizing: border-box !important;\n}\n\n/* VS Code Minimal Header Bar */\n.git-panel-header {\n  height: 32px !important;\n  min-height: 32px !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  padding: 0 10px !important;\n  background: #1e222b !important;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;\n  user-select: none !important;\n}\n\n.git-panel-title-wrap {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  overflow: hidden !important;\n}\n\n.git-header-caret {\n  font-size: 12px !important;\n  color: #94a3b8 !important;\n}\n\n.git-header-title {\n  font-size: 12px !important;\n  font-weight: 600 !important;\n  color: #f1f5f9 !important;\n}\n\n.git-header-repo {\n  font-size: 11px !important;\n  color: #64748b !important;\n  max-width: 140px !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n}\n\n.git-branch-pill {\n  font-size: 10px !important;\n  font-weight: 600 !important;\n  padding: 1px 6px !important;\n  border-radius: 4px !important;\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\n  font-family: monospace !important;\n}\n\n.git-header-actions {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n}\n\n.git-pill-auto {\n  font-size: 10px !important;\n  color: #94a3b8 !important;\n  background: rgba(255, 255, 255, 0.05) !important;\n  padding: 1px 5px !important;\n  border-radius: 3px !important;\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\n}\n\n.git-tool-btn {\n  background: transparent !important;\n  border: none !important;\n  color: #94a3b8 !important;\n  font-size: 12px !important;\n  cursor: pointer !important;\n  padding: 2px 4px !important;\n  border-radius: 4px !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n}\n\n.git-tool-btn:hover {\n  background: rgba(255, 255, 255, 0.1) !important;\n  color: #f1f5f9 !important;\n}\n\n.git-tool-close:hover {\n  background: rgba(239, 68, 68, 0.2) !important;\n  color: #ef4444 !important;\n}\n\n/* Graph & Commits Viewport */\n.git-graph-container {\n  display: flex !important;\n  flex: 1 1 0% !important;\n  overflow-y: auto !important;\n  overflow-x: hidden !important;\n  position: relative !important;\n  scrollbar-width: thin !important;\n  scrollbar-color: rgba(255, 255, 255, 0.15) transparent !important;\n}\n\n.git-graph-container::-webkit-scrollbar {\n  width: 6px !important;\n}\n\n.git-graph-container::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15) !important;\n  border-radius: 3px !important;\n}\n\n.git-svg-column {\n  flex-shrink: 0 !important;\n  position: relative !important;\n}\n\n.git-graph-svg {\n  display: block !important;\n}\n\n.git-commits-column {\n  flex: 1 1 0% !important;\n  min-width: 0 !important;\n  display: flex !important;\n  flex-direction: column !important;\n}\n\n/* Individual Commit Item */\n.git-commit-item {\n  display: flex !important;\n  flex-direction: column !important;\n  width: 100% !important;\n}\n\n.git-commit-row {\n  height: 26px !important;\n  min-height: 26px !important;\n  display: flex !important;\n  align-items: center !important;\n  padding: 0 8px 0 4px !important;\n  cursor: pointer !important;\n  border-radius: 0 !important;\n  transition: background 0.1s ease !important;\n  user-select: none !important;\n  overflow: hidden !important;\n}\n\n.git-commit-row:hover {\n  background: rgba(255, 255, 255, 0.04) !important;\n}\n\n.git-commit-row.selected {\n  background: rgba(56, 189, 248, 0.12) !important;\n}\n\n.git-commit-main {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  width: 100% !important;\n  min-width: 0 !important;\n  gap: 8px !important;\n}\n\n.git-commit-subject {\n  font-size: 12px !important;\n  color: #e2e8f0 !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n  flex: 1 1 0% !important;\n}\n\n.git-commit-badges {\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 4px !important;\n  flex-shrink: 0 !important;\n}\n\n/* Branch & Ref Badges (VS Code Pill Style) */\n.git-pill-branch {\n  font-size: 10px !important;\n  font-weight: 500 !important;\n  padding: 1px 6px !important;\n  border-radius: 10px !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 3px !important;\n  white-space: nowrap !important;\n  font-family: monospace !important;\n}\n\n.git-pill-local {\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\n}\n\n.git-pill-head {\n  background: rgba(56, 189, 248, 0.22) !important;\n  color: #7dd3fc !important;\n  border: 1px solid rgba(56, 189, 248, 0.5) !important;\n  box-shadow: 0 0 6px rgba(56, 189, 248, 0.25) !important;\n}\n\n.git-pill-origin {\n  background: rgba(249, 115, 22, 0.15) !important;\n  color: #fb923c !important;\n  border: 1px solid rgba(249, 115, 22, 0.35) !important;\n}\n\n.git-pill-files {\n  font-size: 9px !important;\n  color: #64748b !important;\n  background: rgba(255, 255, 255, 0.05) !important;\n  padding: 1px 4px !important;\n  border-radius: 3px !important;\n}\n\n.git-icon-cloud {\n  font-size: 10px !important;\n}\n\n.git-icon-dot {\n  font-size: 9px !important;\n}\n\n/* Expandable Inline File Diff List */\n.git-commit-files-container {\n  display: flex !important;\n  flex-direction: column !important;\n  background: rgba(0, 0, 0, 0.25) !important;\n  border-left: 2px solid rgba(56, 189, 248, 0.3) !important;\n  margin-left: 14px !important;\n  padding: 2px 0 !important;\n}\n\n.git-file-row {\n  height: 22px !important;\n  min-height: 22px !important;\n  display: flex !important;\n  align-items: center !important;\n  padding: 0 10px 0 8px !important;\n  font-size: 11px !important;\n  gap: 8px !important;\n  overflow: hidden !important;\n}\n\n.git-file-row:hover {\n  background: rgba(255, 255, 255, 0.04) !important;\n}\n\n.git-file-ext {\n  font-size: 9px !important;\n  font-weight: 700 !important;\n  padding: 1px 4px !important;\n  border-radius: 3px !important;\n  font-family: monospace !important;\n  letter-spacing: -0.02em !important;\n}\n\n.ext-js {\n  background: rgba(234, 179, 8, 0.18) !important;\n  color: #facc15 !important;\n  border: 1px solid rgba(234, 179, 8, 0.35) !important;\n}\n\n.ext-ts {\n  background: rgba(59, 130, 246, 0.18) !important;\n  color: #60a5fa !important;\n  border: 1px solid rgba(59, 130, 246, 0.35) !important;\n}\n\n.ext-json {\n  background: rgba(34, 197, 94, 0.18) !important;\n  color: #4ade80 !important;\n  border: 1px solid rgba(34, 197, 94, 0.35) !important;\n}\n\n.ext-css {\n  background: rgba(6, 182, 212, 0.18) !important;\n  color: #22d3ee !important;\n  border: 1px solid rgba(6, 182, 212, 0.35) !important;\n}\n\n.ext-md {\n  background: rgba(168, 85, 247, 0.18) !important;\n  color: #c084fc !important;\n  border: 1px solid rgba(168, 85, 247, 0.35) !important;\n}\n\n.ext-default {\n  background: rgba(148, 163, 184, 0.18) !important;\n  color: #cbd5e1 !important;\n  border: 1px solid rgba(148, 163, 184, 0.3) !important;\n}\n\n.git-file-name {\n  color: #e2e8f0 !important;\n  font-weight: 500 !important;\n  white-space: nowrap !important;\n}\n\n.git-file-dir {\n  color: #64748b !important;\n  font-family: monospace !important;\n  font-size: 10px !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n  flex: 1 1 0% !important;\n}\n\n.git-file-status {\n  font-size: 10px !important;\n  font-weight: 700 !important;\n  font-family: monospace !important;\n}\n\n.status-modified {\n  color: #eab308 !important;\n}\n\n.status-added {\n  color: #22c55e !important;\n}\n\n.status-deleted {\n  color: #ef4444 !important;\n}\n";
   }
 
   /**
