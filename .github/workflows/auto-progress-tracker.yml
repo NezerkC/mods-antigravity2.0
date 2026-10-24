@@ -26,6 +26,7 @@ jobs:
 
             const owner = context.repo.owner;
             const repo = context.repo.repo;
+            const read = (p) => fs.existsSync(p) ? fs.readFileSync(p, 'utf-8') : '';
 
             const tasks = [
               {
@@ -99,6 +100,103 @@ jobs:
                 title: 'T12: Developer Ergonomics, Mod Templates & Authoring Guide',
                 isDone: () => fs.existsSync('docs/MOD_AUTHORING_GUIDE.md') && fs.existsSync('mods/template/manifest.json') && fs.existsSync('tests/verify_loader.mjs'),
                 coachTip: 'Publicar la guía de autoría de mods, la plantilla starter y el script de verificación en vivo.'
+              },
+              {
+                id: 'T13',
+                title: 'T13: Fix Unmerged Auto Agent Card, Broken Template Imports & Repo Hygiene',
+                isDone: () => {
+                  const dropdown = read('mods/agent-selector/components/AgentDropdownHtml.js');
+                  const tpl = read('mods/template/index.js');
+                  return dropdown.includes('AUTO_AGENT') &&
+                    dropdown.includes('auto-mode-card') &&
+                    tpl.includes('../../framework/sdk/AntigravityMod.js') &&
+                    !fs.existsSync('apps/scientific_calculator');
+                },
+                coachTip: 'Integrar AUTO_AGENT y auto-mode-card en AgentDropdownHtml.js e icono auto en AgentIcons.js, corregir imports en mods/template/index.js y docs/MOD_AUTHORING_GUIDE.md, alinear versiones 2.0.0 y eliminar apps/scientific_calculator.'
+              },
+              {
+                id: 'T14',
+                title: 'T14: Fix ModDaemon Live Telemetry & Git Refresh Deadlock + mountAll Exposure',
+                isDone: () => {
+                  return read('framework/core/ModLoader.js').includes('window.__antigravityMountAll = mountAllMods') &&
+                    read('framework/core/ModDaemon.js').includes('refreshTelemetry');
+                },
+                coachTip: 'Exponer window.__antigravityMountAll = mountAllMods en ModLoader.js y agregar refreshTelemetry() en ModDaemon.tick() para actualizar telemetría y Git Graph en vivo sin congelarse tras la primera inyección.'
+              },
+              {
+                id: 'T15',
+                title: 'T15: Complete GitGraphMod Integration in Host, ModsManager, Visibility & Release Packaging',
+                isDone: () => {
+                  return read('mods/mods-manager/components/ModsManagerHtml.js').includes('mod-toggle-git-graph') &&
+                    read('tools/package_release.mjs').includes('git-graph') &&
+                    read('framework/index.js').includes('GitService');
+                },
+                coachTip: 'Agregar el switch mod-toggle-git-graph en ModsManagerHtml.js y ModLoader.js, unificar framework/host.js con createDefaultHost(), exportar GitService/AgentSyncServer en framework/index.js e incluir git-graph en tools/package_release.mjs.'
+              },
+              {
+                id: 'T16',
+                title: 'T16: Fix DOM XSS in Git Inspector & Agent Dropdown + Preserve Inspector Metadata',
+                isDone: () => {
+                  return read('mods/agent-selector/components/AgentDropdownHtml.js').includes('escapeHtml') &&
+                    read('mods/git-graph/components/GitGraphPanelHtml.js').includes('data-commit-url');
+                },
+                coachTip: 'Sanitizar interpolaciones HTML con escapeHtml() en AgentDropdownHtml.js y ModLoader.js, y preservar data-email y data-commit-url en cada fila .git-commit-row para no perder el enlace View Commit al seleccionar un commit.'
+              },
+              {
+                id: 'T17',
+                title: 'T17: Fix Multi-Panel Split-View Bugs, Duplicate DOM IDs & Tachometer Popover Collision',
+                isDone: () => {
+                  return read('framework/core/ModLoader.js').includes('portal.__currentBadge === badge') &&
+                    read('mods/context-tachometer/components/GaugeSvg.js').includes('getGaugeMetrics');
+                },
+                coachTip: 'Verificar portal.__currentBadge === badge en __updateAntigravityTelemetry, extraer getGaugeMetrics(pct) en GaugeSvg.js, preservar estado abierto de #antigravity-agent-dropdown-portal y usar data-render-hash en SlotManager.js.'
+              },
+              {
+                id: 'T18',
+                title: 'T18: Fix StyleIsolator @media Query Scoping Leakage & Generic Portal Selectors',
+                isDone: () => {
+                  return read('framework/sdk/StyleIsolator.js').includes('@media') &&
+                    read('tests/unit/style_isolator.test.mjs').includes('@media');
+                },
+                coachTip: 'Aplicar scopeCss recursivamente al contenido de bloques @media en framework/sdk/StyleIsolator.js y agregar pruebas unitarias en tests/unit/style_isolator.test.mjs.'
+              },
+              {
+                id: 'T19',
+                title: 'T19: Optimize TelemetryService & AgentDiscoveryService with mtime/TTL Caching',
+                isDone: () => {
+                  return read('framework/services/TelemetryService.js').includes('this.cache') &&
+                    read('framework/services/AgentDiscoveryService.js').includes('scratch');
+                },
+                coachTip: 'Implementar caché en memoria por mtimeMs y size en TelemetryService.js (eliminando JSON.stringify(obj.tool_calls)) y excluir scratch/tests con caché TTL en AgentDiscoveryService.js.'
+              },
+              {
+                id: 'T20',
+                title: 'T20: Optimize GitService Subprocesses, Dynamic Workspace Resolution & AgentSyncServer Unref',
+                isDone: () => {
+                  return read('framework/services/AgentSyncServer.js').includes('.unref()') &&
+                    read('framework/services/GitService.js').includes('avatarCache');
+                },
+                coachTip: 'Consolidar getGitStatus() con git status --porcelain -b, memoizar computeAvatarUrl con avatarCache en GitService.js y llamar this.server.unref() con límite de payload en AgentSyncServer.js.'
+              },
+              {
+                id: 'T21',
+                title: 'T21: Throttle MutationObserver & ResizeObserver + Single-Pass CDP Evaluation',
+                isDone: () => {
+                  const loader = read('framework/core/ModLoader.js');
+                  return loader.includes('if (mountDebounce) return') &&
+                    loader.includes('aux-pane-new-tab-button') &&
+                    read('framework/core/ModHost.js').includes('selectedAgentsMap');
+                },
+                coachTip: 'Cortocircuitar MutationObserver cuando mountDebounce está activo, vigilar aux-pane-new-tab-button, usar contentRect.width en ResizeObserver y consolidar la lectura de localStorage en la evaluación CDP única de ModHost.js.'
+              },
+              {
+                id: 'T22',
+                title: 'T22: Decouple Mod Client Scripts from ModLoader, Optimize Bundle Shim & Add Architecture Fitness Tests',
+                isDone: () => {
+                  return fs.existsSync('tests/unit/architecture_fitness.test.mjs') &&
+                    !read('framework/core/ModLoader.js').includes('../../mods/');
+                },
+                coachTip: 'Eliminar imports estáticos hacia ../../mods/ en ModLoader.js, activar onInit/onUpdate con try/catch en ModHost.js, convertir update_ui_badge.mjs en shim ligero y crear tests/unit/architecture_fitness.test.mjs.'
               }
             ];
 
