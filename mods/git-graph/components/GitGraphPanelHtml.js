@@ -50,6 +50,16 @@ export function renderGitGraphPanelHtml(context = {}) {
     }
   });
 
+  let syncBadgeHtml = '';
+  if (status.ahead > 0 || status.behind > 0) {
+    const parts = [];
+    if (status.ahead > 0) parts.push(`⇡${status.ahead}`);
+    if (status.behind > 0) parts.push(`⇣${status.behind}`);
+    syncBadgeHtml = `<span class="git-sync-badge ${status.ahead > 0 ? 'is-ahead' : ''} ${status.behind > 0 ? 'is-behind' : ''}" title="${status.ahead} por subir (ahead), ${status.behind} por bajar (behind)">${parts.join(' ')}</span>`;
+  } else if (status.upstream) {
+    syncBadgeHtml = `<span class="git-sync-badge is-synced" title="Sincronizado con ${escapeGitHtml(status.upstream)}">✓ Synced</span>`;
+  }
+
   const svgGraph = renderGitGraphSvg(commits, { rowHeight: 26, fileRowHeight: 22, laneWidth: 14, startX: 14 });
   const prCiHtml = renderPrCiCardHtml(pullRequest, status, github);
 
@@ -83,6 +93,14 @@ export function renderGitGraphPanelHtml(context = {}) {
     const files = Array.isArray(c.files) ? c.files : [];
     const hasOrigin = (c.refs || []).some(r => r.includes('origin/'));
     const commitType = hasOrigin ? 'remote' : 'local';
+    const isUnpushed = c.syncStatus === 'ahead' || !!c.isUnpushed;
+    const isUnpulled = c.syncStatus === 'behind' || !!c.isUnpulled;
+    let syncPillHtml = '';
+    if (isUnpushed) {
+      syncPillHtml = `<span class="git-pill-sync git-pill-unpushed" title="Commit local pendiente de push">⇡ Unpushed</span>`;
+    } else if (isUnpulled) {
+      syncPillHtml = `<span class="git-pill-sync git-pill-unpulled" title="Commit remoto pendiente de pull">⇣ Unpulled</span>`;
+    }
 
     // Ref Badges (branch pills)
     const refsHtml = (c.refs || []).map(ref => {
@@ -132,7 +150,7 @@ export function renderGitGraphPanelHtml(context = {}) {
             <span class="git-commit-chevron ${files.length > 0 ? 'has-files' : ''}">${files.length > 0 ? (isExpanded ? '▾' : '▸') : '•'}</span>
             <span class="git-commit-subject" title="${escapeGitHtml(c.subject)}">${escapeGitHtml(c.subject)}</span>
             <div class="git-commit-badges">
-              ${refsHtml}
+              ${refsHtml}${syncPillHtml}
               ${files.length > 0 ? `<button class="git-pill-files" title="Clic para expandir/colapsar ${files.length} archivos">📄${files.length}</button>` : ''}
             </div>
           </div>
@@ -153,6 +171,7 @@ export function renderGitGraphPanelHtml(context = {}) {
           <span class="git-header-title">Graph</span>
           <span class="git-header-repo" title="Active Repository">${escapeGitHtml(repoName)}</span>
           <span class="git-branch-pill">${escapeGitHtml(status.branch)}${status.isClean ? '' : '*'}</span>
+          ${syncBadgeHtml}
         </div>
         <div class="git-header-actions">
           <button class="git-tool-btn" id="antigravity-git-toggle-all-btn" title="Expandir/Colapsar todos los archivos">⇕</button>
@@ -225,6 +244,13 @@ export function renderInspectorCard(commit, github = {}) {
   const filesCount = Array.isArray(commit.files) ? commit.files.length : 0;
   const relativeTime = commit.relativeDate || '';
 
+  let syncInspectorBadge = '';
+  if (commit.syncStatus === 'ahead' || commit.isUnpushed) {
+    syncInspectorBadge = '<span class="git-inspector-sync-badge is-unpushed" title="Commit local pendiente de push">⇡ Unpushed</span>';
+  } else if (commit.syncStatus === 'behind' || commit.isUnpulled) {
+    syncInspectorBadge = '<span class="git-inspector-sync-badge is-unpulled" title="Commit remoto pendiente de pull">⇣ Unpulled</span>';
+  }
+
   return `
     <div class="git-inspector-card">
       <div class="git-inspector-top">
@@ -243,6 +269,7 @@ export function renderInspectorCard(commit, github = {}) {
         </div>
 
         <div class="git-inspector-meta-group">
+          ${syncInspectorBadge}
           <span class="git-inspector-hash-pill" title="Hash completo: ${escapeGitHtml(commit.hash)}">${escapeGitHtml(shortHash)}</span>
           ${commitUrl ? `<a href="${commitUrl}" target="_blank" rel="noopener" class="git-inspector-btn-gh" title="Ver commit en GitHub">GitHub ↗</a>` : ''}
           <button class="git-inspector-btn-close" id="antigravity-git-inspector-close-btn" title="Cerrar inspector">✕</button>

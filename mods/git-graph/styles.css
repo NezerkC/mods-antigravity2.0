@@ -993,3 +993,75 @@
   font-size: 10px !important;
   color: #94a3b8 !important;
 }
+
+/* --- Sync & Ahead/Behind Indicators --- */
+.git-sync-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 3px !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  padding: 1px 6px !important;
+  border-radius: 10px !important;
+  background: rgba(234, 179, 8, 0.15) !important;
+  color: #eab308 !important;
+  border: 1px solid rgba(234, 179, 8, 0.35) !important;
+  margin-left: 4px !important;
+  line-height: 1.2 !important;
+}
+
+.git-sync-badge.is-behind {
+  background: rgba(56, 189, 248, 0.15) !important;
+  color: #38bdf8 !important;
+  border-color: rgba(56, 189, 248, 0.35) !important;
+}
+
+.git-sync-badge.is-synced {
+  background: rgba(34, 197, 94, 0.12) !important;
+  color: #4ade80 !important;
+  border-color: rgba(34, 197, 94, 0.3) !important;
+}
+
+.git-pill-sync {
+  display: inline-flex !important;
+  align-items: center !important;
+  font-size: 9px !important;
+  font-weight: 700 !important;
+  padding: 1px 5px !important;
+  border-radius: 4px !important;
+  letter-spacing: 0.3px !important;
+  margin-left: 4px !important;
+}
+
+.git-pill-unpushed {
+  background: rgba(245, 158, 11, 0.2) !important;
+  color: #fbbf24 !important;
+  border: 1px solid rgba(245, 158, 11, 0.4) !important;
+}
+
+.git-pill-unpulled {
+  background: rgba(14, 165, 233, 0.2) !important;
+  color: #38bdf8 !important;
+  border: 1px solid rgba(14, 165, 233, 0.4) !important;
+}
+
+.git-inspector-sync-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  padding: 2px 7px !important;
+  border-radius: 4px !important;
+}
+
+.git-inspector-sync-badge.is-unpushed {
+  background: rgba(245, 158, 11, 0.2) !important;
+  color: #fbbf24 !important;
+  border: 1px solid rgba(245, 158, 11, 0.4) !important;
+}
+
+.git-inspector-sync-badge.is-unpulled {
+  background: rgba(14, 165, 233, 0.2) !important;
+  color: #38bdf8 !important;
+  border: 1px solid rgba(14, 165, 233, 0.4) !important;
+}
