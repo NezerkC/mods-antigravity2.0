@@ -379,3 +379,298 @@
 .status-deleted {
   color: #ef4444 !important;
 }
+
+
+/* =========================================================================
+   PULL REQUEST & CI/CD STATUS CARD STYLES
+   ========================================================================= */
+
+.git-pr-card {
+  padding: 8px 12px !important;
+  background: #13161f !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+  font-size: 11px !important;
+}
+
+.git-pr-none {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  color: #64748b !important;
+  background: #11141c !important;
+  padding: 6px 12px !important;
+}
+
+.git-pr-none-left {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+}
+
+.git-pr-icon {
+  font-size: 13px !important;
+  color: #38bdf8 !important;
+}
+
+.git-pr-none-right {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.git-pr-sync-badge {
+  font-size: 10px !important;
+  padding: 1px 6px !important;
+  border-radius: 4px !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: #94a3b8 !important;
+}
+
+.git-pr-create-link {
+  font-size: 10px !important;
+  color: #38bdf8 !important;
+  text-decoration: none !important;
+  font-weight: 500 !important;
+}
+
+.git-pr-create-link:hover {
+  text-decoration: underline !important;
+}
+
+.git-pr-card-main {
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+}
+
+.git-pr-header-col {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 3px !important;
+  min-width: 0 !important;
+  flex: 1 1 0% !important;
+}
+
+.git-pr-badge-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+}
+
+.git-pr-state-badge {
+  font-size: 9px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  padding: 1px 5px !important;
+  border-radius: 4px !important;
+  letter-spacing: 0.5px !important;
+}
+
+.state-open {
+  background: rgba(34, 197, 94, 0.2) !important;
+  color: #4ade80 !important;
+  border: 1px solid rgba(34, 197, 94, 0.4) !important;
+}
+
+.state-merged {
+  background: rgba(168, 85, 247, 0.2) !important;
+  color: #c084fc !important;
+  border: 1px solid rgba(168, 85, 247, 0.4) !important;
+}
+
+.state-closed {
+  background: rgba(239, 68, 68, 0.2) !important;
+  color: #f87171 !important;
+  border: 1px solid rgba(239, 68, 68, 0.4) !important;
+}
+
+.git-pr-num-link {
+  font-weight: 700 !important;
+  color: #60a5fa !important;
+  text-decoration: none !important;
+  font-family: monospace !important;
+}
+
+.git-pr-num-link:hover {
+  text-decoration: underline !important;
+}
+
+.git-pr-branch-flow {
+  color: #94a3b8 !important;
+  font-size: 10px !important;
+  font-family: monospace !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.git-pr-title {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  color: #f1f5f9 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+/* CI/CD Rollup Button */
+.git-pr-ci-badge-wrap {
+  flex-shrink: 0 !important;
+}
+
+.git-ci-rollup-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  padding: 3px 8px !important;
+  border-radius: 5px !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  border: 1px solid transparent !important;
+  transition: all 0.15s ease !important;
+  user-select: none !important;
+}
+
+.ci-status-success {
+  background: rgba(34, 197, 94, 0.15) !important;
+  color: #4ade80 !important;
+  border-color: rgba(34, 197, 94, 0.3) !important;
+}
+
+.ci-status-success:hover {
+  background: rgba(34, 197, 94, 0.25) !important;
+}
+
+.ci-status-pending {
+  background: rgba(234, 179, 8, 0.15) !important;
+  color: #facc15 !important;
+  border-color: rgba(234, 179, 8, 0.3) !important;
+}
+
+.ci-status-pending:hover {
+  background: rgba(234, 179, 8, 0.25) !important;
+}
+
+.ci-status-failure {
+  background: rgba(239, 68, 68, 0.15) !important;
+  color: #f87171 !important;
+  border-color: rgba(239, 68, 68, 0.3) !important;
+}
+
+.ci-status-failure:hover {
+  background: rgba(239, 68, 68, 0.25) !important;
+}
+
+.git-ci-caret {
+  font-size: 10px !important;
+  opacity: 0.7 !important;
+}
+
+/* CI Checks Accordion */
+.git-ci-checks-accordion {
+  margin-top: 4px !important;
+  padding: 6px 8px !important;
+  border-radius: 6px !important;
+  background: #0d1017 !important;
+  border: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+.git-ci-checks-header {
+  display: flex !important;
+  justify-content: space-between !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  color: #94a3b8 !important;
+  margin-bottom: 6px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.5px !important;
+}
+
+.git-ci-checks-count {
+  font-family: monospace !important;
+  color: #4ade80 !important;
+}
+
+.git-ci-checks-list {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 4px !important;
+}
+
+.git-ci-check-item {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 3px 6px !important;
+  border-radius: 4px !important;
+  background: rgba(255, 255, 255, 0.02) !important;
+  font-size: 11px !important;
+}
+
+.git-ci-check-icon {
+  font-size: 11px !important;
+  width: 14px !important;
+  text-align: center !important;
+}
+
+.check-success .git-ci-check-icon {
+  color: #22c55e !important;
+}
+
+.check-fail .git-ci-check-icon {
+  color: #ef4444 !important;
+}
+
+.check-pending .git-ci-check-icon {
+  color: #eab308 !important;
+}
+
+.git-ci-check-info {
+  display: flex !important;
+  flex-direction: column !important;
+  min-width: 0 !important;
+  flex: 1 1 0% !important;
+}
+
+.git-ci-check-name {
+  color: #e2e8f0 !important;
+  font-weight: 500 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.git-ci-check-wf {
+  color: #64748b !important;
+  font-size: 9px !important;
+}
+
+.git-ci-check-link {
+  font-size: 10px !important;
+  color: #38bdf8 !important;
+  text-decoration: none !important;
+  font-family: monospace !important;
+}
+
+.git-ci-check-link:hover {
+  text-decoration: underline !important;
+}
+
+.git-ci-empty {
+  color: #64748b !important;
+  font-size: 10px !important;
+  padding: 4px !important;
+}
+
+/* Inspector Mount at Bottom */
+.git-inspector-mount {
+  padding: 8px 12px !important;
+  background: #11141c !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+}

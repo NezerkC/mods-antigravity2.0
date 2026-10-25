@@ -140,3 +140,16 @@ test('GitGraphPanelHtml - embeds PR and CI/CD card markup in panel template', ()
   assert.ok(panelHtml.includes('antigravity-git-pr-card'));
 });
 
+test('GitGraphMod - uses initialContext and includes PR card styles', () => {
+  const mod = new GitGraphMod({
+    initialContext: {
+      status: { branch: 'feat/test-initial', isClean: true },
+      commits: []
+    }
+  });
+  const rendered = mod.render();
+  assert.ok(rendered.html.includes('feat/test-initial'));
+  assert.ok(rendered.css.includes('.git-pr-card'));
+});
+
+
