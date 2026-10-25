@@ -122,7 +122,17 @@ export class AgentSyncServer {
 
         if (req.method === 'GET' && (req.url === '/vcs/overview' || req.url.startsWith('/vcs/overview?'))) {
           try {
-            const data = this.vcsOrchestrator.getRepositoryOverview();
+            let targetRepo = this.repoPath;
+            try {
+              const urlObj = new URL(req.url, 'http://127.0.0.1');
+              const qRepo = urlObj.searchParams.get('repoPath');
+              if (qRepo && fs.existsSync(qRepo)) {
+                targetRepo = qRepo;
+                this.repoPath = qRepo;
+              }
+            } catch {}
+
+            const data = this.vcsOrchestrator.getRepositoryOverview({ repoPath: targetRepo });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(data));
           } catch (err) {

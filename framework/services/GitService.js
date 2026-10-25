@@ -163,6 +163,30 @@ export class GitService {
     const limit = options.limit ?? 50;
 
     try {
+      let aheadHashes = new Set();
+      let behindHashes = new Set();
+      try {
+        const aheadOut = execSync('git rev-list @{u}..HEAD', {
+          cwd: repoPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore']
+        }).trim();
+        if (aheadOut) {
+          aheadOut.split(/\s+/).filter(Boolean).forEach(h => aheadHashes.add(h));
+        }
+      } catch {}
+
+      try {
+        const behindOut = execSync('git rev-list HEAD..@{u}', {
+          cwd: repoPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore']
+        }).trim();
+        if (behindOut) {
+          behindOut.split(/\s+/).filter(Boolean).forEach(h => behindHashes.add(h));
+        }
+      } catch {}
+
       const format = 'COMMIT:%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%D';
       const rawLog = execSync(`git log --format="${format}" --name-status -n ${limit}`, {
         cwd: repoPath,
@@ -191,6 +215,7 @@ export class GitService {
             ? refNamesStr.split(',').map(r => r.trim()).filter(Boolean)
             : [];
 
+          const syncStatus = aheadHashes.has(hash) ? 'ahead' : behindHashes.has(hash) ? 'behind' : 'synced';
           currentCommit = {
             hash,
             shortHash: hash.slice(0, 7),
@@ -204,6 +229,9 @@ export class GitService {
             relativeDate: this._formatRelativeTime(timestamp),
             subject,
             refs,
+            syncStatus,
+            isUnpushed: syncStatus === 'ahead',
+            isUnpulled: syncStatus === 'behind',
             files: []
           };
           rawCommits.push(currentCommit);
@@ -266,6 +294,15 @@ export class GitService {
 
       let ahead = 0;
       let behind = 0;
+      let upstream = null;
+      try {
+        upstream = execSync('git rev-parse --abbrev-ref @{u}', {
+          cwd: repoPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore']
+        }).trim();
+      } catch {}
+
       try {
         const revCounts = execSync('git rev-list --left-right --count HEAD...@{u}', {
           cwd: repoPath,
@@ -284,6 +321,7 @@ export class GitService {
       return {
         isRepo: true,
         branch,
+        upstream: upstream || null,
         isClean: changedFiles.length === 0,
         changedFiles,
         ahead,
@@ -293,6 +331,7 @@ export class GitService {
       return {
         isRepo: false,
         branch: '',
+        upstream: null,
         isClean: true,
         changedFiles: [],
         ahead: 0,
