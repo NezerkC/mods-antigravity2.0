@@ -1,4 +1,5 @@
 import { renderGitGraphSvg } from './GitGraphSvg.js';
+import { renderPrCiCardHtml } from './PrCiCardHtml.js';
 
 /**
  * Generates HTML for the auxiliary pane tab trigger button.
@@ -27,6 +28,7 @@ export function renderGitGraphTabButton() {
  * @param {Array<Object>} [context.commits=[]]
  * @param {Object} [context.status={}]
  * @param {Object} [context.github={}]
+ * @param {Object} [context.pullRequest=null]
  * @param {string} [context.activeRepo='']
  * @returns {string}
  */
@@ -34,9 +36,10 @@ export function renderGitGraphPanelHtml(context = {}) {
   const commits = Array.isArray(context.commits) ? context.commits : [];
   const status = context.status || { branch: 'main', isClean: true, ahead: 0, behind: 0 };
   const github = context.github || { isGitHub: false };
+  const pullRequest = context.pullRequest || null;
   const repoName = context.activeRepo || (github.fullName || 'workspace');
 
-  // By default expand the second commit if it has files (matching user screenshot), or none
+  // By default expand the second commit if it has files, or none
   commits.forEach((c, idx) => {
     if (c.expanded === undefined) {
       c.expanded = idx === 1 && Array.isArray(c.files) && c.files.length > 0;
@@ -44,6 +47,7 @@ export function renderGitGraphPanelHtml(context = {}) {
   });
 
   const svgGraph = renderGitGraphSvg(commits, { rowHeight: 26, fileRowHeight: 22, laneWidth: 14, startX: 14 });
+  const prCiHtml = renderPrCiCardHtml(pullRequest, status, github);
 
   // Generate commit list items
   const commitRowsHtml = commits.map((c, idx) => {
@@ -78,7 +82,7 @@ export function renderGitGraphPanelHtml(context = {}) {
       `;
     }).join('');
 
-const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(c.hash) : '';
+    const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(c.hash) : '';
     const author = c.author || { name: 'Unknown', email: '', avatarUrl: '' };
 
     return `
@@ -119,10 +123,13 @@ const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(c
         </div>
         <div class="git-header-actions">
           <span class="git-pill-auto">Auto</span>
-          <button class="git-tool-btn" id="antigravity-git-refresh-btn" title="Refresh Git status">↻</button>
+          <button class="git-tool-btn" id="antigravity-git-refresh-btn" title="Refresh Git &amp; GitHub status">↻</button>
           <button class="git-tool-btn git-tool-close" id="antigravity-git-close-btn" title="Close Git Graph">✕</button>
         </div>
       </div>
+
+      <!-- Pull Request & CI/CD Status Card -->
+      ${prCiHtml}
 
       <!-- Graph & Commits Viewport -->
       <div class="git-graph-container">
@@ -133,6 +140,9 @@ const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(c
           ${commitRowsHtml}
         </div>
       </div>
+
+      <!-- Commit Inspector Mount -->
+      <div class="git-inspector-mount" id="antigravity-git-inspector" style="display: none;"></div>
     </div>
   `.trim();
 }

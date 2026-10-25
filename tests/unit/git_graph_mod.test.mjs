@@ -118,3 +118,25 @@ test('GitGraphPanelHtml - includes data-commit-url and data-email attributes on 
   assert.ok(panelHtml.includes('data-email="alice@test.com"'));
   assert.ok(panelHtml.includes('data-author="Alice"'));
 });
+
+test('GitGraphPanelHtml - embeds PR and CI/CD card markup in panel template', () => {
+  const panelHtml = renderGitGraphPanelHtml({
+    commits: [],
+    pullRequest: {
+      number: 77,
+      title: 'feat: add vcs panel',
+      headRef: 'feat/vcs',
+      baseRef: 'main',
+      url: 'https://github.com/org/repo/pull/77',
+      state: 'OPEN',
+      author: 'Tester',
+      checks: [],
+      checksSummary: { total: 0, success: 0, failure: 0, pending: 0, status: 'PENDING' }
+    }
+  });
+
+  assert.ok(panelHtml.includes('#77'));
+  assert.ok(panelHtml.includes('feat: add vcs panel'));
+  assert.ok(panelHtml.includes('antigravity-git-pr-card'));
+});
+
