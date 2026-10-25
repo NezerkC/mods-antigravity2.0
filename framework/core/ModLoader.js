@@ -677,13 +677,42 @@ export class ModLoader {
                     linkHtml +
                     '</div></div>' +
                     '<div class="git-inspector-subject">' + safeSubject + '</div>';
+                  inspector.style.display = 'block';
                 }
               });
             });
 
+            const ciTrigger = hostEl.querySelector('#antigravity-git-ci-rollup-trigger');
+            const ciAccordion = hostEl.querySelector('#antigravity-git-ci-accordion');
+            if (ciTrigger && ciAccordion) {
+              ciTrigger.onclick = (e) => {
+                e.stopPropagation();
+                const isHidden = ciAccordion.style.display === 'none';
+                ciAccordion.style.display = isHidden ? 'block' : 'none';
+                const caret = ciTrigger.querySelector('.git-ci-caret');
+                if (caret) caret.textContent = isHidden ? '▴' : '▾';
+              };
+            }
+
             const refreshBtn = hostEl.querySelector('#antigravity-git-refresh-btn');
             if (refreshBtn) {
-              refreshBtn.onclick = () => {
+              refreshBtn.onclick = async (e) => {
+                if (e) e.stopPropagation();
+                refreshBtn.style.transform = 'rotate(360deg)';
+                refreshBtn.style.transition = 'transform 0.5s ease';
+                setTimeout(() => { refreshBtn.style.transform = 'none'; }, 500);
+
+                try {
+                  const res = await fetch('http://127.0.0.1:53912/vcs/overview');
+                  if (res.ok) {
+                    const data = await res.json();
+                    if (window.__antigravityUpdateVcsData) {
+                      window.__antigravityUpdateVcsData(data);
+                      return;
+                    }
+                  }
+                } catch {}
+
                 if (window.__antigravityMountAll) {
                   window.__antigravityMountAll();
                 }
@@ -694,7 +723,7 @@ export class ModLoader {
             if (closeBtn) {
               closeBtn.onclick = (e) => {
                 e.stopPropagation();
-                window.__toggleGitPanel();
+                window.__toggleGitGraphPanel();
               };
             }
           }
