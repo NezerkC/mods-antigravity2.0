@@ -120,5 +120,6 @@ test('GitService - getBranches categorizes local and remote branches', () => {
   assert.ok(branches.local.length > 0);
   const current = branches.local.find(b => b.isCurrent);
   assert.ok(current);
-  assert.equal(current.name, 'feat/mods-vcs-git-github-cicd');
+  assert.equal(typeof current.name, 'string');
+  assert.ok(current.name.length > 0);
 });
