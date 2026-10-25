@@ -56,6 +56,9 @@ test('WindowsDaemonService - generates valid PowerShell Tray runner and VBS laun
   assert.ok(trayScript.includes('Restart-Daemon'));
   assert.ok(trayScript.includes('Sync-UI'));
   assert.ok(trayScript.includes('ApplicationContext'));
+  assert.ok(trayScript.includes('mod-daemon.ico'));
+  assert.ok(trayScript.includes('daemon.ico'));
+  assert.ok(trayScript.includes('Drawing2D.SmoothingMode'));
 
   assert.ok(vbsPs1.includes('powershell.exe -NoExit -WindowStyle Hidden -ExecutionPolicy Bypass -NoProfile -File'));
   assert.ok(vbsPs1.includes('C:\\config\\tray_runner.ps1'));
