@@ -2,10 +2,12 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { VcsOrchestrator } from './VcsOrchestrator.js';
 
 /**
  * Lightweight local HTTP bridge server for synchronizing active agent selections
- * from the Electron renderer directly to disk (~/.gemini/config/mods/active_agents.json).
+ * from the Electron renderer directly to disk (~/.gemini/config/mods/active_agents.json)
+ * and providing unified VCS (Git + GitHub PR/CI) telemetry.
  */
 export class AgentSyncServer {
   /**
@@ -13,11 +15,15 @@ export class AgentSyncServer {
    * @param {number} [options.port] Port to listen on (default 53912)
    * @param {string} [options.host] Host address (default 127.0.0.1)
    * @param {string} [options.configPath] Path to active_agents.json
+   * @param {VcsOrchestrator} [options.vcsOrchestrator] Custom VCS orchestrator
+   * @param {string} [options.repoPath] Path to git repository
    */
   constructor(options = {}) {
     this.port = options.port ?? 53912;
     this.host = options.host || '127.0.0.1';
     this.configPath = options.configPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'active_agents.json');
+    this.repoPath = options.repoPath || process.cwd();
+    this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ repoPath: this.repoPath });
     this.server = null;
   }
 
@@ -111,6 +117,32 @@ export class AgentSyncServer {
           const data = this.readActiveAgents();
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(data));
+          return;
+        }
+
+        if (req.method === 'GET' && (req.url === '/vcs/overview' || req.url.startsWith('/vcs/overview?'))) {
+          try {
+            const data = this.vcsOrchestrator.getRepositoryOverview();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(data));
+          } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+          }
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/vcs/fetch') {
+          try {
+            if (this.vcsOrchestrator?.gitService && typeof this.vcsOrchestrator.gitService.fetch === 'function') {
+              this.vcsOrchestrator.gitService.fetch({ repoPath: this.repoPath });
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true }));
+          } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+          }
           return;
         }
 

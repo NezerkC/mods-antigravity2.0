@@ -11,3 +11,6 @@ export { ModDaemon, createDefaultHost } from './core/ModDaemon.js';
 export { WindowsDaemonService } from './services/WindowsDaemonService.js';
 export { GitService } from './services/GitService.js';
 export { AgentSyncServer } from './services/AgentSyncServer.js';
+export { GitHubCliService } from './services/GitHubCliService.js';
+export { VcsOrchestrator } from './services/VcsOrchestrator.js';
+

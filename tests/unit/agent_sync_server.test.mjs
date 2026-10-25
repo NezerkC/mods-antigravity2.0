@@ -10,9 +10,25 @@ describe('AgentSyncServer', () => {
   const configPath = path.join(tmpDir, 'active_agents.json');
   let server;
 
+  const mockVcs = {
+    getRepositoryOverview: () => ({
+      isRepo: true,
+      status: { branch: 'feat/test', ahead: 2, behind: 0 },
+      pullRequest: { number: 42, title: 'feat: mock pr' },
+      commits: [{ hash: '123', subject: 'initial' }]
+    }),
+    gitService: {
+      fetch: () => true
+    }
+  };
+
   before(async () => {
     fs.mkdirSync(tmpDir, { recursive: true });
-    server = new AgentSyncServer({ port: 53913, configPath });
+    server = new AgentSyncServer({
+      port: 53913,
+      configPath,
+      vcsOrchestrator: mockVcs
+    });
     await server.start();
   });
 
@@ -65,5 +81,19 @@ describe('AgentSyncServer', () => {
     const getData = await getRes.json();
     assert.equal(getData['cascade-123'].id, 'lead-architect');
     assert.equal(getData['cascade-456'].id, 'code-reviewer');
+  });
+
+  it('handles HTTP GET /vcs/overview and POST /vcs/fetch', async () => {
+    const overviewRes = await fetch('http://127.0.0.1:53913/vcs/overview');
+    assert.equal(overviewRes.status, 200);
+    const overviewData = await overviewRes.json();
+    assert.equal(overviewData.isRepo, true);
+    assert.equal(overviewData.status.branch, 'feat/test');
+    assert.equal(overviewData.pullRequest.number, 42);
+
+    const fetchRes = await fetch('http://127.0.0.1:53913/vcs/fetch', { method: 'POST' });
+    assert.equal(fetchRes.status, 200);
+    const fetchData = await fetchRes.json();
+    assert.equal(fetchData.success, true);
   });
 });

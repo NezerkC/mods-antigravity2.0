@@ -6,6 +6,8 @@ import { runModLoader } from '../../framework/host.js';
 test('framework/index.js - exports GitService and AgentSyncServer alongside core runtime', () => {
   assert.ok(framework.GitService, 'GitService must be exported');
   assert.ok(framework.AgentSyncServer, 'AgentSyncServer must be exported');
+  assert.ok(framework.GitHubCliService, 'GitHubCliService must be exported');
+  assert.ok(framework.VcsOrchestrator, 'VcsOrchestrator must be exported');
   assert.ok(framework.ModDaemon, 'ModDaemon must be exported');
   assert.ok(framework.createDefaultHost, 'createDefaultHost must be exported');
   assert.ok(framework.ModHost, 'ModHost must be exported');

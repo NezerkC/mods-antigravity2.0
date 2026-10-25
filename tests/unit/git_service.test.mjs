@@ -103,3 +103,10 @@ test('GitService - getGitStatus reads current repository status', () => {
   assert.ok(typeof status.isClean === 'boolean');
   assert.ok(Array.isArray(status.changedFiles));
 });
+
+test('GitService - fetch executes git fetch without throwing', () => {
+  const service = new GitService();
+  const result = service.fetch();
+  assert.equal(typeof result, 'boolean');
+});
+

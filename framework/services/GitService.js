@@ -351,6 +351,26 @@ export class GitService {
   }
 
   /**
+   * Fetches latest changes from all configured remotes.
+   * @param {Object} [options]
+   * @param {string} [options.repoPath]
+   * @returns {boolean}
+   */
+  fetch(options = {}) {
+    const repoPath = options.repoPath || process.cwd();
+    try {
+      execSync('git fetch --all --prune', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'ignore', 'ignore']
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Helper formatting relative timestamp.
    * @private
    */
