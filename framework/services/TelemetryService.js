@@ -29,6 +29,12 @@ export class TelemetryService {
       displayTokens: '0',
       sizeKb: 0,
       steps: 0,
+      modelQuota: {
+        hasDualLimit: false,
+        modelName: '',
+        singleLabel: 'Cuota Disponible',
+        usagePct: 0
+      },
       breakdown: {
         user: { tokens: 0, pct: 0 },
         model: { tokens: 0, pct: 0 },
@@ -67,6 +73,8 @@ export class TelemetryService {
       };
 
       let totalRawChars = 0;
+      const stepEntries = [];
+      let detectedModel = '';
 
       for (const line of lines) {
         if (!line.trim()) continue;
@@ -78,6 +86,20 @@ export class TelemetryService {
           obj = JSON.parse(line);
         } catch {
           continue;
+        }
+
+        if (obj.model && !detectedModel) {
+          detectedModel = obj.model;
+        }
+
+        if (obj.created_at) {
+          const t = new Date(obj.created_at).getTime();
+          if (!isNaN(t)) {
+            stepEntries.push({
+              timestamp: t,
+              tokens: Math.round(((obj.content || '').length + (obj.thinking || '').length) / this.charsPerToken)
+            });
+          }
         }
 
         const len = (str) => (typeof str === 'string' ? str.length : 0);
@@ -130,12 +152,15 @@ export class TelemetryService {
         displayTokens = (estTokens / 1_000).toFixed(1) + 'k';
       }
 
+      const modelQuota = this.resolveModelQuota(detectedModel, stepEntries);
+
       return {
         estTokens,
         pct,
         displayTokens,
         sizeKb: Math.round(totalBytes / 1024),
         steps: raw.steps,
+        modelQuota,
         breakdown: {
           user: { tokens: userTokens, pct: catPct(userTokens) },
           model: { tokens: modelTokens, pct: catPct(modelTokens) },
@@ -147,6 +172,74 @@ export class TelemetryService {
       };
     } catch {
       return this.getEmptySnapshot();
+    }
+  }
+
+  /**
+   * Resolves model quota metrics based on the model tier and conversation activity.
+   * If model has a 5-hour rolling limit (e.g. Claude), computes rolling and weekly metrics.
+   * If single-tier model (e.g. Gemini), provides single quota metric.
+   * @param {string} [detectedModel]
+   * @param {Array<Object>} [stepEntries]
+   * @returns {Object}
+   */
+  resolveModelQuota(detectedModel = '', stepEntries = []) {
+    const isClaude = /claude/i.test(detectedModel);
+    const now = Date.now();
+    const fiveHoursMs = 5 * 60 * 60 * 1000;
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+
+    let rollingTokens = 0;
+    let weeklyTokens = 0;
+    let earliestRollingTimestamp = null;
+
+    for (const step of stepEntries) {
+      if (!step.timestamp) continue;
+      const age = now - step.timestamp;
+      if (age <= sevenDaysMs) {
+        weeklyTokens += step.tokens;
+        if (age <= fiveHoursMs) {
+          rollingTokens += step.tokens;
+          if (!earliestRollingTimestamp || step.timestamp < earliestRollingTimestamp) {
+            earliestRollingTimestamp = step.timestamp;
+          }
+        }
+      }
+    }
+
+    if (isClaude) {
+      const rollingCeiling = 100_000;
+      const weeklyCeiling = 1_000_000;
+      const rollingPct = Math.min(100, Math.round((rollingTokens / rollingCeiling) * 100));
+      const weeklyPct = Math.min(100, Math.round((weeklyTokens / weeklyCeiling) * 100));
+
+      let resetStr = '5h';
+      if (earliestRollingTimestamp) {
+        const remainingMs = Math.max(0, (earliestRollingTimestamp + fiveHoursMs) - now);
+        const hours = Math.floor(remainingMs / (60 * 60 * 1000));
+        const mins = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+        resetStr = `${hours}h ${mins}m`;
+      }
+
+      return {
+        hasDualLimit: true,
+        modelName: detectedModel || 'Claude',
+        rollingLabel: 'Límite 5 Horas',
+        rollingUsed: rollingPct,
+        rollingReset: resetStr,
+        weeklyLabel: 'Cuota Semanal',
+        weeklyUsed: weeklyPct
+      };
+    } else {
+      const singleCeiling = 1_000_000;
+      const usagePct = Math.min(100, Math.round((weeklyTokens / singleCeiling) * 100));
+
+      return {
+        hasDualLimit: false,
+        modelName: detectedModel || 'Gemini',
+        singleLabel: 'Cuota Disponible',
+        usagePct: Math.max(1, usagePct)
+      };
     }
   }
 
@@ -168,12 +261,12 @@ export class TelemetryService {
           let mtime = 0;
           let targetPath = '';
           try {
-            if (fs.existsSync(fullPath)) {
-              mtime = fs.statSync(fullPath).mtimeMs;
-              targetPath = fullPath;
-            } else if (fs.existsSync(compactPath)) {
+            if (fs.existsSync(compactPath)) {
               mtime = fs.statSync(compactPath).mtimeMs;
               targetPath = compactPath;
+            } else if (fs.existsSync(fullPath)) {
+              mtime = fs.statSync(fullPath).mtimeMs;
+              targetPath = fullPath;
             }
           } catch {}
           return { id: d, mtime, targetPath };

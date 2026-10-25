@@ -43,3 +43,27 @@ test('TelemetryService - parses JSONL lines and categorizes tokens correctly', (
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test('TelemetryService - resolveModelQuota handles Claude dual-limit and Gemini single-tier', () => {
+  const service = new TelemetryService();
+
+  // Gemini model
+  const geminiQuota = service.resolveModelQuota('gemini-2.5-pro', [
+    { timestamp: Date.now() - 1000, tokens: 50000 }
+  ]);
+  assert.equal(geminiQuota.hasDualLimit, false);
+  assert.equal(geminiQuota.modelName, 'gemini-2.5-pro');
+  assert.equal(geminiQuota.singleLabel, 'Cuota Disponible');
+  assert.equal(geminiQuota.usagePct, 5);
+
+  // Claude model
+  const claudeQuota = service.resolveModelQuota('claude-3-7-sonnet', [
+    { timestamp: Date.now() - 1000, tokens: 10000 }
+  ]);
+  assert.equal(claudeQuota.hasDualLimit, true);
+  assert.equal(claudeQuota.modelName, 'claude-3-7-sonnet');
+  assert.equal(claudeQuota.rollingLabel, 'Límite 5 Horas');
+  assert.equal(claudeQuota.rollingUsed, 10);
+  assert.equal(claudeQuota.weeklyLabel, 'Cuota Semanal');
+  assert.equal(claudeQuota.weeklyUsed, 1);
+});

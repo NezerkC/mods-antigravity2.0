@@ -1818,6 +1818,12 @@ class TelemetryService {
       displayTokens: '0',
       sizeKb: 0,
       steps: 0,
+      modelQuota: {
+        hasDualLimit: false,
+        modelName: '',
+        singleLabel: 'Cuota Disponible',
+        usagePct: 0
+      },
       breakdown: {
         user: { tokens: 0, pct: 0 },
         model: { tokens: 0, pct: 0 },
@@ -1856,6 +1862,8 @@ class TelemetryService {
       };
 
       let totalRawChars = 0;
+      const stepEntries = [];
+      let detectedModel = '';
 
       for (const line of lines) {
         if (!line.trim()) continue;
@@ -1867,6 +1875,20 @@ class TelemetryService {
           obj = JSON.parse(line);
         } catch {
           continue;
+        }
+
+        if (obj.model && !detectedModel) {
+          detectedModel = obj.model;
+        }
+
+        if (obj.created_at) {
+          const t = new Date(obj.created_at).getTime();
+          if (!isNaN(t)) {
+            stepEntries.push({
+              timestamp: t,
+              tokens: Math.round(((obj.content || '').length + (obj.thinking || '').length) / this.charsPerToken)
+            });
+          }
         }
 
         const len = (str) => (typeof str === 'string' ? str.length : 0);
@@ -1919,12 +1941,15 @@ class TelemetryService {
         displayTokens = (estTokens / 1_000).toFixed(1) + 'k';
       }
 
+      const modelQuota = this.resolveModelQuota(detectedModel, stepEntries);
+
       return {
         estTokens,
         pct,
         displayTokens,
         sizeKb: Math.round(totalBytes / 1024),
         steps: raw.steps,
+        modelQuota,
         breakdown: {
           user: { tokens: userTokens, pct: catPct(userTokens) },
           model: { tokens: modelTokens, pct: catPct(modelTokens) },
@@ -1936,6 +1961,74 @@ class TelemetryService {
       };
     } catch {
       return this.getEmptySnapshot();
+    }
+  }
+
+  /**
+   * Resolves model quota metrics based on the model tier and conversation activity.
+   * If model has a 5-hour rolling limit (e.g. Claude), computes rolling and weekly metrics.
+   * If single-tier model (e.g. Gemini), provides single quota metric.
+   * @param {string} [detectedModel]
+   * @param {Array<Object>} [stepEntries]
+   * @returns {Object}
+   */
+  resolveModelQuota(detectedModel = '', stepEntries = []) {
+    const isClaude = /claude/i.test(detectedModel);
+    const now = Date.now();
+    const fiveHoursMs = 5 * 60 * 60 * 1000;
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+
+    let rollingTokens = 0;
+    let weeklyTokens = 0;
+    let earliestRollingTimestamp = null;
+
+    for (const step of stepEntries) {
+      if (!step.timestamp) continue;
+      const age = now - step.timestamp;
+      if (age <= sevenDaysMs) {
+        weeklyTokens += step.tokens;
+        if (age <= fiveHoursMs) {
+          rollingTokens += step.tokens;
+          if (!earliestRollingTimestamp || step.timestamp < earliestRollingTimestamp) {
+            earliestRollingTimestamp = step.timestamp;
+          }
+        }
+      }
+    }
+
+    if (isClaude) {
+      const rollingCeiling = 100_000;
+      const weeklyCeiling = 1_000_000;
+      const rollingPct = Math.min(100, Math.round((rollingTokens / rollingCeiling) * 100));
+      const weeklyPct = Math.min(100, Math.round((weeklyTokens / weeklyCeiling) * 100));
+
+      let resetStr = '5h';
+      if (earliestRollingTimestamp) {
+        const remainingMs = Math.max(0, (earliestRollingTimestamp + fiveHoursMs) - now);
+        const hours = Math.floor(remainingMs / (60 * 60 * 1000));
+        const mins = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+        resetStr = `${hours}h ${mins}m`;
+      }
+
+      return {
+        hasDualLimit: true,
+        modelName: detectedModel || 'Claude',
+        rollingLabel: 'Límite 5 Horas',
+        rollingUsed: rollingPct,
+        rollingReset: resetStr,
+        weeklyLabel: 'Cuota Semanal',
+        weeklyUsed: weeklyPct
+      };
+    } else {
+      const singleCeiling = 1_000_000;
+      const usagePct = Math.min(100, Math.round((weeklyTokens / singleCeiling) * 100));
+
+      return {
+        hasDualLimit: false,
+        modelName: detectedModel || 'Gemini',
+        singleLabel: 'Cuota Disponible',
+        usagePct: Math.max(1, usagePct)
+      };
     }
   }
 
@@ -1957,12 +2050,12 @@ class TelemetryService {
           let mtime = 0;
           let targetPath = '';
           try {
-            if (fs.existsSync(fullPath)) {
-              mtime = fs.statSync(fullPath).mtimeMs;
-              targetPath = fullPath;
-            } else if (fs.existsSync(compactPath)) {
+            if (fs.existsSync(compactPath)) {
               mtime = fs.statSync(compactPath).mtimeMs;
               targetPath = compactPath;
+            } else if (fs.existsSync(fullPath)) {
+              mtime = fs.statSync(fullPath).mtimeMs;
+              targetPath = fullPath;
             }
           } catch {}
           return { id: d, mtime, targetPath };
@@ -3009,6 +3102,81 @@ function renderPopoverHtml(metric) {
     </div>
   `;
 
+  const quota = m.modelQuota || null;
+  const getBarColor = (pct) => {
+    if (pct >= 85) return '#ef4444';
+    if (pct >= 60) return '#f97316';
+    if (pct >= 25) return '#eab308';
+    return '#22c55e';
+  };
+
+  let modelQuotaHtml = '';
+  if (quota) {
+    if (quota.hasDualLimit) {
+      modelQuotaHtml = `
+        <div style="margin-bottom: 12px; padding: 9px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 7px;">
+            <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #a1a1aa; font-weight: 600;">
+              Límites del Modelo (${quota.modelName || 'Claude'})
+            </span>
+          </div>
+          <div style="margin-bottom: 6px;">
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; color: #d4d4d8;">
+              <span style="display: flex; align-items: center; gap: 4px;">
+                <span>⏱️</span>
+                <span style="font-weight: 500;">${quota.rollingLabel || 'Límite 5h'}</span>
+              </span>
+              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10.5px;">
+                <strong style="color: ${getBarColor(quota.rollingUsed)};">${quota.rollingUsed}%</strong> <span style="color: #71717a; font-size: 9.5px;">(reset: ${quota.rollingReset})</span>
+              </span>
+            </div>
+            <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
+              <div style="width: ${Math.min(quota.rollingUsed, 100)}%; height: 100%; background: ${getBarColor(quota.rollingUsed)}; border-radius: 9999px;"></div>
+            </div>
+          </div>
+          <div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; color: #d4d4d8;">
+              <span style="display: flex; align-items: center; gap: 4px;">
+                <span>📅</span>
+                <span style="font-weight: 500;">${quota.weeklyLabel || 'Cuota Semanal'}</span>
+              </span>
+              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10.5px;">
+                <strong style="color: ${getBarColor(quota.weeklyUsed)};">${quota.weeklyUsed}%</strong>
+              </span>
+            </div>
+            <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
+              <div style="width: ${Math.min(quota.weeklyUsed, 100)}%; height: 100%; background: ${getBarColor(quota.weeklyUsed)}; border-radius: 9999px;"></div>
+            </div>
+          </div>
+        </div>
+      `;
+    } else {
+      modelQuotaHtml = `
+        <div style="margin-bottom: 12px; padding: 9px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+            <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #a1a1aa; font-weight: 600;">
+              Cuota del Modelo (${quota.modelName || 'Gemini'})
+            </span>
+          </div>
+          <div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; color: #d4d4d8;">
+              <span style="display: flex; align-items: center; gap: 4px;">
+                <span>⚡</span>
+                <span style="font-weight: 500;">${quota.singleLabel || 'Cuota Disponible'}</span>
+              </span>
+              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10.5px;">
+                <strong style="color: ${getBarColor(quota.usagePct)};">${quota.usagePct}%</strong>
+              </span>
+            </div>
+            <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
+              <div style="width: ${Math.min(quota.usagePct, 100)}%; height: 100%; background: ${getBarColor(quota.usagePct)}; border-radius: 9999px;"></div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+  }
+
   return `
     <div class="antigravity-popover-content" style="
       width: 295px;
@@ -3061,6 +3229,8 @@ function renderPopoverHtml(metric) {
           </div>
         </div>
       </div>
+
+      ${modelQuotaHtml}
 
       <!-- Category Breakdown Rows -->
       <div style="margin-bottom: 12px;">

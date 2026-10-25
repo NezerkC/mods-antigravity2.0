@@ -56,6 +56,81 @@ export function renderPopoverHtml(metric) {
     </div>
   `;
 
+  const quota = m.modelQuota || null;
+  const getBarColor = (pct) => {
+    if (pct >= 85) return '#ef4444';
+    if (pct >= 60) return '#f97316';
+    if (pct >= 25) return '#eab308';
+    return '#22c55e';
+  };
+
+  let modelQuotaHtml = '';
+  if (quota) {
+    if (quota.hasDualLimit) {
+      modelQuotaHtml = `
+        <div style="margin-bottom: 12px; padding: 9px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 7px;">
+            <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #a1a1aa; font-weight: 600;">
+              Límites del Modelo (${quota.modelName || 'Claude'})
+            </span>
+          </div>
+          <div style="margin-bottom: 6px;">
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; color: #d4d4d8;">
+              <span style="display: flex; align-items: center; gap: 4px;">
+                <span>⏱️</span>
+                <span style="font-weight: 500;">${quota.rollingLabel || 'Límite 5h'}</span>
+              </span>
+              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10.5px;">
+                <strong style="color: ${getBarColor(quota.rollingUsed)};">${quota.rollingUsed}%</strong> <span style="color: #71717a; font-size: 9.5px;">(reset: ${quota.rollingReset})</span>
+              </span>
+            </div>
+            <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
+              <div style="width: ${Math.min(quota.rollingUsed, 100)}%; height: 100%; background: ${getBarColor(quota.rollingUsed)}; border-radius: 9999px;"></div>
+            </div>
+          </div>
+          <div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; color: #d4d4d8;">
+              <span style="display: flex; align-items: center; gap: 4px;">
+                <span>📅</span>
+                <span style="font-weight: 500;">${quota.weeklyLabel || 'Cuota Semanal'}</span>
+              </span>
+              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10.5px;">
+                <strong style="color: ${getBarColor(quota.weeklyUsed)};">${quota.weeklyUsed}%</strong>
+              </span>
+            </div>
+            <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
+              <div style="width: ${Math.min(quota.weeklyUsed, 100)}%; height: 100%; background: ${getBarColor(quota.weeklyUsed)}; border-radius: 9999px;"></div>
+            </div>
+          </div>
+        </div>
+      `;
+    } else {
+      modelQuotaHtml = `
+        <div style="margin-bottom: 12px; padding: 9px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+            <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #a1a1aa; font-weight: 600;">
+              Cuota del Modelo (${quota.modelName || 'Gemini'})
+            </span>
+          </div>
+          <div>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; color: #d4d4d8;">
+              <span style="display: flex; align-items: center; gap: 4px;">
+                <span>⚡</span>
+                <span style="font-weight: 500;">${quota.singleLabel || 'Cuota Disponible'}</span>
+              </span>
+              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10.5px;">
+                <strong style="color: ${getBarColor(quota.usagePct)};">${quota.usagePct}%</strong>
+              </span>
+            </div>
+            <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
+              <div style="width: ${Math.min(quota.usagePct, 100)}%; height: 100%; background: ${getBarColor(quota.usagePct)}; border-radius: 9999px;"></div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+  }
+
   return `
     <div class="antigravity-popover-content" style="
       width: 295px;
@@ -108,6 +183,8 @@ export function renderPopoverHtml(metric) {
           </div>
         </div>
       </div>
+
+      ${modelQuotaHtml}
 
       <!-- Category Breakdown Rows -->
       <div style="margin-bottom: 12px;">
