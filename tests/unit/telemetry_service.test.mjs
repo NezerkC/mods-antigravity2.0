@@ -245,10 +245,11 @@ test('TelemetryService - records CHECKPOINT compactions, resets active context w
     assert.ok(flashModel);
     assert.ok(flashModel.tokens >= 16500);
 
-    // Popover HTML renders compaction history section
+    // Popover HTML renders compaction history section with SVG vector icons
     const html = renderPopoverHtml(snapshot);
     assert.ok(html.includes('Historial de Compactación (/compact)'));
-    assert.ok(html.includes('✂️ Turno #25'));
+    assert.ok(html.includes('Turno #25'));
+    assert.ok(html.includes('<svg'));
     assert.ok(html.includes(compaction.displayFrom));
     assert.ok(html.includes(compaction.displayTo));
   } finally {

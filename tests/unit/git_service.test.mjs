@@ -110,3 +110,15 @@ test('GitService - fetch executes git fetch without throwing', () => {
   assert.equal(typeof result, 'boolean');
 });
 
+
+
+test('GitService - getBranches categorizes local and remote branches', () => {
+  const service = new GitService();
+  const branches = service.getBranches({ repoPath: process.cwd() });
+  assert.ok(Array.isArray(branches.local));
+  assert.ok(Array.isArray(branches.remote));
+  assert.ok(branches.local.length > 0);
+  const current = branches.local.find(b => b.isCurrent);
+  assert.ok(current);
+  assert.equal(current.name, 'feat/mods-vcs-git-github-cicd');
+});

@@ -6,6 +6,7 @@ import { SlotManager } from './SlotManager.js';
 import { TelemetryService } from '../services/TelemetryService.js';
 import { AgentSyncServer } from '../services/AgentSyncServer.js';
 import { GitService } from '../services/GitService.js';
+import { VcsOrchestrator } from '../services/VcsOrchestrator.js';
 import { CdpPortResolver } from './CdpPortResolver.js';
 import { CdpWebSocketClient } from './CdpWebSocketClient.js';
 
@@ -21,6 +22,7 @@ export class ModHost {
    * @param {TelemetryService} [options.telemetryService]
    * @param {AgentSyncServer} [options.syncServer]
    * @param {GitService} [options.gitService]
+   * @param {VcsOrchestrator} [options.vcsOrchestrator]
    * @param {CdpPortResolver} [options.portResolver]
    */
   constructor(options = {}) {
@@ -29,6 +31,7 @@ export class ModHost {
     this.telemetryService = options.telemetryService || new TelemetryService();
     this.syncServer = options.syncServer || new AgentSyncServer();
     this.gitService = options.gitService || new GitService();
+    this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ gitService: this.gitService });
     this.portResolver = options.portResolver || new CdpPortResolver();
   }
 
@@ -171,14 +174,25 @@ export class ModHost {
 
     const repoPath = await this.resolveRepoPath(cdpClient, explicitPath);
 
-    let gitLog = [];
-    let gitStatus = { branch: '', isClean: true, ahead: 0, behind: 0 };
-    let github = { isGitHub: false };
+    let vcsOverview = {};
     try {
-      gitLog = this.gitService.getGitLog({ repoPath, limit: 40 });
-      gitStatus = this.gitService.getGitStatus({ repoPath });
-      github = this.gitService.getGitHubMetadata({ repoPath });
-    } catch (err) {}
+      vcsOverview = this.vcsOrchestrator.getRepositoryOverview({ repoPath });
+    } catch (err) {
+      try {
+        const gitLog = this.gitService.getGitLog({ repoPath, limit: 40 });
+        const gitStatus = this.gitService.getGitStatus({ repoPath });
+        const github = this.gitService.getGitHubMetadata({ repoPath });
+        const branches = this.gitService.getBranches({ repoPath });
+        vcsOverview = {
+          commits: gitLog,
+          gitLog,
+          status: gitStatus,
+          branches,
+          github,
+          activeRepo: github.fullName || path.basename(repoPath)
+        };
+      } catch {}
+    }
 
     const activeAgents = this.syncServer.readActiveAgents();
 
@@ -186,12 +200,7 @@ export class ModHost {
       telemetry: primaryMetric,
       allMetrics,
       activeAgents,
-      gitLog,
-      gitStatus,
-      github,
-      commits: gitLog,
-      status: gitStatus,
-      activeRepo: github.fullName || path.basename(repoPath),
+      ...vcsOverview,
       timestamp: Date.now()
     };
 

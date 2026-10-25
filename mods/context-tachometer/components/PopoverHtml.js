@@ -1,7 +1,25 @@
+export function renderSvgIcon(name, size = 12, color = 'currentColor') {
+  switch (name) {
+    case 'zap':
+      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="${color}" fill-opacity="0.2"/></svg>`;
+    case 'clock':
+      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
+    case 'calendar':
+      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`;
+    case 'bot':
+      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16" stroke-linecap="round"/><line x1="16" y1="16" x2="16" y2="16" stroke-linecap="round"/></svg>`;
+    case 'scissors':
+      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>`;
+    default:
+      return '';
+  }
+}
+
 /**
  * Builds the HTML for the rich context breakdown popover.
  */
 export function renderPopoverHtml(metric) {
+  const icon = renderSvgIcon;
   const FONT_SANS = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
   const FONT_MONO = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
 
@@ -76,8 +94,8 @@ export function renderPopoverHtml(metric) {
     const recentCompactions = compactions.slice(-4);
     const compactionRowsHtml = recentCompactions.map((c) => `
       <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 10px; padding: 3px 0; border-top: 1px dashed rgba(255, 255, 255, 0.06); color: #d4d4d8; white-space: nowrap;">
-        <span style="font-weight: 500; color: #e4e4e7;">
-          ✂️ Turno #${c.step}
+        <span style="display: flex; align-items: center; gap: 4px; font-weight: 500; color: #e4e4e7;">
+          ${icon('scissors', 11, '#22c55e')} Turno #${c.step}
         </span>
         <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
           ${c.displayFrom} → <strong style="color: #22c55e;">${c.displayTo}</strong>
@@ -111,8 +129,8 @@ export function renderPopoverHtml(metric) {
         : `7d:${cm.chatWeeklyPct}%`;
       return `
         <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 10px; padding: 3px 0; border-top: 1px dashed rgba(255, 255, 255, 0.06); color: #d4d4d8; white-space: nowrap;">
-          <span style="font-weight: 500; color: #e4e4e7; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${safeName}">
-            🤖 ${safeName}
+          <span style="display: flex; align-items: center; gap: 4px; font-weight: 500; color: #e4e4e7; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${safeName}">
+            ${icon('bot', 12, '#38bdf8')} ${safeName}
           </span>
           <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
             ${cm.displayTokens} <span style="color: #38bdf8; font-weight: 600;">(${quotaShareText})</span>
@@ -152,8 +170,8 @@ export function renderPopoverHtml(metric) {
           </div>
           <div style="margin-bottom: 5px;">
             <div style="display: flex; justify-content: space-between; font-size: 10.5px; margin-bottom: 2px; color: #d4d4d8; white-space: nowrap;">
-              <span style="display: flex; align-items: center; gap: 4px;">
-                <span>⏱️</span>
+              <span style="display: flex; align-items: center; gap: 5px;">
+                ${icon('clock', 12, '#a1a1aa')}
                 <span style="font-weight: 500;">${quota.rollingLabel || 'Cuota 5h Restante'}</span>
               </span>
               <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10px;">
@@ -166,8 +184,8 @@ export function renderPopoverHtml(metric) {
           </div>
           <div>
             <div style="display: flex; justify-content: space-between; font-size: 10.5px; margin-bottom: 2px; color: #d4d4d8; white-space: nowrap;">
-              <span style="display: flex; align-items: center; gap: 4px;">
-                <span>📅</span>
+              <span style="display: flex; align-items: center; gap: 5px;">
+                ${icon('calendar', 12, '#a1a1aa')}
                 <span style="font-weight: 500;">${quota.weeklyLabel || 'Cuota Semanal Restante'}</span>
               </span>
               <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10px;">
@@ -197,8 +215,8 @@ export function renderPopoverHtml(metric) {
           </div>
           <div>
             <div style="display: flex; justify-content: space-between; font-size: 10.5px; margin-bottom: 2px; color: #d4d4d8; white-space: nowrap;">
-              <span style="display: flex; align-items: center; gap: 4px;">
-                <span>📅</span>
+              <span style="display: flex; align-items: center; gap: 5px;">
+                ${icon('calendar', 12, '#a1a1aa')}
                 <span style="font-weight: 500;">${quota.singleLabel || 'Cuota Semanal Restante'}</span>
               </span>
               <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10px;">
@@ -233,7 +251,7 @@ export function renderPopoverHtml(metric) {
       <!-- Header -->
       <div style="display: flex; align-items: center; justify-content: space-between; padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.09);">
         <div style="display: flex; align-items: center; gap: 7px;">
-          <span style="font-size: 14px;">⚡</span>
+          ${icon('zap', 14, '#38bdf8')}
           <span style="font-weight: 600; font-size: 12.5px; letter-spacing: -0.01em; color: #ffffff;">Context Telemetry</span>
         </div>
         <span style="font-size: 10.5px; padding: 2px 7px; border-radius: 9999px; background: rgba(255, 255, 255, 0.08); color: #a1a1aa; font-family: ${FONT_MONO};">

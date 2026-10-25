@@ -276,14 +276,33 @@
   font-size: 9px !important;
 }
 
+.git-commit-chevron {
+  font-size: 10px !important;
+  color: #64748b !important;
+  width: 12px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0 !important;
+}
+
+.git-commit-chevron.has-files {
+  color: #94a3b8 !important;
+  cursor: pointer !important;
+}
+
 /* Expandable Inline File Diff List */
 .git-commit-files-container {
-  display: flex !important;
+  display: none !important;
   flex-direction: column !important;
-  background: rgba(0, 0, 0, 0.25) !important;
-  border-left: 2px solid rgba(56, 189, 248, 0.3) !important;
+  background: rgba(0, 0, 0, 0.3) !important;
+  border-left: 2px solid rgba(56, 189, 248, 0.35) !important;
   margin-left: 14px !important;
   padding: 2px 0 !important;
+}
+
+.git-commit-item.is-expanded > .git-commit-files-container {
+  display: flex !important;
 }
 
 .git-file-row {
@@ -668,9 +687,309 @@
   padding: 4px !important;
 }
 
-/* Inspector Mount at Bottom */
-.git-inspector-mount {
-  padding: 8px 12px !important;
+/* Branches Filter Toolbar */
+.git-branches-filter-bar {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  padding: 4px 10px !important;
   background: #11141c !important;
-  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+  font-size: 11px !important;
+  user-select: none !important;
+}
+
+.git-branches-pills {
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+}
+
+.git-filter-pill {
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  padding: 2px 7px !important;
+  border-radius: 4px !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+  color: #94a3b8 !important;
+  border: 1px solid transparent !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  transition: all 0.15s ease !important;
+}
+
+.git-filter-pill:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: #f1f5f9 !important;
+}
+
+.git-filter-pill.active {
+  background: rgba(56, 189, 248, 0.15) !important;
+  color: #38bdf8 !important;
+  border-color: rgba(56, 189, 248, 0.3) !important;
+}
+
+.git-branches-drawer-btn {
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  padding: 2px 6px !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  color: #64748b !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 3px !important;
+}
+
+.git-branches-drawer-btn:hover {
+  color: #f1f5f9 !important;
+  border-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Branches Drawer Dropdown */
+.git-branches-drawer {
+  background: #0d1017 !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+  max-height: 180px !important;
+  overflow-y: auto !important;
+  padding: 6px 10px !important;
+}
+
+.git-branches-section-title {
+  font-size: 9px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.5px !important;
+  color: #64748b !important;
+  margin: 4px 0 2px !important;
+}
+
+.git-branches-list-wrap {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+  margin-bottom: 6px !important;
+}
+
+.git-branch-drawer-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 3px 6px !important;
+  border-radius: 4px !important;
+  font-size: 11px !important;
+  color: #cbd5e1 !important;
+  cursor: pointer !important;
+}
+
+.git-branch-drawer-row:hover {
+  background: rgba(255, 255, 255, 0.06) !important;
+}
+
+.git-branch-drawer-row.is-active-branch {
+  background: rgba(56, 189, 248, 0.12) !important;
+  color: #38bdf8 !important;
+  font-weight: 600 !important;
+}
+
+.git-branch-drawer-name {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  flex: 1 1 0% !important;
+}
+
+.git-branch-drawer-hash {
+  font-family: monospace !important;
+  font-size: 10px !important;
+  color: #64748b !important;
+}
+
+.git-branch-current-badge {
+  font-size: 8px !important;
+  font-weight: 700 !important;
+  padding: 0 4px !important;
+  border-radius: 3px !important;
+  background: #38bdf8 !important;
+  color: #0f172a !important;
+}
+
+.git-branch-empty {
+  font-size: 10px !important;
+  color: #64748b !important;
+  padding: 2px 4px !important;
+}
+
+/* Redesigned High-Quality Commit Inspector */
+.git-inspector-mount {
+  position: sticky !important;
+  bottom: 0 !important;
+  z-index: 40 !important;
+  background: #11141c !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4) !important;
+  padding: 8px 12px !important;
+}
+
+.git-inspector-card {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+}
+
+.git-inspector-top {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+}
+
+.git-inspector-author-group {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  min-width: 0 !important;
+  flex: 1 1 0% !important;
+}
+
+.git-avatar-frame {
+  width: 24px !important;
+  height: 24px !important;
+  border-radius: 50% !important;
+  overflow: hidden !important;
+  flex-shrink: 0 !important;
+  position: relative !important;
+}
+
+.git-inspector-avatar {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  border-radius: 50% !important;
+}
+
+.git-inspector-avatar-fallback {
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 50% !important;
+  background: linear-gradient(135deg, #0284c7, #6366f1) !important;
+  color: #ffffff !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  text-transform: uppercase !important;
+}
+
+.git-inspector-author-text {
+  display: flex !important;
+  flex-direction: column !important;
+  min-width: 0 !important;
+  line-height: 1.2 !important;
+}
+
+.git-inspector-name-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+}
+
+.git-inspector-author-name {
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  color: #f1f5f9 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.git-inspector-date {
+  font-size: 10px !important;
+  color: #64748b !important;
+}
+
+.git-inspector-author-email {
+  font-size: 10px !important;
+  color: #94a3b8 !important;
+  font-family: monospace !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.git-inspector-meta-group {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  flex-shrink: 0 !important;
+}
+
+.git-inspector-hash-pill {
+  font-family: monospace !important;
+  font-size: 10px !important;
+  padding: 2px 6px !important;
+  border-radius: 4px !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: #93c5fd !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.git-inspector-btn-gh {
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  padding: 2px 7px !important;
+  border-radius: 4px !important;
+  background: rgba(56, 189, 248, 0.15) !important;
+  color: #38bdf8 !important;
+  border: 1px solid rgba(56, 189, 248, 0.3) !important;
+  text-decoration: none !important;
+  transition: all 0.15s ease !important;
+}
+
+.git-inspector-btn-gh:hover {
+  background: rgba(56, 189, 248, 0.25) !important;
+}
+
+.git-inspector-btn-close {
+  font-size: 12px !important;
+  padding: 2px 5px !important;
+  background: transparent !important;
+  border: none !important;
+  color: #64748b !important;
+  cursor: pointer !important;
+  border-radius: 4px !important;
+  line-height: 1 !important;
+}
+
+.git-inspector-btn-close:hover {
+  color: #f1f5f9 !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+.git-inspector-subject-line {
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  color: #e2e8f0 !important;
+  padding: 4px 6px !important;
+  border-radius: 4px !important;
+  background: rgba(0, 0, 0, 0.25) !important;
+  border: 1px solid rgba(255, 255, 255, 0.04) !important;
+  line-height: 1.35 !important;
+  word-break: break-word !important;
+}
+
+.git-inspector-footer-stats {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.git-inspector-files-badge {
+  font-size: 10px !important;
+  color: #94a3b8 !important;
 }

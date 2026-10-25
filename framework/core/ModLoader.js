@@ -1,6 +1,6 @@
 import { SlotManager } from './SlotManager.js';
 import { StyleIsolator } from '../sdk/StyleIsolator.js';
-import { renderPopoverHtml } from '../../mods/context-tachometer/components/PopoverHtml.js';
+import { renderPopoverHtml, renderSvgIcon } from '../../mods/context-tachometer/components/PopoverHtml.js';
 import { renderModsManagerPanelHtml } from '../../mods/mods-manager/components/ModsManagerHtml.js';
 
 /**
@@ -439,6 +439,8 @@ export class ModLoader {
           }
         };
 
+        const renderSvgIcon = ${renderSvgIcon.toString()};
+        window.__renderSvgIcon = renderSvgIcon;
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
         window.__renderModsManagerPanelHtml = ${renderModsManagerPanelHtml.toString()};
 
@@ -573,6 +575,198 @@ export class ModLoader {
           }
         };
 
+        window.__bindGitPanelEvents = function(hostEl) {
+          if (!hostEl) return;
+
+          // Commit row click and file expansion
+          hostEl.querySelectorAll('.git-commit-row').forEach(row => {
+            row.addEventListener('click', (ev) => {
+              hostEl.querySelectorAll('.git-commit-row.selected').forEach(r => r.classList.remove('selected'));
+              row.classList.add('selected');
+
+              const item = row.closest('.git-commit-item');
+              const isPillClick = ev.target.closest('.git-pill-files') || ev.target.closest('.git-commit-chevron');
+
+              if (item && isPillClick) {
+                ev.stopPropagation();
+                const filesContainer = item.querySelector('.git-commit-files-container');
+                const chevron = item.querySelector('.git-commit-chevron');
+                if (filesContainer) {
+                  const isNowOpen = filesContainer.style.display !== 'none';
+                  filesContainer.style.display = isNowOpen ? 'none' : 'flex';
+                  item.classList.toggle('is-expanded', !isNowOpen);
+                  if (chevron && chevron.classList.contains('has-files')) {
+                    chevron.textContent = isNowOpen ? '▸' : '▾';
+                  }
+                }
+              }
+
+              const hash = row.getAttribute('data-hash');
+              const inspector = hostEl.querySelector('#antigravity-git-inspector');
+              if (inspector && hash) {
+                const authorName = row.getAttribute('data-author') || 'Unknown';
+                const authorEmail = row.getAttribute('data-email') || '';
+                const avatarUrl = row.getAttribute('data-avatar') || '';
+                const commitUrl = row.getAttribute('data-commit-url') || '';
+                const shortHash = row.getAttribute('data-short-hash') || hash.slice(0, 7);
+                const subject = row.getAttribute('data-subject') || '';
+                const relativeDate = row.getAttribute('data-date') || '';
+                const filesCount = parseInt(row.getAttribute('data-files-count') || '0', 10);
+
+                function esc(str) {
+                  return String(str || '')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#039;');
+                }
+
+                const safeAuthor = esc(authorName);
+                const safeEmail = authorEmail ? ('&lt;' + esc(authorEmail) + '&gt;') : '';
+                const safeSubject = esc(subject);
+                const safeShortHash = esc(shortHash);
+                const initials = (authorName || 'U').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
+                const linkHtml = commitUrl
+                  ? '<a href="' + esc(commitUrl) + '" target="_blank" rel="noopener" class="git-inspector-btn-gh" title="Ver commit en GitHub">GitHub ↗</a>'
+                  : '';
+
+                inspector.innerHTML = '<div class="git-inspector-card">' +
+                  '<div class="git-inspector-top">' +
+                  '<div class="git-inspector-author-group">' +
+                  '<div class="git-avatar-frame">' +
+                  '<div class="git-inspector-avatar-fallback">' + esc(initials) + '</div>' +
+                  (avatarUrl ? '<img class="git-inspector-avatar" src="' + avatarUrl + '" alt="' + safeAuthor + '" onerror="this.remove()"/>' : '') +
+                  '</div>' +
+                  '<div class="git-inspector-author-text">' +
+                  '<div class="git-inspector-name-row">' +
+                  '<span class="git-inspector-author-name">' + safeAuthor + '</span>' +
+                  (relativeDate ? '<span class="git-inspector-date">' + esc(relativeDate) + '</span>' : '') +
+                  '</div>' +
+                  (safeEmail ? '<span class="git-inspector-author-email">' + safeEmail + '</span>' : '') +
+                  '</div></div>' +
+                  '<div class="git-inspector-meta-group">' +
+                  '<span class="git-inspector-hash-pill" title="Hash: ' + esc(hash) + '">' + safeShortHash + '</span>' +
+                  linkHtml +
+                  '<button class="git-inspector-btn-close" id="antigravity-git-inspector-close-btn" title="Cerrar inspector">✕</button>' +
+                  '</div></div>' +
+                  '<div class="git-inspector-subject-line">' + safeSubject + '</div>' +
+                  (filesCount > 0 ? '<div class="git-inspector-footer-stats"><span class="git-inspector-files-badge">📄 ' + filesCount + ' archivo' + (filesCount > 1 ? 's' : '') + ' modificado' + (filesCount > 1 ? 's' : '') + '</span></div>' : '') +
+                  '</div>';
+                inspector.style.display = 'block';
+
+                const inspClose = inspector.querySelector('#antigravity-git-inspector-close-btn');
+                if (inspClose) {
+                  inspClose.onclick = (eClose) => {
+                    eClose.stopPropagation();
+                    inspector.style.display = 'none';
+                  };
+                }
+              }
+            });
+          });
+
+          // Expand/Collapse all files toggle button
+          const toggleAllBtn = hostEl.querySelector('#antigravity-git-toggle-all-btn');
+          if (toggleAllBtn) {
+            let allExpanded = false;
+            toggleAllBtn.onclick = (e) => {
+              e.stopPropagation();
+              allExpanded = !allExpanded;
+              hostEl.querySelectorAll('.git-commit-item').forEach(item => {
+                const filesContainer = item.querySelector('.git-commit-files-container');
+                const chevron = item.querySelector('.git-commit-chevron');
+                if (filesContainer) {
+                  filesContainer.style.display = allExpanded ? 'flex' : 'none';
+                  item.classList.toggle('is-expanded', allExpanded);
+                  if (chevron && chevron.classList.contains('has-files')) {
+                    chevron.textContent = allExpanded ? '▾' : '▸';
+                  }
+                }
+              });
+            };
+          }
+
+          // Branch filter pills (Todas / Locales / GitHub)
+          hostEl.querySelectorAll('.git-filter-pill').forEach(pill => {
+            pill.onclick = (e) => {
+              e.stopPropagation();
+              hostEl.querySelectorAll('.git-filter-pill.active').forEach(p => p.classList.remove('active'));
+              pill.classList.add('active');
+
+              const filterType = pill.getAttribute('data-branch-filter') || 'all';
+              hostEl.querySelectorAll('.git-commit-item').forEach(item => {
+                const type = item.getAttribute('data-commit-type');
+                if (filterType === 'all') {
+                  item.style.display = '';
+                } else if (filterType === 'local') {
+                  item.style.display = type === 'local' ? '' : 'none';
+                } else if (filterType === 'remote') {
+                  item.style.display = type === 'remote' ? '' : 'none';
+                }
+              });
+            };
+          });
+
+          // Branches Drawer dropdown toggle
+          const drawerBtn = hostEl.querySelector('#antigravity-git-branches-drawer-btn');
+          const drawer = hostEl.querySelector('#antigravity-git-branches-drawer');
+          if (drawerBtn && drawer) {
+            drawerBtn.onclick = (e) => {
+              e.stopPropagation();
+              const isHidden = drawer.style.display === 'none';
+              drawer.style.display = isHidden ? 'block' : 'none';
+              const caret = drawerBtn.querySelector('.git-drawer-caret');
+              if (caret) caret.textContent = isHidden ? '▴' : '▾';
+            };
+          }
+
+          const ciTrigger = hostEl.querySelector('#antigravity-git-ci-rollup-trigger');
+          const ciAccordion = hostEl.querySelector('#antigravity-git-ci-accordion');
+          if (ciTrigger && ciAccordion) {
+            ciTrigger.onclick = (e) => {
+              e.stopPropagation();
+              const isHidden = ciAccordion.style.display === 'none';
+              ciAccordion.style.display = isHidden ? 'block' : 'none';
+              const caret = ciTrigger.querySelector('.git-ci-caret');
+              if (caret) caret.textContent = isHidden ? '▴' : '▾';
+            };
+          }
+
+          const refreshBtn = hostEl.querySelector('#antigravity-git-refresh-btn');
+          if (refreshBtn) {
+            refreshBtn.onclick = async (e) => {
+              if (e) e.stopPropagation();
+              refreshBtn.style.transform = 'rotate(360deg)';
+              refreshBtn.style.transition = 'transform 0.5s ease';
+              setTimeout(() => { refreshBtn.style.transform = ''; }, 500);
+
+              try {
+                const res = await fetch('http://127.0.0.1:53912/vcs/overview');
+                if (res.ok) {
+                  const data = await res.json();
+                  if (window.__antigravityUpdateVcsData) {
+                    window.__antigravityUpdateVcsData(data);
+                    return;
+                  }
+                }
+              } catch {}
+
+              if (window.__antigravityMountAll) {
+                window.__antigravityMountAll();
+              }
+            };
+          }
+
+          const closeBtn = hostEl.querySelector('#antigravity-git-close-btn');
+          if (closeBtn) {
+            closeBtn.onclick = (e) => {
+              e.stopPropagation();
+              window.__toggleGitGraphPanel();
+            };
+          }
+        };
+
         window.__toggleGitGraphPanel = function(e, btnEl) {
           if (e) {
             e.stopPropagation();
@@ -622,110 +816,7 @@ export class ModLoader {
               hostEl.innerHTML = template.innerHTML;
             }
             hostEl.style.display = 'flex';
-
-            hostEl.querySelectorAll('.git-commit-row').forEach(row => {
-              row.addEventListener('click', () => {
-                hostEl.querySelectorAll('.git-commit-row.selected').forEach(r => r.classList.remove('selected'));
-                row.classList.add('selected');
-
-                const item = row.closest('.git-commit-item');
-                if (item) {
-                  const filesContainer = item.querySelector('.git-commit-files-container');
-                  if (filesContainer) {
-                    const isNowOpen = filesContainer.style.display !== 'none';
-                    filesContainer.style.display = isNowOpen ? 'none' : 'block';
-                    item.classList.toggle('is-expanded', !isNowOpen);
-                  }
-                }
-
-                const hash = row.getAttribute('data-hash');
-                const inspector = hostEl.querySelector('#antigravity-git-inspector');
-                if (inspector && hash) {
-                  const authorName = row.getAttribute('data-author') || (row.querySelector('.git-author-name')?.textContent) || 'Unknown';
-                  const authorEmail = row.getAttribute('data-email') || '';
-                  const avatarUrl = row.getAttribute('data-avatar') || (row.querySelector('.git-author-avatar')?.getAttribute('src')) || '';
-                  const commitUrl = row.getAttribute('data-commit-url') || '';
-                  const shortHash = row.getAttribute('data-short-hash') || hash.slice(0, 7);
-                  const subject = row.getAttribute('data-subject') || (row.querySelector('.git-commit-subject')?.textContent) || '';
-
-                  function esc(str) {
-                    return String(str || '')
-                      .replace(/&/g, '&amp;')
-                      .replace(/</g, '&lt;')
-                      .replace(/>/g, '&gt;')
-                      .replace(/"/g, '&quot;')
-                      .replace(/'/g, '&#039;');
-                  }
-
-                  const safeAuthor = esc(authorName);
-                  const safeEmail = authorEmail ? ('&lt;' + esc(authorEmail) + '&gt;') : '';
-                  const safeSubject = esc(subject);
-                  const safeShortHash = esc(shortHash);
-                  const linkHtml = commitUrl
-                    ? '<a href="' + esc(commitUrl) + '" target="_blank" rel="noopener" class="git-inspector-gh-link">View Commit ↗</a>'
-                    : '';
-
-                  inspector.innerHTML = '<div class="git-inspector-header">' +
-                    '<div class="git-inspector-author">' +
-                    '<img class="git-inspector-avatar" src="' + avatarUrl + '" alt="' + safeAuthor + '"/>' +
-                    '<div class="git-inspector-author-col">' +
-                    '<span class="git-inspector-author-name">' + safeAuthor + '</span>' +
-                    (safeEmail ? '<span class="git-inspector-author-email">' + safeEmail + '</span>' : '') +
-                    '</div></div>' +
-                    '<div class="git-inspector-hash-wrap">' +
-                    '<span class="git-inspector-hash" title="' + esc(hash) + '">' + safeShortHash + '</span>' +
-                    linkHtml +
-                    '</div></div>' +
-                    '<div class="git-inspector-subject">' + safeSubject + '</div>';
-                  inspector.style.display = 'block';
-                }
-              });
-            });
-
-            const ciTrigger = hostEl.querySelector('#antigravity-git-ci-rollup-trigger');
-            const ciAccordion = hostEl.querySelector('#antigravity-git-ci-accordion');
-            if (ciTrigger && ciAccordion) {
-              ciTrigger.onclick = (e) => {
-                e.stopPropagation();
-                const isHidden = ciAccordion.style.display === 'none';
-                ciAccordion.style.display = isHidden ? 'block' : 'none';
-                const caret = ciTrigger.querySelector('.git-ci-caret');
-                if (caret) caret.textContent = isHidden ? '▴' : '▾';
-              };
-            }
-
-            const refreshBtn = hostEl.querySelector('#antigravity-git-refresh-btn');
-            if (refreshBtn) {
-              refreshBtn.onclick = async (e) => {
-                if (e) e.stopPropagation();
-                refreshBtn.style.transform = 'rotate(360deg)';
-                refreshBtn.style.transition = 'transform 0.5s ease';
-                setTimeout(() => { refreshBtn.style.transform = 'none'; }, 500);
-
-                try {
-                  const res = await fetch('http://127.0.0.1:53912/vcs/overview');
-                  if (res.ok) {
-                    const data = await res.json();
-                    if (window.__antigravityUpdateVcsData) {
-                      window.__antigravityUpdateVcsData(data);
-                      return;
-                    }
-                  }
-                } catch {}
-
-                if (window.__antigravityMountAll) {
-                  window.__antigravityMountAll();
-                }
-              };
-            }
-
-            const closeBtn = hostEl.querySelector('#antigravity-git-close-btn');
-            if (closeBtn) {
-              closeBtn.onclick = (e) => {
-                e.stopPropagation();
-                window.__toggleGitGraphPanel();
-              };
-            }
+            window.__bindGitPanelEvents(hostEl);
           }
         };
 
@@ -1112,6 +1203,16 @@ export class ModLoader {
 
           // Restore saved mod visibility states
           window.__applyModsVisibility();
+
+          // Refresh active Git panel host if currently open
+          const activeGitHost = document.getElementById('antigravity-git-panel-host');
+          const gitTemplate = document.getElementById('antigravity-git-panel-template');
+          if (activeGitHost && activeGitHost.style.display !== 'none' && gitTemplate) {
+            activeGitHost.innerHTML = gitTemplate.innerHTML;
+            if (window.__bindGitPanelEvents) {
+              window.__bindGitPanelEvents(activeGitHost);
+            }
+          }
 
           // Restore saved agent selection across mounted badges (scoped per chat)
           document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {

@@ -153,3 +153,40 @@ test('GitGraphMod - uses initialContext and includes PR card styles', () => {
 });
 
 
+
+test('GitGraphPanelHtml - renders branch filter pills and branches drawer', () => {
+  const panelHtml = renderGitGraphPanelHtml({
+    commits: [{ hash: 'c1', shortHash: 'c1', subject: 'initial', refs: [] }],
+    branches: {
+      local: [{ name: 'main', isCurrent: true, hash: 'c1' }],
+      remote: [{ name: 'origin/main', shortName: 'main', hash: 'c1' }]
+    }
+  });
+
+  assert.ok(panelHtml.includes('antigravity-git-branches-bar'));
+  assert.ok(panelHtml.includes('data-branch-filter="local"'));
+  assert.ok(panelHtml.includes('data-branch-filter="remote"'));
+  assert.ok(panelHtml.includes('Locales (1)'));
+  assert.ok(panelHtml.includes('GitHub (1)'));
+  assert.ok(panelHtml.includes('antigravity-git-branches-drawer'));
+  assert.ok(panelHtml.includes('is-active-branch'));
+  assert.ok(panelHtml.includes('is-remote-branch'));
+});
+
+test('GitGraphPanelHtml - renders commits collapsed by default with toggle all button', () => {
+  const panelHtml = renderGitGraphPanelHtml({
+    commits: [
+      {
+        hash: 'c1',
+        shortHash: 'c1',
+        subject: 'c1',
+        refs: [],
+        files: [{ status: 'M', path: 'index.js', fileName: 'index.js', dir: '', ext: 'JS' }]
+      }
+    ]
+  });
+
+  assert.ok(panelHtml.includes('id="antigravity-git-toggle-all-btn"'));
+  assert.ok(panelHtml.includes('style="display: none;"'));
+  assert.ok(panelHtml.includes('git-commit-chevron'));
+});

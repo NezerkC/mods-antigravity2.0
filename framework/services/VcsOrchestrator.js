@@ -21,13 +21,15 @@ export class VcsOrchestrator {
   /**
    * Produces unified repository status, commit DAG, active PR, and CI/CD runs.
    * @param {Object} [options]
+   * @param {string} [options.repoPath]
    * @param {number} [options.limit=50]
    * @returns {Object}
    */
   getRepositoryOverview(options = {}) {
     const limit = options.limit ?? 50;
+    const repoPath = options.repoPath || this.repoPath;
 
-    const status = this.gitService.getGitStatus({ repoPath: this.repoPath });
+    const status = this.gitService.getGitStatus({ repoPath });
     if (!status || !status.isRepo) {
       return {
         isRepo: false,
@@ -35,27 +37,31 @@ export class VcsOrchestrator {
         github: { isGitHub: false },
         pullRequest: null,
         recentRuns: [],
-        commits: []
+        commits: [],
+        branches: { local: [], remote: [] }
       };
     }
 
-    const githubMeta = this.gitService.getGitHubMetadata({ repoPath: this.repoPath });
-    const commits = this.gitService.getGitLog({ repoPath: this.repoPath, limit });
+    const githubMeta = this.gitService.getGitHubMetadata({ repoPath });
+    const commits = this.gitService.getGitLog({ repoPath, limit });
+    const branches = this.gitService.getBranches({ repoPath });
 
     let pullRequest = null;
     let recentRuns = [];
 
     if (githubMeta && githubMeta.isGitHub) {
-      pullRequest = this.githubCliService.getActivePullRequest(status.branch);
-      recentRuns = this.githubCliService.getRecentRuns({ branch: status.branch, limit: 5 });
+      const ghService = (repoPath === this.repoPath) ? this.githubCliService : new GitHubCliService({ repoPath });
+      pullRequest = ghService.getActivePullRequest(status.branch);
+      recentRuns = ghService.getRecentRuns({ branch: status.branch, limit: 5 });
     }
 
     return {
       isRepo: true,
-      repoPath: this.repoPath,
+      repoPath,
       activeRepo: githubMeta.fullName || 'workspace',
       status,
       github: githubMeta,
+      branches,
       pullRequest,
       recentRuns,
       commits

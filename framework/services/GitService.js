@@ -351,6 +351,57 @@ export class GitService {
   }
 
   /**
+   * Retrieves all local and remote branches categorized.
+   * @param {Object} [options]
+   * @param {string} [options.repoPath]
+   * @returns {{ local: Array<{ name: string, isCurrent: boolean, hash: string }>, remote: Array<{ name: string, shortName: string, hash: string }> }}
+   */
+  getBranches(options = {}) {
+    const repoPath = options.repoPath || process.cwd();
+    try {
+      const raw = execSync('git branch -a --format="%(refname:short)%00%(objectname:short)%00%(HEAD)"', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+
+      const local = [];
+      const remote = [];
+
+      for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const parts = trimmed.split('\0');
+        const ref = parts[0] || '';
+        const hash = parts[1] || '';
+        const headMarker = parts[2] || '';
+        const isCurrent = headMarker === '*';
+
+        if (ref.startsWith('origin/') || ref.startsWith('remotes/origin/')) {
+          const cleanName = ref.replace(/^remotes\//, '');
+          if (!cleanName.includes('HEAD')) {
+            remote.push({
+              name: cleanName,
+              shortName: cleanName.replace(/^origin\//, ''),
+              hash: hash ? hash.slice(0, 7) : ''
+            });
+          }
+        } else {
+          local.push({
+            name: ref,
+            isCurrent,
+            hash: hash ? hash.slice(0, 7) : ''
+          });
+        }
+      }
+
+      return { local, remote };
+    } catch {
+      return { local: [], remote: [] };
+    }
+  }
+
+  /**
    * Fetches latest changes from all configured remotes.
    * @param {Object} [options]
    * @param {string} [options.repoPath]

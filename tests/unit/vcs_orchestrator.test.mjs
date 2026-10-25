@@ -32,6 +32,10 @@ test('VcsOrchestrator - aggregates local Git and remote GitHub metadata into uni
       repo: 'mods-antigravity2.0',
       fullName: 'NezerkC/mods-antigravity2.0',
       webUrl: 'https://github.com/NezerkC/mods-antigravity2.0'
+    }),
+    getBranches: () => ({
+      local: [{ name: 'feat/vcs-suite', isCurrent: true }],
+      remote: [{ name: 'origin/main', shortName: 'main' }]
     })
   };
 
@@ -74,6 +78,8 @@ test('VcsOrchestrator - aggregates local Git and remote GitHub metadata into uni
   assert.equal(overview.status.branch, 'feat/vcs-suite');
   assert.equal(overview.status.ahead, 1);
   assert.equal(overview.github.isGitHub, true);
+  assert.equal(overview.branches.local.length, 1);
+  assert.equal(overview.branches.remote.length, 1);
   assert.ok(overview.pullRequest);
   assert.equal(overview.pullRequest.number, 19);
   assert.equal(overview.pullRequest.checksSummary.status, 'SUCCESS');
