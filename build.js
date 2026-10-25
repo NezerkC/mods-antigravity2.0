@@ -23,9 +23,11 @@ async function build() {
   const antigravityMod = cleanModuleCode('framework/sdk/AntigravityMod.js');
   const modLoader = cleanModuleCode('framework/core/ModLoader.js');
   const telemetryService = cleanModuleCode('framework/services/TelemetryService.js');
+  const gitService = cleanModuleCode('framework/services/GitService.js');
+  const gitHubCliService = cleanModuleCode('framework/services/GitHubCliService.js');
+  const vcsOrchestrator = cleanModuleCode('framework/services/VcsOrchestrator.js');
   const agentSyncServer = cleanModuleCode('framework/services/AgentSyncServer.js');
   const agentDiscoveryService = cleanModuleCode('framework/services/AgentDiscoveryService.js');
-  const gitService = cleanModuleCode('framework/services/GitService.js');
   const modHost = cleanModuleCode('framework/core/ModHost.js');
 
   // 2. Read Context Tachometer Mod sources
@@ -60,6 +62,7 @@ async function build() {
     .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(modsManagerCss)};`);
 
   // 5. Read Git Graph Mod sources
+  const prCiCardHtml = cleanModuleCode('mods/git-graph/components/PrCiCardHtml.js');
   const gitGraphSvg = cleanModuleCode('mods/git-graph/components/GitGraphSvg.js');
   const gitGraphPanelHtml = cleanModuleCode('mods/git-graph/components/GitGraphPanelHtml.js');
   const gitGraphCss = fs.readFileSync(path.resolve('mods/git-graph/styles.css'), 'utf-8');
@@ -94,11 +97,15 @@ ${modLoader}
 
 ${telemetryService}
 
+${gitService}
+
+${gitHubCliService}
+
+${vcsOrchestrator}
+
 ${agentSyncServer}
 
 ${agentDiscoveryService}
-
-${gitService}
 
 ${modHost}
 
@@ -124,6 +131,8 @@ ${modsManagerHtml}
 ${modsManagerIndex}
 
 // ===================== Git Graph Mod =====================
+${prCiCardHtml}
+
 ${gitGraphSvg}
 
 ${gitGraphPanelHtml}
@@ -137,7 +146,14 @@ async function main() {
     host.registerMod(new ContextTachometerMod());
     host.registerMod(new AgentSelectorMod());
     host.registerMod(new ModsManagerMod());
-    host.registerMod(new GitGraphMod());
+
+    let initialVcs = {};
+    try {
+      const vcs = new VcsOrchestrator();
+      initialVcs = vcs.getRepositoryOverview();
+    } catch {}
+
+    host.registerMod(new GitGraphMod({ initialContext: initialVcs }));
     await host.dispatch();
   } catch (err) {
     // Fail silently in background hook context

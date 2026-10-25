@@ -1337,13 +1337,42 @@ class ModLoader {
                     linkHtml +
                     '</div></div>' +
                     '<div class="git-inspector-subject">' + safeSubject + '</div>';
+                  inspector.style.display = 'block';
                 }
               });
             });
 
+            const ciTrigger = hostEl.querySelector('#antigravity-git-ci-rollup-trigger');
+            const ciAccordion = hostEl.querySelector('#antigravity-git-ci-accordion');
+            if (ciTrigger && ciAccordion) {
+              ciTrigger.onclick = (e) => {
+                e.stopPropagation();
+                const isHidden = ciAccordion.style.display === 'none';
+                ciAccordion.style.display = isHidden ? 'block' : 'none';
+                const caret = ciTrigger.querySelector('.git-ci-caret');
+                if (caret) caret.textContent = isHidden ? '▴' : '▾';
+              };
+            }
+
             const refreshBtn = hostEl.querySelector('#antigravity-git-refresh-btn');
             if (refreshBtn) {
-              refreshBtn.onclick = () => {
+              refreshBtn.onclick = async (e) => {
+                if (e) e.stopPropagation();
+                refreshBtn.style.transform = 'rotate(360deg)';
+                refreshBtn.style.transition = 'transform 0.5s ease';
+                setTimeout(() => { refreshBtn.style.transform = 'none'; }, 500);
+
+                try {
+                  const res = await fetch('http://127.0.0.1:53912/vcs/overview');
+                  if (res.ok) {
+                    const data = await res.json();
+                    if (window.__antigravityUpdateVcsData) {
+                      window.__antigravityUpdateVcsData(data);
+                      return;
+                    }
+                  }
+                } catch {}
+
                 if (window.__antigravityMountAll) {
                   window.__antigravityMountAll();
                 }
@@ -1354,7 +1383,7 @@ class ModLoader {
             if (closeBtn) {
               closeBtn.onclick = (e) => {
                 e.stopPropagation();
-                window.__toggleGitPanel();
+                window.__toggleGitGraphPanel();
               };
             }
           }
@@ -2362,338 +2391,6 @@ class TelemetryService {
 
 
 /**
- * Lightweight local HTTP bridge server for synchronizing active agent selections
- * from the Electron renderer directly to disk (~/.gemini/config/mods/active_agents.json).
- */
-class AgentSyncServer {
-  /**
-   * @param {Object} [options]
-   * @param {number} [options.port] Port to listen on (default 53912)
-   * @param {string} [options.host] Host address (default 127.0.0.1)
-   * @param {string} [options.configPath] Path to active_agents.json
-   */
-  constructor(options = {}) {
-    this.port = options.port ?? 53912;
-    this.host = options.host || '127.0.0.1';
-    this.configPath = options.configPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'active_agents.json');
-    this.server = null;
-  }
-
-  /**
-   * Reads active agents map from disk.
-   * @returns {Object}
-   */
-  readActiveAgents() {
-    try {
-      if (fs.existsSync(this.configPath)) {
-        const raw = fs.readFileSync(this.configPath, 'utf-8');
-        return JSON.parse(raw);
-      }
-    } catch {}
-    return {};
-  }
-
-  /**
-   * Saves active agents map to disk atomically.
-   * @param {Object} data
-   */
-  writeActiveAgents(data) {
-    try {
-      const dir = path.dirname(this.configPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      const tmpPath = `${this.configPath}.tmp.${Date.now()}`;
-      fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
-      fs.renameSync(tmpPath, this.configPath);
-    } catch (err) {
-      // Fallback direct write
-      try {
-        fs.writeFileSync(this.configPath, JSON.stringify(data, null, 2), 'utf-8');
-      } catch {}
-    }
-  }
-
-  /**
-   * Updates an agent entry for a specific conversation cascadeId.
-   * @param {string} cascadeId
-   * @param {Object} agent
-   */
-  updateAgentForCascade(cascadeId, agent) {
-    if (!cascadeId) return;
-    const current = this.readActiveAgents();
-    current[cascadeId] = agent;
-    this.writeActiveAgents(current);
-  }
-
-  /**
-   * Starts the HTTP bridge server if not already running.
-   * @returns {Promise<boolean>}
-   */
-  async start() {
-    if (this.server) return true;
-
-    return new Promise((resolve) => {
-      this.server = http.createServer((req, res) => {
-        // Set CORS headers
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-        if (req.method === 'OPTIONS') {
-          res.writeHead(200);
-          res.end();
-          return;
-        }
-
-        if (req.method === 'POST' && req.url === '/active-agent') {
-          let body = '';
-          req.on('data', chunk => { body += chunk; });
-          req.on('end', () => {
-            try {
-              const payload = JSON.parse(body);
-              if (payload.cascadeId && payload.agent) {
-                this.updateAgentForCascade(payload.cascadeId, payload.agent);
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: true, cascadeId: payload.cascadeId }));
-                return;
-              }
-            } catch {}
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Invalid payload' }));
-          });
-          return;
-        }
-
-        if (req.method === 'GET' && req.url === '/active-agents') {
-          const data = this.readActiveAgents();
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(data));
-          return;
-        }
-
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Not found' }));
-      });
-
-      this.server.on('error', (err) => {
-        if (err.code === 'EADDRINUSE') {
-          // Port already in use by another instance or daemon, which is fine
-          this.server = null;
-          resolve(false);
-        } else {
-          resolve(false);
-        }
-      });
-
-      this.server.listen(this.port, this.host, () => {
-        resolve(true);
-      });
-    });
-  }
-
-  /**
-   * Stops the server if running.
-   * @returns {Promise<void>}
-   */
-  async stop() {
-    if (!this.server) return;
-    return new Promise((resolve) => {
-      this.server.close(() => {
-        this.server = null;
-        resolve();
-      });
-    });
-  }
-}
-
-
-
-
-
-/**
- * Service responsible for discovering and parsing agent markdown files (*.agent.md, agent.md, Agente *.md, SKILL.md)
- * across workspace directories and global Antigravity/Gemini configuration vaults.
- */
-class AgentDiscoveryService {
-  /**
-   * @param {Object} [options]
-   * @param {string[]} [options.searchRoots]
-   */
-  constructor(options = {}) {
-    const homedir = os.homedir();
-    this.searchRoots = options.searchRoots || [
-      process.cwd(),
-      path.join(homedir, '.gemini', 'antigravity', 'scratch', 'architecture-vault'),
-      path.join(homedir, '.gemini', 'config', 'skills'),
-      path.join(homedir, '.gemini', 'antigravity', 'agents')
-    ];
-  }
-
-  /**
-   * Scans configured paths and returns all discovered agents.
-   * @returns {Array<Object>} List of structured agent descriptor objects.
-   */
-  discoverAgents() {
-    const discovered = new Map();
-
-    for (const root of this.searchRoots) {
-      if (!fs.existsSync(root)) continue;
-      this._scanDirectory(root, discovered, 0, 4);
-    }
-
-    return Array.from(discovered.values());
-  }
-
-  /**
-   * Recursively scans a directory for agent markdown files.
-   * @private
-   */
-  _scanDirectory(dir, map, depth, maxDepth) {
-    if (depth > maxDepth) return;
-
-    try {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-
-        if (entry.isDirectory()) {
-          // Skip node_modules and .git
-          if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue;
-          this._scanDirectory(fullPath, map, depth + 1, maxDepth);
-        } else if (entry.isFile() && entry.name.endsWith('.md')) {
-          if (this._isAgentFile(entry.name, fullPath)) {
-            const agent = this.parseAgentFile(fullPath);
-            if (agent && agent.id && !map.has(agent.id)) {
-              map.set(agent.id, agent);
-            }
-          }
-        }
-      }
-    } catch {
-      // Gracefully continue on permission or filesystem errors
-    }
-  }
-
-  /**
-   * Determines if a markdown file represents an agent definition.
-   * @private
-   */
-  _isAgentFile(filename, fullPath) {
-    const lower = filename.toLowerCase();
-    if (lower === 'agent.md' || lower.endsWith('.agent.md') || lower.startsWith('agente ') || lower.startsWith('agente_')) {
-      return true;
-    }
-    if (lower === 'skill.md' && fullPath.includes('skills')) {
-      return true;
-    }
-    return false;
-  }
-
-  /**
-   * Parses frontmatter or markdown content from an agent file.
-   * @param {string} filePath
-   * @returns {Object|null}
-   */
-  parseAgentFile(filePath) {
-    try {
-      const content = fs.readFileSync(filePath, 'utf-8');
-      const filename = path.basename(filePath, '.md');
-
-      let name = '';
-      let role = '';
-      let category = 'Specialist';
-      let suite = 'Workspace';
-      let icon = '🤖';
-
-      // Detect suite by location
-      if (filePath.includes('architecture-vault') || filePath.includes('Bóveda') || filename.toLowerCase().startsWith('agente')) {
-        suite = 'Bóveda';
-        icon = '🏛️';
-      } else if (filePath.toLowerCase().includes('sdd') || filename.toLowerCase().includes('sdd')) {
-        suite = 'Gentleman SDD';
-        icon = '⚡';
-      } else if (filePath.includes('skills')) {
-        suite = 'Skills';
-        icon = '🛠️';
-      }
-
-      // 1. Try parsing YAML frontmatter
-      const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-      if (fmMatch) {
-        const fmLines = fmMatch[1].split('\n');
-        for (const line of fmLines) {
-          const colonIdx = line.indexOf(':');
-          if (colonIdx === -1) continue;
-          const key = line.slice(0, colonIdx).trim().toLowerCase();
-          let val = line.slice(colonIdx + 1).trim().replace(/^["']|["']$/g, '');
-
-          if (key === 'name') name = val;
-          else if (key === 'description' || key === 'role') role = val;
-          else if (key === 'category' || key === 'dominio') category = val;
-          else if (key === 'icon') icon = val;
-        }
-      }
-
-      // Clean up common prefix wrappers in names and roles
-      if (name) {
-        name = name
-          .replace(/^(SKILL(\s+AAS)?:\s*|🤖\s*Agente\s*(Especialista)?:\s*|Agente\s*)/i, '')
-          .replace(/\s*\([^)]*Flujos[^)]*\)/i, '')
-          .trim();
-      }
-      if (role) {
-        role = role.replace(/^(description:\s*|role:\s*)/i, '').replace(/^["']|["']$/g, '').trim();
-      }
-
-      // 2. If name not in frontmatter, extract from first heading
-      if (!name) {
-        const h1Match = content.match(/^#\s+(.+)$/m);
-        if (h1Match) {
-          name = h1Match[1].replace(/^(Agente|Agent|SKILL:)\s*/i, '').trim();
-        } else {
-          name = filename.replace(/^Agente\s*/i, '').replace(/[-_]/g, ' ');
-        }
-      }
-
-      // 3. If role not in frontmatter, extract from subtitle or first non-empty paragraph
-      if (!role) {
-        const lines = content.replace(/^---\r?\n[\s\S]*?\r?\n---/, '').split('\n');
-        for (const rawLine of lines) {
-          const trimmed = rawLine.trim();
-          if (trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('---') && !trimmed.startsWith('![')) {
-            role = trimmed.slice(0, 80);
-            break;
-          }
-        }
-        if (!role) role = `${name} Specialist`;
-      }
-
-      // Generate a clean slug id
-      const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || filename.toLowerCase();
-
-      return {
-        id,
-        name,
-        role,
-        category,
-        suite,
-        icon,
-        filePath
-      };
-    } catch {
-      return null;
-    }
-  }
-}
-
-
-
-
-
-
-/**
  * Service providing high-performance Git operations, DAG topology graph calculation,
  * collaborator avatar resolution, and GitHub metadata for Antigravity UI mods.
  */
@@ -3041,6 +2738,26 @@ class GitService {
   }
 
   /**
+   * Fetches latest changes from all configured remotes.
+   * @param {Object} [options]
+   * @param {string} [options.repoPath]
+   * @returns {boolean}
+   */
+  fetch(options = {}) {
+    const repoPath = options.repoPath || process.cwd();
+    try {
+      execSync('git fetch --all --prune', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'ignore', 'ignore']
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Helper formatting relative timestamp.
    * @private
    */
@@ -3053,6 +2770,605 @@ class GitService {
     if (hours < 24) return `${hours}h ago`;
     const days = Math.floor(hours / 24);
     return `${days}d ago`;
+  }
+}
+
+
+
+/**
+ * Service for interacting with GitHub CLI (`gh`) in native JSON mode,
+ * extracting Pull Requests, commit check status rollups, and CI/CD workflow runs.
+ */
+class GitHubCliService {
+  /**
+   * @param {Object} [options]
+   * @param {Function} [options.execFn] Custom executor function for testing / mocking
+   * @param {string} [options.repoPath] Working repository directory
+   */
+  constructor(options = {}) {
+    this.execFn = options.execFn || ((cmd, opts) => execSync(cmd, {
+      cwd: opts?.cwd || this.repoPath,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }));
+    this.repoPath = options.repoPath || process.cwd();
+  }
+
+  /**
+   * Checks whether GitHub CLI is installed and user is authenticated.
+   * @returns {{ isInstalled: boolean, isAuthenticated: boolean, account: string, scopes: string[] }}
+   */
+  checkAuth() {
+    try {
+      const output = this.execFn('gh auth status', { cwd: this.repoPath });
+      const str = String(output || '');
+
+      const isAuthed = str.includes('Logged in to github.com') || str.includes('✓');
+      let account = '';
+      const accountMatch = str.match(/account\s+([A-Za-z0-9_-]+)/i);
+      if (accountMatch) {
+        account = accountMatch[1];
+      }
+
+      const scopes = [];
+      const scopesMatch = str.match(/Token scopes:\s*([^\r\n]+)/i);
+      if (scopesMatch) {
+        const rawTokens = scopesMatch[1].replace(/['"]/g, '').split(',');
+        for (const s of rawTokens) {
+          const trimmed = s.trim();
+          if (trimmed) scopes.push(trimmed);
+        }
+      }
+
+      return {
+        isInstalled: true,
+        isAuthenticated: isAuthed,
+        account,
+        scopes
+      };
+    } catch (err) {
+      // Check if command not found
+      return {
+        isInstalled: false,
+        isAuthenticated: false,
+        account: '',
+        scopes: []
+      };
+    }
+  }
+
+  /**
+   * Retrieves active Pull Request for a given branch name.
+   * @param {string} branch
+   * @returns {Object | null}
+   */
+  getActivePullRequest(branch) {
+    if (!branch) return null;
+
+    try {
+      const fields = 'number,title,headRefName,baseRefName,url,state,author,statusCheckRollup';
+      const cmd = `gh pr list --head "${branch}" --limit 1 --json ${fields}`;
+      const raw = this.execFn(cmd, { cwd: this.repoPath });
+      const parsed = JSON.parse(raw);
+
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        return null;
+      }
+
+      const pr = parsed[0];
+      const rawChecks = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : [];
+      const checks = rawChecks.map(c => ({
+        name: c.name || '',
+        workflowName: c.workflowName || '',
+        status: (c.status || '').toUpperCase(),
+        conclusion: c.conclusion ? c.conclusion.toUpperCase() : null,
+        detailsUrl: c.detailsUrl || ''
+      }));
+
+      // Summarize checks
+      let successCount = 0;
+      let failureCount = 0;
+      let pendingCount = 0;
+
+      for (const check of checks) {
+        if (check.conclusion === 'SUCCESS') {
+          successCount++;
+        } else if (check.conclusion === 'FAILURE' || check.conclusion === 'TIMED_OUT' || check.conclusion === 'STARTUP_FAILURE') {
+          failureCount++;
+        } else {
+          pendingCount++;
+        }
+      }
+
+      let summaryStatus = 'SUCCESS';
+      if (failureCount > 0) {
+        summaryStatus = 'FAILURE';
+      } else if (pendingCount > 0 || checks.length === 0) {
+        summaryStatus = 'PENDING';
+      }
+
+      return {
+        number: pr.number,
+        title: pr.title,
+        headRef: pr.headRefName,
+        baseRef: pr.baseRefName,
+        url: pr.url,
+        state: pr.state,
+        author: pr.author?.login || 'Unknown',
+        checks,
+        checksSummary: {
+          total: checks.length,
+          success: successCount,
+          failure: failureCount,
+          pending: pendingCount,
+          status: summaryStatus
+        }
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Retrieves recent CI/CD workflow runs.
+   * @param {Object} [options]
+   * @param {number} [options.limit=5]
+   * @param {string} [options.branch]
+   * @returns {Array<Object>}
+   */
+  getRecentRuns(options = {}) {
+    const limit = options.limit ?? 5;
+    const branchFlag = options.branch ? `--branch "${options.branch}"` : '';
+
+    try {
+      const fields = 'name,workflowName,headSha,status,conclusion,url';
+      const cmd = `gh run list ${branchFlag} --limit ${limit} --json ${fields}`.trim();
+      const raw = this.execFn(cmd, { cwd: this.repoPath });
+      const parsed = JSON.parse(raw);
+
+      if (!Array.isArray(parsed)) return [];
+
+      return parsed.map(r => ({
+        name: r.name || '',
+        workflowName: r.workflowName || r.name || '',
+        headSha: r.headSha || '',
+        shortSha: (r.headSha || '').slice(0, 7),
+        status: (r.status || '').toUpperCase(),
+        conclusion: r.conclusion ? r.conclusion.toUpperCase() : null,
+        url: r.url || ''
+      }));
+    } catch {
+      return [];
+    }
+  }
+}
+
+
+
+
+/**
+ * Orchestrator combining local Git repository data and remote GitHub CLI metadata
+ * into a single unified payload for the Antigravity VCS mod and HTTP bridge.
+ */
+class VcsOrchestrator {
+  /**
+   * @param {Object} [options]
+   * @param {GitService} [options.gitService]
+   * @param {GitHubCliService} [options.githubCliService]
+   * @param {string} [options.repoPath]
+   */
+  constructor(options = {}) {
+    this.repoPath = options.repoPath || process.cwd();
+    this.gitService = options.gitService || new GitService();
+    this.githubCliService = options.githubCliService || new GitHubCliService({ repoPath: this.repoPath });
+  }
+
+  /**
+   * Produces unified repository status, commit DAG, active PR, and CI/CD runs.
+   * @param {Object} [options]
+   * @param {number} [options.limit=50]
+   * @returns {Object}
+   */
+  getRepositoryOverview(options = {}) {
+    const limit = options.limit ?? 50;
+
+    const status = this.gitService.getGitStatus({ repoPath: this.repoPath });
+    if (!status || !status.isRepo) {
+      return {
+        isRepo: false,
+        status: status || { branch: '', isClean: true, changedFiles: [], ahead: 0, behind: 0 },
+        github: { isGitHub: false },
+        pullRequest: null,
+        recentRuns: [],
+        commits: []
+      };
+    }
+
+    const githubMeta = this.gitService.getGitHubMetadata({ repoPath: this.repoPath });
+    const commits = this.gitService.getGitLog({ repoPath: this.repoPath, limit });
+
+    let pullRequest = null;
+    let recentRuns = [];
+
+    if (githubMeta && githubMeta.isGitHub) {
+      pullRequest = this.githubCliService.getActivePullRequest(status.branch);
+      recentRuns = this.githubCliService.getRecentRuns({ branch: status.branch, limit: 5 });
+    }
+
+    return {
+      isRepo: true,
+      repoPath: this.repoPath,
+      activeRepo: githubMeta.fullName || 'workspace',
+      status,
+      github: githubMeta,
+      pullRequest,
+      recentRuns,
+      commits
+    };
+  }
+}
+
+
+
+
+
+
+
+/**
+ * Lightweight local HTTP bridge server for synchronizing active agent selections
+ * from the Electron renderer directly to disk (~/.gemini/config/mods/active_agents.json)
+ * and providing unified VCS (Git + GitHub PR/CI) telemetry.
+ */
+class AgentSyncServer {
+  /**
+   * @param {Object} [options]
+   * @param {number} [options.port] Port to listen on (default 53912)
+   * @param {string} [options.host] Host address (default 127.0.0.1)
+   * @param {string} [options.configPath] Path to active_agents.json
+   * @param {VcsOrchestrator} [options.vcsOrchestrator] Custom VCS orchestrator
+   * @param {string} [options.repoPath] Path to git repository
+   */
+  constructor(options = {}) {
+    this.port = options.port ?? 53912;
+    this.host = options.host || '127.0.0.1';
+    this.configPath = options.configPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'active_agents.json');
+    this.repoPath = options.repoPath || process.cwd();
+    this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ repoPath: this.repoPath });
+    this.server = null;
+  }
+
+  /**
+   * Reads active agents map from disk.
+   * @returns {Object}
+   */
+  readActiveAgents() {
+    try {
+      if (fs.existsSync(this.configPath)) {
+        const raw = fs.readFileSync(this.configPath, 'utf-8');
+        return JSON.parse(raw);
+      }
+    } catch {}
+    return {};
+  }
+
+  /**
+   * Saves active agents map to disk atomically.
+   * @param {Object} data
+   */
+  writeActiveAgents(data) {
+    try {
+      const dir = path.dirname(this.configPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const tmpPath = `${this.configPath}.tmp.${Date.now()}`;
+      fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+      fs.renameSync(tmpPath, this.configPath);
+    } catch (err) {
+      // Fallback direct write
+      try {
+        fs.writeFileSync(this.configPath, JSON.stringify(data, null, 2), 'utf-8');
+      } catch {}
+    }
+  }
+
+  /**
+   * Updates an agent entry for a specific conversation cascadeId.
+   * @param {string} cascadeId
+   * @param {Object} agent
+   */
+  updateAgentForCascade(cascadeId, agent) {
+    if (!cascadeId) return;
+    const current = this.readActiveAgents();
+    current[cascadeId] = agent;
+    this.writeActiveAgents(current);
+  }
+
+  /**
+   * Starts the HTTP bridge server if not already running.
+   * @returns {Promise<boolean>}
+   */
+  async start() {
+    if (this.server) return true;
+
+    return new Promise((resolve) => {
+      this.server = http.createServer((req, res) => {
+        // Set CORS headers
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+        if (req.method === 'OPTIONS') {
+          res.writeHead(200);
+          res.end();
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/active-agent') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            try {
+              const payload = JSON.parse(body);
+              if (payload.cascadeId && payload.agent) {
+                this.updateAgentForCascade(payload.cascadeId, payload.agent);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, cascadeId: payload.cascadeId }));
+                return;
+              }
+            } catch {}
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid payload' }));
+          });
+          return;
+        }
+
+        if (req.method === 'GET' && req.url === '/active-agents') {
+          const data = this.readActiveAgents();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(data));
+          return;
+        }
+
+        if (req.method === 'GET' && (req.url === '/vcs/overview' || req.url.startsWith('/vcs/overview?'))) {
+          try {
+            const data = this.vcsOrchestrator.getRepositoryOverview();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(data));
+          } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+          }
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/vcs/fetch') {
+          try {
+            if (this.vcsOrchestrator?.gitService && typeof this.vcsOrchestrator.gitService.fetch === 'function') {
+              this.vcsOrchestrator.gitService.fetch({ repoPath: this.repoPath });
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true }));
+          } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+          }
+          return;
+        }
+
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not found' }));
+      });
+
+      this.server.on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+          // Port already in use by another instance or daemon, which is fine
+          this.server = null;
+          resolve(false);
+        } else {
+          resolve(false);
+        }
+      });
+
+      this.server.listen(this.port, this.host, () => {
+        resolve(true);
+      });
+    });
+  }
+
+  /**
+   * Stops the server if running.
+   * @returns {Promise<void>}
+   */
+  async stop() {
+    if (!this.server) return;
+    return new Promise((resolve) => {
+      this.server.close(() => {
+        this.server = null;
+        resolve();
+      });
+    });
+  }
+}
+
+
+
+
+
+/**
+ * Service responsible for discovering and parsing agent markdown files (*.agent.md, agent.md, Agente *.md, SKILL.md)
+ * across workspace directories and global Antigravity/Gemini configuration vaults.
+ */
+class AgentDiscoveryService {
+  /**
+   * @param {Object} [options]
+   * @param {string[]} [options.searchRoots]
+   */
+  constructor(options = {}) {
+    const homedir = os.homedir();
+    this.searchRoots = options.searchRoots || [
+      process.cwd(),
+      path.join(homedir, '.gemini', 'antigravity', 'scratch', 'architecture-vault'),
+      path.join(homedir, '.gemini', 'config', 'skills'),
+      path.join(homedir, '.gemini', 'antigravity', 'agents')
+    ];
+  }
+
+  /**
+   * Scans configured paths and returns all discovered agents.
+   * @returns {Array<Object>} List of structured agent descriptor objects.
+   */
+  discoverAgents() {
+    const discovered = new Map();
+
+    for (const root of this.searchRoots) {
+      if (!fs.existsSync(root)) continue;
+      this._scanDirectory(root, discovered, 0, 4);
+    }
+
+    return Array.from(discovered.values());
+  }
+
+  /**
+   * Recursively scans a directory for agent markdown files.
+   * @private
+   */
+  _scanDirectory(dir, map, depth, maxDepth) {
+    if (depth > maxDepth) return;
+
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+
+        if (entry.isDirectory()) {
+          // Skip node_modules and .git
+          if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue;
+          this._scanDirectory(fullPath, map, depth + 1, maxDepth);
+        } else if (entry.isFile() && entry.name.endsWith('.md')) {
+          if (this._isAgentFile(entry.name, fullPath)) {
+            const agent = this.parseAgentFile(fullPath);
+            if (agent && agent.id && !map.has(agent.id)) {
+              map.set(agent.id, agent);
+            }
+          }
+        }
+      }
+    } catch {
+      // Gracefully continue on permission or filesystem errors
+    }
+  }
+
+  /**
+   * Determines if a markdown file represents an agent definition.
+   * @private
+   */
+  _isAgentFile(filename, fullPath) {
+    const lower = filename.toLowerCase();
+    if (lower === 'agent.md' || lower.endsWith('.agent.md') || lower.startsWith('agente ') || lower.startsWith('agente_')) {
+      return true;
+    }
+    if (lower === 'skill.md' && fullPath.includes('skills')) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Parses frontmatter or markdown content from an agent file.
+   * @param {string} filePath
+   * @returns {Object|null}
+   */
+  parseAgentFile(filePath) {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const filename = path.basename(filePath, '.md');
+
+      let name = '';
+      let role = '';
+      let category = 'Specialist';
+      let suite = 'Workspace';
+      let icon = '🤖';
+
+      // Detect suite by location
+      if (filePath.includes('architecture-vault') || filePath.includes('Bóveda') || filename.toLowerCase().startsWith('agente')) {
+        suite = 'Bóveda';
+        icon = '🏛️';
+      } else if (filePath.toLowerCase().includes('sdd') || filename.toLowerCase().includes('sdd')) {
+        suite = 'Gentleman SDD';
+        icon = '⚡';
+      } else if (filePath.includes('skills')) {
+        suite = 'Skills';
+        icon = '🛠️';
+      }
+
+      // 1. Try parsing YAML frontmatter
+      const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      if (fmMatch) {
+        const fmLines = fmMatch[1].split('\n');
+        for (const line of fmLines) {
+          const colonIdx = line.indexOf(':');
+          if (colonIdx === -1) continue;
+          const key = line.slice(0, colonIdx).trim().toLowerCase();
+          let val = line.slice(colonIdx + 1).trim().replace(/^["']|["']$/g, '');
+
+          if (key === 'name') name = val;
+          else if (key === 'description' || key === 'role') role = val;
+          else if (key === 'category' || key === 'dominio') category = val;
+          else if (key === 'icon') icon = val;
+        }
+      }
+
+      // Clean up common prefix wrappers in names and roles
+      if (name) {
+        name = name
+          .replace(/^(SKILL(\s+AAS)?:\s*|🤖\s*Agente\s*(Especialista)?:\s*|Agente\s*)/i, '')
+          .replace(/\s*\([^)]*Flujos[^)]*\)/i, '')
+          .trim();
+      }
+      if (role) {
+        role = role.replace(/^(description:\s*|role:\s*)/i, '').replace(/^["']|["']$/g, '').trim();
+      }
+
+      // 2. If name not in frontmatter, extract from first heading
+      if (!name) {
+        const h1Match = content.match(/^#\s+(.+)$/m);
+        if (h1Match) {
+          name = h1Match[1].replace(/^(Agente|Agent|SKILL:)\s*/i, '').trim();
+        } else {
+          name = filename.replace(/^Agente\s*/i, '').replace(/[-_]/g, ' ');
+        }
+      }
+
+      // 3. If role not in frontmatter, extract from subtitle or first non-empty paragraph
+      if (!role) {
+        const lines = content.replace(/^---\r?\n[\s\S]*?\r?\n---/, '').split('\n');
+        for (const rawLine of lines) {
+          const trimmed = rawLine.trim();
+          if (trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('---') && !trimmed.startsWith('![')) {
+            role = trimmed.slice(0, 80);
+            break;
+          }
+        }
+        if (!role) role = `${name} Specialist`;
+      }
+
+      // Generate a clean slug id
+      const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || filename.toLowerCase();
+
+      return {
+        id,
+        name,
+        role,
+        category,
+        suite,
+        icon,
+        filePath
+      };
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -4657,6 +4973,117 @@ class ModsManagerMod extends AntigravityMod {
 
 // ===================== Git Graph Mod =====================
 /**
+ * Generates HTML for the Pull Request and CI/CD status card.
+ * @param {Object | null} pr Active Pull Request or null
+ * @param {Object} [status={}] Local Git repository status
+ * @param {Object} [github={}] GitHub remote metadata
+ * @returns {string}
+ */
+function renderPrCiCardHtml(pr, status = {}, github = {}) {
+  if (!pr) {
+    const ahead = status.ahead || 0;
+    const behind = status.behind || 0;
+    const branchName = status.branch || 'main';
+    const syncText = ahead > 0 && behind > 0
+      ? `${ahead} ahead, ${behind} behind`
+      : ahead > 0
+        ? `${ahead} ahead`
+        : behind > 0
+          ? `${behind} behind`
+          : 'Sincronizado';
+
+    return `
+      <div class="git-pr-card git-pr-none">
+        <div class="git-pr-none-left">
+          <span class="git-pr-icon">ᛦ</span>
+          <span class="git-pr-none-text">Sin PR activo en esta rama (${escapeGitHtml(branchName)})</span>
+        </div>
+        <div class="git-pr-none-right">
+          <span class="git-pr-sync-badge" title="Commits respecto al upstream">${escapeGitHtml(syncText)}</span>
+          ${github.webUrl ? `<a href="${github.webUrl}/pull/new/${encodeURIComponent(branchName)}" target="_blank" rel="noopener" class="git-pr-create-link">+ Crear PR</a>` : ''}
+        </div>
+      </div>
+    `.trim();
+  }
+
+  const summary = pr.checksSummary || { total: 0, success: 0, failure: 0, pending: 0, status: 'PENDING' };
+  const statusCls = summary.status === 'SUCCESS'
+    ? 'ci-status-success'
+    : summary.status === 'FAILURE'
+      ? 'ci-status-failure'
+      : 'ci-status-pending';
+
+  const statusLabel = summary.status === 'SUCCESS'
+    ? `✔ CI Passing (${summary.success}/${summary.total})`
+    : summary.status === 'FAILURE'
+      ? `✖ CI Failed (${summary.failure}/${summary.total})`
+      : `⏳ CI In Progress (${summary.success}/${summary.total})`;
+
+  const checksListHtml = (pr.checks || []).map(c => {
+    const isSuccess = c.conclusion === 'SUCCESS';
+    const isFail = c.conclusion === 'FAILURE' || c.conclusion === 'TIMED_OUT';
+    const icon = isSuccess ? '✔' : isFail ? '✖' : '⏳';
+    const checkCls = isSuccess ? 'check-success' : isFail ? 'check-fail' : 'check-pending';
+
+    return `
+      <div class="git-ci-check-item ${checkCls}">
+        <span class="git-ci-check-icon">${icon}</span>
+        <div class="git-ci-check-info">
+          <span class="git-ci-check-name" title="${escapeGitHtml(c.name)}">${escapeGitHtml(c.name)}</span>
+          ${c.workflowName ? `<span class="git-ci-check-wf">${escapeGitHtml(c.workflowName)}</span>` : ''}
+        </div>
+        ${c.detailsUrl ? `<a href="${c.detailsUrl}" target="_blank" rel="noopener" class="git-ci-check-link">Logs ↗</a>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="git-pr-card has-pr" id="antigravity-git-pr-card">
+      <div class="git-pr-card-main">
+        <div class="git-pr-header-col">
+          <div class="git-pr-badge-row">
+            <span class="git-pr-state-badge state-${String(pr.state).toLowerCase()}">${escapeGitHtml(pr.state)}</span>
+            <a href="${pr.url}" target="_blank" rel="noopener" class="git-pr-num-link" title="Open Pull Request on GitHub">
+              #${pr.number}
+            </a>
+            <span class="git-pr-branch-flow">${escapeGitHtml(pr.headRef)} → ${escapeGitHtml(pr.baseRef)}</span>
+          </div>
+          <div class="git-pr-title" title="${escapeGitHtml(pr.title)}">${escapeGitHtml(pr.title)}</div>
+        </div>
+
+        <div class="git-pr-ci-badge-wrap">
+          <button class="git-ci-rollup-btn ${statusCls}" id="antigravity-git-ci-rollup-trigger" title="Ver checks de CI/CD">
+            <span>${statusLabel}</span>
+            <span class="git-ci-caret">▾</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Expandable CI Checks Accordion -->
+      <div class="git-ci-checks-accordion" id="antigravity-git-ci-accordion" style="display: none;">
+        <div class="git-ci-checks-header">
+          <span>Workflows &amp; Branch Checks</span>
+          <span class="git-ci-checks-count">${summary.success}/${summary.total} Completados</span>
+        </div>
+        <div class="git-ci-checks-list">
+          ${checksListHtml || '<div class="git-ci-empty">No hay checks reportados</div>'}
+        </div>
+      </div>
+    </div>
+  `.trim();
+}
+
+function escapeGitHtml(str = '') {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+
+/**
  * Generates dynamic SVG topology graph paths and nodes for Git branches and commits
  * matching the compact VS Code Git Graph aesthetic.
  */
@@ -4802,6 +5229,7 @@ function renderGitGraphSvg(commits = [], options = {}) {
 
 
 
+
 /**
  * Generates HTML for the auxiliary pane tab trigger button.
  * @returns {string}
@@ -4829,6 +5257,7 @@ function renderGitGraphTabButton() {
  * @param {Array<Object>} [context.commits=[]]
  * @param {Object} [context.status={}]
  * @param {Object} [context.github={}]
+ * @param {Object} [context.pullRequest=null]
  * @param {string} [context.activeRepo='']
  * @returns {string}
  */
@@ -4836,9 +5265,10 @@ function renderGitGraphPanelHtml(context = {}) {
   const commits = Array.isArray(context.commits) ? context.commits : [];
   const status = context.status || { branch: 'main', isClean: true, ahead: 0, behind: 0 };
   const github = context.github || { isGitHub: false };
+  const pullRequest = context.pullRequest || null;
   const repoName = context.activeRepo || (github.fullName || 'workspace');
 
-  // By default expand the second commit if it has files (matching user screenshot), or none
+  // By default expand the second commit if it has files, or none
   commits.forEach((c, idx) => {
     if (c.expanded === undefined) {
       c.expanded = idx === 1 && Array.isArray(c.files) && c.files.length > 0;
@@ -4846,6 +5276,7 @@ function renderGitGraphPanelHtml(context = {}) {
   });
 
   const svgGraph = renderGitGraphSvg(commits, { rowHeight: 26, fileRowHeight: 22, laneWidth: 14, startX: 14 });
+  const prCiHtml = renderPrCiCardHtml(pullRequest, status, github);
 
   // Generate commit list items
   const commitRowsHtml = commits.map((c, idx) => {
@@ -4880,7 +5311,7 @@ function renderGitGraphPanelHtml(context = {}) {
       `;
     }).join('');
 
-const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(c.hash) : '';
+    const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(c.hash) : '';
     const author = c.author || { name: 'Unknown', email: '', avatarUrl: '' };
 
     return `
@@ -4921,10 +5352,13 @@ const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(c
         </div>
         <div class="git-header-actions">
           <span class="git-pill-auto">Auto</span>
-          <button class="git-tool-btn" id="antigravity-git-refresh-btn" title="Refresh Git status">↻</button>
+          <button class="git-tool-btn" id="antigravity-git-refresh-btn" title="Refresh Git &amp; GitHub status">↻</button>
           <button class="git-tool-btn git-tool-close" id="antigravity-git-close-btn" title="Close Git Graph">✕</button>
         </div>
       </div>
+
+      <!-- Pull Request & CI/CD Status Card -->
+      ${prCiHtml}
 
       <!-- Graph & Commits Viewport -->
       <div class="git-graph-container">
@@ -4935,6 +5369,9 @@ const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(c
           ${commitRowsHtml}
         </div>
       </div>
+
+      <!-- Commit Inspector Mount -->
+      <div class="git-inspector-mount" id="antigravity-git-inspector" style="display: none;"></div>
     </div>
   `.trim();
 }
@@ -4997,10 +5434,15 @@ function escapeGitHtml(str = '') {
 
 
 /**
- * Mod providing live topological Git branch & commit visualization in the Auxiliary Pane.
+ * Mod providing live topological Git branch & commit visualization
+ * alongside GitHub Pull Requests and CI/CD status in the Auxiliary Pane.
  */
 class GitGraphMod extends AntigravityMod {
-  constructor() {
+  /**
+   * @param {Object} [options]
+   * @param {Object} [options.initialContext] Pre-computed VCS overview
+   */
+  constructor(options = {}) {
     super({
       id: 'git-graph',
       name: 'Git & GitHub Topological Graph',
@@ -5009,7 +5451,8 @@ class GitGraphMod extends AntigravityMod {
       priority: 60
     });
 
-    this.cachedCss = "/* =========================================================================\n   ANTIGRAVITY GIT & GITHUB GRAPH MOD - VS CODE STYLE\n   Ultra-compact, lightweight DAG commit tree & inline file diff visualizer\n   ========================================================================= */\n\n/* Tab Button in Auxiliary Pane Header */\n.antigravity-git-tab-wrapper {\n  display: inline-flex;\n  align-items: center;\n}\n\n.antigravity-git-tab-btn {\n  height: 28px !important;\n  padding: 0 8px !important;\n  font-size: 12px !important;\n  font-weight: 500 !important;\n  color: #94a3b8 !important;\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  transition: all 0.15s ease !important;\n  user-select: none !important;\n}\n\n.antigravity-git-tab-btn:hover {\n  background: rgba(255, 255, 255, 0.06) !important;\n  color: #f8fafc !important;\n}\n\n.antigravity-git-tab-btn.active {\n  background: #1e2438 !important;\n  color: #38bdf8 !important;\n  border-color: rgba(56, 189, 248, 0.25) !important;\n}\n\n/* Full Auxiliary Panel Body */\n.antigravity-git-panel {\n  display: flex !important;\n  flex-direction: column !important;\n  width: 100% !important;\n  height: 100% !important;\n  background: #181a1f !important;\n  color: #e2e8f0 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, monospace, sans-serif !important;\n  overflow: hidden !important;\n  box-sizing: border-box !important;\n}\n\n/* VS Code Minimal Header Bar */\n.git-panel-header {\n  height: 32px !important;\n  min-height: 32px !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  padding: 0 10px !important;\n  background: #1e222b !important;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;\n  user-select: none !important;\n}\n\n.git-panel-title-wrap {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  overflow: hidden !important;\n}\n\n.git-header-caret {\n  font-size: 12px !important;\n  color: #94a3b8 !important;\n}\n\n.git-header-title {\n  font-size: 12px !important;\n  font-weight: 600 !important;\n  color: #f1f5f9 !important;\n}\n\n.git-header-repo {\n  font-size: 11px !important;\n  color: #64748b !important;\n  max-width: 140px !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n}\n\n.git-branch-pill {\n  font-size: 10px !important;\n  font-weight: 600 !important;\n  padding: 1px 6px !important;\n  border-radius: 4px !important;\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\n  font-family: monospace !important;\n}\n\n.git-header-actions {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n}\n\n.git-pill-auto {\n  font-size: 10px !important;\n  color: #94a3b8 !important;\n  background: rgba(255, 255, 255, 0.05) !important;\n  padding: 1px 5px !important;\n  border-radius: 3px !important;\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\n}\n\n.git-tool-btn {\n  background: transparent !important;\n  border: none !important;\n  color: #94a3b8 !important;\n  font-size: 12px !important;\n  cursor: pointer !important;\n  padding: 2px 4px !important;\n  border-radius: 4px !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n}\n\n.git-tool-btn:hover {\n  background: rgba(255, 255, 255, 0.1) !important;\n  color: #f1f5f9 !important;\n}\n\n.git-tool-close:hover {\n  background: rgba(239, 68, 68, 0.2) !important;\n  color: #ef4444 !important;\n}\n\n/* Graph & Commits Viewport */\n.git-graph-container {\n  display: flex !important;\n  flex: 1 1 0% !important;\n  overflow-y: auto !important;\n  overflow-x: hidden !important;\n  position: relative !important;\n  scrollbar-width: thin !important;\n  scrollbar-color: rgba(255, 255, 255, 0.15) transparent !important;\n}\n\n.git-graph-container::-webkit-scrollbar {\n  width: 6px !important;\n}\n\n.git-graph-container::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15) !important;\n  border-radius: 3px !important;\n}\n\n.git-svg-column {\n  flex-shrink: 0 !important;\n  position: relative !important;\n}\n\n.git-graph-svg {\n  display: block !important;\n}\n\n.git-commits-column {\n  flex: 1 1 0% !important;\n  min-width: 0 !important;\n  display: flex !important;\n  flex-direction: column !important;\n}\n\n/* Individual Commit Item */\n.git-commit-item {\n  display: flex !important;\n  flex-direction: column !important;\n  width: 100% !important;\n}\n\n.git-commit-row {\n  height: 26px !important;\n  min-height: 26px !important;\n  display: flex !important;\n  align-items: center !important;\n  padding: 0 8px 0 4px !important;\n  cursor: pointer !important;\n  border-radius: 0 !important;\n  transition: background 0.1s ease !important;\n  user-select: none !important;\n  overflow: hidden !important;\n}\n\n.git-commit-row:hover {\n  background: rgba(255, 255, 255, 0.04) !important;\n}\n\n.git-commit-row.selected {\n  background: rgba(56, 189, 248, 0.12) !important;\n}\n\n.git-commit-main {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  width: 100% !important;\n  min-width: 0 !important;\n  gap: 8px !important;\n}\n\n.git-commit-subject {\n  font-size: 12px !important;\n  color: #e2e8f0 !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n  flex: 1 1 0% !important;\n}\n\n.git-commit-badges {\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 4px !important;\n  flex-shrink: 0 !important;\n}\n\n/* Branch & Ref Badges (VS Code Pill Style) */\n.git-pill-branch {\n  font-size: 10px !important;\n  font-weight: 500 !important;\n  padding: 1px 6px !important;\n  border-radius: 10px !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 3px !important;\n  white-space: nowrap !important;\n  font-family: monospace !important;\n}\n\n.git-pill-local {\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\n}\n\n.git-pill-head {\n  background: rgba(56, 189, 248, 0.22) !important;\n  color: #7dd3fc !important;\n  border: 1px solid rgba(56, 189, 248, 0.5) !important;\n  box-shadow: 0 0 6px rgba(56, 189, 248, 0.25) !important;\n}\n\n.git-pill-origin {\n  background: rgba(249, 115, 22, 0.15) !important;\n  color: #fb923c !important;\n  border: 1px solid rgba(249, 115, 22, 0.35) !important;\n}\n\n.git-pill-files {\n  font-size: 9px !important;\n  color: #64748b !important;\n  background: rgba(255, 255, 255, 0.05) !important;\n  padding: 1px 4px !important;\n  border-radius: 3px !important;\n}\n\n.git-icon-cloud {\n  font-size: 10px !important;\n}\n\n.git-icon-dot {\n  font-size: 9px !important;\n}\n\n/* Expandable Inline File Diff List */\n.git-commit-files-container {\n  display: flex !important;\n  flex-direction: column !important;\n  background: rgba(0, 0, 0, 0.25) !important;\n  border-left: 2px solid rgba(56, 189, 248, 0.3) !important;\n  margin-left: 14px !important;\n  padding: 2px 0 !important;\n}\n\n.git-file-row {\n  height: 22px !important;\n  min-height: 22px !important;\n  display: flex !important;\n  align-items: center !important;\n  padding: 0 10px 0 8px !important;\n  font-size: 11px !important;\n  gap: 8px !important;\n  overflow: hidden !important;\n}\n\n.git-file-row:hover {\n  background: rgba(255, 255, 255, 0.04) !important;\n}\n\n.git-file-ext {\n  font-size: 9px !important;\n  font-weight: 700 !important;\n  padding: 1px 4px !important;\n  border-radius: 3px !important;\n  font-family: monospace !important;\n  letter-spacing: -0.02em !important;\n}\n\n.ext-js {\n  background: rgba(234, 179, 8, 0.18) !important;\n  color: #facc15 !important;\n  border: 1px solid rgba(234, 179, 8, 0.35) !important;\n}\n\n.ext-ts {\n  background: rgba(59, 130, 246, 0.18) !important;\n  color: #60a5fa !important;\n  border: 1px solid rgba(59, 130, 246, 0.35) !important;\n}\n\n.ext-json {\n  background: rgba(34, 197, 94, 0.18) !important;\n  color: #4ade80 !important;\n  border: 1px solid rgba(34, 197, 94, 0.35) !important;\n}\n\n.ext-css {\n  background: rgba(6, 182, 212, 0.18) !important;\n  color: #22d3ee !important;\n  border: 1px solid rgba(6, 182, 212, 0.35) !important;\n}\n\n.ext-md {\n  background: rgba(168, 85, 247, 0.18) !important;\n  color: #c084fc !important;\n  border: 1px solid rgba(168, 85, 247, 0.35) !important;\n}\n\n.ext-default {\n  background: rgba(148, 163, 184, 0.18) !important;\n  color: #cbd5e1 !important;\n  border: 1px solid rgba(148, 163, 184, 0.3) !important;\n}\n\n.git-file-name {\n  color: #e2e8f0 !important;\n  font-weight: 500 !important;\n  white-space: nowrap !important;\n}\n\n.git-file-dir {\n  color: #64748b !important;\n  font-family: monospace !important;\n  font-size: 10px !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n  flex: 1 1 0% !important;\n}\n\n.git-file-status {\n  font-size: 10px !important;\n  font-weight: 700 !important;\n  font-family: monospace !important;\n}\n\n.status-modified {\n  color: #eab308 !important;\n}\n\n.status-added {\n  color: #22c55e !important;\n}\n\n.status-deleted {\n  color: #ef4444 !important;\n}\n";
+    this.initialContext = options.initialContext || {};
+    this.cachedCss = "/* =========================================================================\n   ANTIGRAVITY GIT & GITHUB GRAPH MOD - VS CODE STYLE\n   Ultra-compact, lightweight DAG commit tree & inline file diff visualizer\n   ========================================================================= */\n\n/* Tab Button in Auxiliary Pane Header */\n.antigravity-git-tab-wrapper {\n  display: inline-flex;\n  align-items: center;\n}\n\n.antigravity-git-tab-btn {\n  height: 28px !important;\n  padding: 0 8px !important;\n  font-size: 12px !important;\n  font-weight: 500 !important;\n  color: #94a3b8 !important;\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  transition: all 0.15s ease !important;\n  user-select: none !important;\n}\n\n.antigravity-git-tab-btn:hover {\n  background: rgba(255, 255, 255, 0.06) !important;\n  color: #f8fafc !important;\n}\n\n.antigravity-git-tab-btn.active {\n  background: #1e2438 !important;\n  color: #38bdf8 !important;\n  border-color: rgba(56, 189, 248, 0.25) !important;\n}\n\n/* Full Auxiliary Panel Body */\n.antigravity-git-panel {\n  display: flex !important;\n  flex-direction: column !important;\n  width: 100% !important;\n  height: 100% !important;\n  background: #181a1f !important;\n  color: #e2e8f0 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, monospace, sans-serif !important;\n  overflow: hidden !important;\n  box-sizing: border-box !important;\n}\n\n/* VS Code Minimal Header Bar */\n.git-panel-header {\n  height: 32px !important;\n  min-height: 32px !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  padding: 0 10px !important;\n  background: #1e222b !important;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;\n  user-select: none !important;\n}\n\n.git-panel-title-wrap {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  overflow: hidden !important;\n}\n\n.git-header-caret {\n  font-size: 12px !important;\n  color: #94a3b8 !important;\n}\n\n.git-header-title {\n  font-size: 12px !important;\n  font-weight: 600 !important;\n  color: #f1f5f9 !important;\n}\n\n.git-header-repo {\n  font-size: 11px !important;\n  color: #64748b !important;\n  max-width: 140px !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n}\n\n.git-branch-pill {\n  font-size: 10px !important;\n  font-weight: 600 !important;\n  padding: 1px 6px !important;\n  border-radius: 4px !important;\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\n  font-family: monospace !important;\n}\n\n.git-header-actions {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n}\n\n.git-pill-auto {\n  font-size: 10px !important;\n  color: #94a3b8 !important;\n  background: rgba(255, 255, 255, 0.05) !important;\n  padding: 1px 5px !important;\n  border-radius: 3px !important;\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\n}\n\n.git-tool-btn {\n  background: transparent !important;\n  border: none !important;\n  color: #94a3b8 !important;\n  font-size: 12px !important;\n  cursor: pointer !important;\n  padding: 2px 4px !important;\n  border-radius: 4px !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n}\n\n.git-tool-btn:hover {\n  background: rgba(255, 255, 255, 0.1) !important;\n  color: #f1f5f9 !important;\n}\n\n.git-tool-close:hover {\n  background: rgba(239, 68, 68, 0.2) !important;\n  color: #ef4444 !important;\n}\n\n/* Graph & Commits Viewport */\n.git-graph-container {\n  display: flex !important;\n  flex: 1 1 0% !important;\n  overflow-y: auto !important;\n  overflow-x: hidden !important;\n  position: relative !important;\n  scrollbar-width: thin !important;\n  scrollbar-color: rgba(255, 255, 255, 0.15) transparent !important;\n}\n\n.git-graph-container::-webkit-scrollbar {\n  width: 6px !important;\n}\n\n.git-graph-container::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15) !important;\n  border-radius: 3px !important;\n}\n\n.git-svg-column {\n  flex-shrink: 0 !important;\n  position: relative !important;\n}\n\n.git-graph-svg {\n  display: block !important;\n}\n\n.git-commits-column {\n  flex: 1 1 0% !important;\n  min-width: 0 !important;\n  display: flex !important;\n  flex-direction: column !important;\n}\n\n/* Individual Commit Item */\n.git-commit-item {\n  display: flex !important;\n  flex-direction: column !important;\n  width: 100% !important;\n}\n\n.git-commit-row {\n  height: 26px !important;\n  min-height: 26px !important;\n  display: flex !important;\n  align-items: center !important;\n  padding: 0 8px 0 4px !important;\n  cursor: pointer !important;\n  border-radius: 0 !important;\n  transition: background 0.1s ease !important;\n  user-select: none !important;\n  overflow: hidden !important;\n}\n\n.git-commit-row:hover {\n  background: rgba(255, 255, 255, 0.04) !important;\n}\n\n.git-commit-row.selected {\n  background: rgba(56, 189, 248, 0.12) !important;\n}\n\n.git-commit-main {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  width: 100% !important;\n  min-width: 0 !important;\n  gap: 8px !important;\n}\n\n.git-commit-subject {\n  font-size: 12px !important;\n  color: #e2e8f0 !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n  flex: 1 1 0% !important;\n}\n\n.git-commit-badges {\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 4px !important;\n  flex-shrink: 0 !important;\n}\n\n/* Branch & Ref Badges (VS Code Pill Style) */\n.git-pill-branch {\n  font-size: 10px !important;\n  font-weight: 500 !important;\n  padding: 1px 6px !important;\n  border-radius: 10px !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 3px !important;\n  white-space: nowrap !important;\n  font-family: monospace !important;\n}\n\n.git-pill-local {\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\n}\n\n.git-pill-head {\n  background: rgba(56, 189, 248, 0.22) !important;\n  color: #7dd3fc !important;\n  border: 1px solid rgba(56, 189, 248, 0.5) !important;\n  box-shadow: 0 0 6px rgba(56, 189, 248, 0.25) !important;\n}\n\n.git-pill-origin {\n  background: rgba(249, 115, 22, 0.15) !important;\n  color: #fb923c !important;\n  border: 1px solid rgba(249, 115, 22, 0.35) !important;\n}\n\n.git-pill-files {\n  font-size: 9px !important;\n  color: #64748b !important;\n  background: rgba(255, 255, 255, 0.05) !important;\n  padding: 1px 4px !important;\n  border-radius: 3px !important;\n}\n\n.git-icon-cloud {\n  font-size: 10px !important;\n}\n\n.git-icon-dot {\n  font-size: 9px !important;\n}\n\n/* Expandable Inline File Diff List */\n.git-commit-files-container {\n  display: flex !important;\n  flex-direction: column !important;\n  background: rgba(0, 0, 0, 0.25) !important;\n  border-left: 2px solid rgba(56, 189, 248, 0.3) !important;\n  margin-left: 14px !important;\n  padding: 2px 0 !important;\n}\n\n.git-file-row {\n  height: 22px !important;\n  min-height: 22px !important;\n  display: flex !important;\n  align-items: center !important;\n  padding: 0 10px 0 8px !important;\n  font-size: 11px !important;\n  gap: 8px !important;\n  overflow: hidden !important;\n}\n\n.git-file-row:hover {\n  background: rgba(255, 255, 255, 0.04) !important;\n}\n\n.git-file-ext {\n  font-size: 9px !important;\n  font-weight: 700 !important;\n  padding: 1px 4px !important;\n  border-radius: 3px !important;\n  font-family: monospace !important;\n  letter-spacing: -0.02em !important;\n}\n\n.ext-js {\n  background: rgba(234, 179, 8, 0.18) !important;\n  color: #facc15 !important;\n  border: 1px solid rgba(234, 179, 8, 0.35) !important;\n}\n\n.ext-ts {\n  background: rgba(59, 130, 246, 0.18) !important;\n  color: #60a5fa !important;\n  border: 1px solid rgba(59, 130, 246, 0.35) !important;\n}\n\n.ext-json {\n  background: rgba(34, 197, 94, 0.18) !important;\n  color: #4ade80 !important;\n  border: 1px solid rgba(34, 197, 94, 0.35) !important;\n}\n\n.ext-css {\n  background: rgba(6, 182, 212, 0.18) !important;\n  color: #22d3ee !important;\n  border: 1px solid rgba(6, 182, 212, 0.35) !important;\n}\n\n.ext-md {\n  background: rgba(168, 85, 247, 0.18) !important;\n  color: #c084fc !important;\n  border: 1px solid rgba(168, 85, 247, 0.35) !important;\n}\n\n.ext-default {\n  background: rgba(148, 163, 184, 0.18) !important;\n  color: #cbd5e1 !important;\n  border: 1px solid rgba(148, 163, 184, 0.3) !important;\n}\n\n.git-file-name {\n  color: #e2e8f0 !important;\n  font-weight: 500 !important;\n  white-space: nowrap !important;\n}\n\n.git-file-dir {\n  color: #64748b !important;\n  font-family: monospace !important;\n  font-size: 10px !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n  flex: 1 1 0% !important;\n}\n\n.git-file-status {\n  font-size: 10px !important;\n  font-weight: 700 !important;\n  font-family: monospace !important;\n}\n\n.status-modified {\n  color: #eab308 !important;\n}\n\n.status-added {\n  color: #22c55e !important;\n}\n\n.status-deleted {\n  color: #ef4444 !important;\n}\n\n\n/* =========================================================================\n   PULL REQUEST & CI/CD STATUS CARD STYLES\n   ========================================================================= */\n\n.git-pr-card {\n  padding: 8px 12px !important;\n  background: #13161f !important;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 6px !important;\n  font-size: 11px !important;\n}\n\n.git-pr-none {\n  display: flex !important;\n  flex-direction: row !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  color: #64748b !important;\n  background: #11141c !important;\n  padding: 6px 12px !important;\n}\n\n.git-pr-none-left {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n}\n\n.git-pr-icon {\n  font-size: 13px !important;\n  color: #38bdf8 !important;\n}\n\n.git-pr-none-right {\n  display: flex !important;\n  align-items: center !important;\n  gap: 8px !important;\n}\n\n.git-pr-sync-badge {\n  font-size: 10px !important;\n  padding: 1px 6px !important;\n  border-radius: 4px !important;\n  background: rgba(255, 255, 255, 0.05) !important;\n  color: #94a3b8 !important;\n}\n\n.git-pr-create-link {\n  font-size: 10px !important;\n  color: #38bdf8 !important;\n  text-decoration: none !important;\n  font-weight: 500 !important;\n}\n\n.git-pr-create-link:hover {\n  text-decoration: underline !important;\n}\n\n.git-pr-card-main {\n  display: flex !important;\n  align-items: flex-start !important;\n  justify-content: space-between !important;\n  gap: 10px !important;\n}\n\n.git-pr-header-col {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 3px !important;\n  min-width: 0 !important;\n  flex: 1 1 0% !important;\n}\n\n.git-pr-badge-row {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n}\n\n.git-pr-state-badge {\n  font-size: 9px !important;\n  font-weight: 700 !important;\n  text-transform: uppercase !important;\n  padding: 1px 5px !important;\n  border-radius: 4px !important;\n  letter-spacing: 0.5px !important;\n}\n\n.state-open {\n  background: rgba(34, 197, 94, 0.2) !important;\n  color: #4ade80 !important;\n  border: 1px solid rgba(34, 197, 94, 0.4) !important;\n}\n\n.state-merged {\n  background: rgba(168, 85, 247, 0.2) !important;\n  color: #c084fc !important;\n  border: 1px solid rgba(168, 85, 247, 0.4) !important;\n}\n\n.state-closed {\n  background: rgba(239, 68, 68, 0.2) !important;\n  color: #f87171 !important;\n  border: 1px solid rgba(239, 68, 68, 0.4) !important;\n}\n\n.git-pr-num-link {\n  font-weight: 700 !important;\n  color: #60a5fa !important;\n  text-decoration: none !important;\n  font-family: monospace !important;\n}\n\n.git-pr-num-link:hover {\n  text-decoration: underline !important;\n}\n\n.git-pr-branch-flow {\n  color: #94a3b8 !important;\n  font-size: 10px !important;\n  font-family: monospace !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n}\n\n.git-pr-title {\n  font-size: 11px !important;\n  font-weight: 600 !important;\n  color: #f1f5f9 !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n}\n\n/* CI/CD Rollup Button */\n.git-pr-ci-badge-wrap {\n  flex-shrink: 0 !important;\n}\n\n.git-ci-rollup-btn {\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 5px !important;\n  padding: 3px 8px !important;\n  border-radius: 5px !important;\n  font-size: 10px !important;\n  font-weight: 600 !important;\n  cursor: pointer !important;\n  border: 1px solid transparent !important;\n  transition: all 0.15s ease !important;\n  user-select: none !important;\n}\n\n.ci-status-success {\n  background: rgba(34, 197, 94, 0.15) !important;\n  color: #4ade80 !important;\n  border-color: rgba(34, 197, 94, 0.3) !important;\n}\n\n.ci-status-success:hover {\n  background: rgba(34, 197, 94, 0.25) !important;\n}\n\n.ci-status-pending {\n  background: rgba(234, 179, 8, 0.15) !important;\n  color: #facc15 !important;\n  border-color: rgba(234, 179, 8, 0.3) !important;\n}\n\n.ci-status-pending:hover {\n  background: rgba(234, 179, 8, 0.25) !important;\n}\n\n.ci-status-failure {\n  background: rgba(239, 68, 68, 0.15) !important;\n  color: #f87171 !important;\n  border-color: rgba(239, 68, 68, 0.3) !important;\n}\n\n.ci-status-failure:hover {\n  background: rgba(239, 68, 68, 0.25) !important;\n}\n\n.git-ci-caret {\n  font-size: 10px !important;\n  opacity: 0.7 !important;\n}\n\n/* CI Checks Accordion */\n.git-ci-checks-accordion {\n  margin-top: 4px !important;\n  padding: 6px 8px !important;\n  border-radius: 6px !important;\n  background: #0d1017 !important;\n  border: 1px solid rgba(255, 255, 255, 0.05) !important;\n}\n\n.git-ci-checks-header {\n  display: flex !important;\n  justify-content: space-between !important;\n  font-size: 10px !important;\n  font-weight: 600 !important;\n  color: #94a3b8 !important;\n  margin-bottom: 6px !important;\n  text-transform: uppercase !important;\n  letter-spacing: 0.5px !important;\n}\n\n.git-ci-checks-count {\n  font-family: monospace !important;\n  color: #4ade80 !important;\n}\n\n.git-ci-checks-list {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 4px !important;\n}\n\n.git-ci-check-item {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  padding: 3px 6px !important;\n  border-radius: 4px !important;\n  background: rgba(255, 255, 255, 0.02) !important;\n  font-size: 11px !important;\n}\n\n.git-ci-check-icon {\n  font-size: 11px !important;\n  width: 14px !important;\n  text-align: center !important;\n}\n\n.check-success .git-ci-check-icon {\n  color: #22c55e !important;\n}\n\n.check-fail .git-ci-check-icon {\n  color: #ef4444 !important;\n}\n\n.check-pending .git-ci-check-icon {\n  color: #eab308 !important;\n}\n\n.git-ci-check-info {\n  display: flex !important;\n  flex-direction: column !important;\n  min-width: 0 !important;\n  flex: 1 1 0% !important;\n}\n\n.git-ci-check-name {\n  color: #e2e8f0 !important;\n  font-weight: 500 !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n}\n\n.git-ci-check-wf {\n  color: #64748b !important;\n  font-size: 9px !important;\n}\n\n.git-ci-check-link {\n  font-size: 10px !important;\n  color: #38bdf8 !important;\n  text-decoration: none !important;\n  font-family: monospace !important;\n}\n\n.git-ci-check-link:hover {\n  text-decoration: underline !important;\n}\n\n.git-ci-empty {\n  color: #64748b !important;\n  font-size: 10px !important;\n  padding: 4px !important;\n}\n\n/* Inspector Mount at Bottom */\n.git-inspector-mount {\n  padding: 8px 12px !important;\n  background: #11141c !important;\n  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;\n}\n";
   }
 
   /**
@@ -5018,8 +5461,9 @@ class GitGraphMod extends AntigravityMod {
    * @returns {{ html: string, css: string }}
    */
   render(context = {}) {
+    const ctx = (context && Object.keys(context).length > 0) ? context : this.initialContext;
     const tabButtonHtml = renderGitGraphTabButton();
-    const panelHtml = renderGitGraphPanelHtml(context);
+    const panelHtml = renderGitGraphPanelHtml(ctx);
 
     const html = `
       ${tabButtonHtml}
@@ -5043,7 +5487,14 @@ async function main() {
     host.registerMod(new ContextTachometerMod());
     host.registerMod(new AgentSelectorMod());
     host.registerMod(new ModsManagerMod());
-    host.registerMod(new GitGraphMod());
+
+    let initialVcs = {};
+    try {
+      const vcs = new VcsOrchestrator();
+      initialVcs = vcs.getRepositoryOverview();
+    } catch {}
+
+    host.registerMod(new GitGraphMod({ initialContext: initialVcs }));
     await host.dispatch();
   } catch (err) {
     // Fail silently in background hook context
