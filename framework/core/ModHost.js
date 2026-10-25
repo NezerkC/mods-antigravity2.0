@@ -131,7 +131,30 @@ export class ModHost {
     const transcriptArgIdx = process.argv.indexOf('--transcript');
     if (transcriptArgIdx !== -1 && process.argv[transcriptArgIdx + 1]) {
       explicitPath = process.argv[transcriptArgIdx + 1];
-      primaryMetric = this.telemetryService.parseTranscriptFile(explicitPath);
+      const uuidMatch = explicitPath.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/);
+      const convId = uuidMatch ? uuidMatch[0] : null;
+      if (convId && allMetrics[convId]) {
+        primaryMetric = allMetrics[convId];
+      } else {
+        let targetTranscriptPath = explicitPath;
+        if (explicitPath.endsWith('transcript_full.jsonl')) {
+          const compactCandidate = path.join(path.dirname(explicitPath), 'transcript.jsonl');
+          if (fs.existsSync(compactCandidate)) {
+            targetTranscriptPath = compactCandidate;
+          }
+        }
+        const parsed = this.telemetryService.parseTranscriptFile(targetTranscriptPath);
+        parsed.modelQuota = this.telemetryService.resolveModelQuota(
+          parsed.detectedModel,
+          parsed.stepEntries,
+          parsed.chatModels
+        );
+        delete parsed.stepEntries;
+        primaryMetric = parsed;
+        if (convId) {
+          allMetrics[convId] = primaryMetric;
+        }
+      }
     }
 
     if (!primaryMetric) {

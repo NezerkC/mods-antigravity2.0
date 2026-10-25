@@ -816,6 +816,45 @@ export class ModLoader {
           });
         };
 
+        window.__scrapeNativeModelQuota = function() {
+          try {
+            if (!document.body) return null;
+            const bodyText = document.body.innerText || '';
+            const labels = [
+              'Five Hour Limit Remaining',
+              'Weekly Limit Remaining',
+              'Gemini 4 Argon Weekly Limit'
+            ];
+            const hasAny = labels.some(l => bodyText.includes(l));
+            if (!hasAny) return null;
+
+            const scraped = { updatedAt: Date.now(), items: {} };
+            const allElements = document.body.querySelectorAll('div, span, p, li, section');
+            for (const label of labels) {
+              for (const el of allElements) {
+                if (el.children.length === 0 && el.textContent && el.textContent.includes(label)) {
+                  const container = el.parentElement?.parentElement || el.parentElement || el;
+                  const text = container.textContent || '';
+                  const pctMatch = text.match(/\\b(\\d{1,3})%/);
+                  const resetMatch = text.match(/(?:resets?\\s+in|reset:?|in)\\s*([0-9dhms\\s]+)/i);
+                  if (pctMatch) {
+                    scraped.items[label] = {
+                      remainingPct: parseInt(pctMatch[1], 10),
+                      resetText: resetMatch ? resetMatch[1].trim() : null
+                    };
+                    break;
+                  }
+                }
+              }
+            }
+            if (Object.keys(scraped.items).length > 0) {
+              localStorage.setItem('__antigravity_native_quota_cache', JSON.stringify(scraped));
+              return scraped;
+            }
+          } catch (e) {}
+          return null;
+        };
+
         window.__updateAntigravityTelemetry = function(fallbackMetric) {
           const all = window.__antigravityAllMetrics || {};
           const latest = fallbackMetric || window.__antigravityLatestMetric;
@@ -823,7 +862,7 @@ export class ModLoader {
           document.querySelectorAll('.antigravity-tachometer-badge').forEach(badge => {
             const activeId = window.__resolveCascadeId(badge);
 
-            const m = (activeId && all[activeId]) ? all[activeId] : latest;
+            const m = (activeId && all[activeId]) ? all[activeId] : (latest || window.__antigravityLatestMetric);
             if (!m) return;
 
             const pctNum = parseFloat(m.pct) || 0;
@@ -845,10 +884,19 @@ export class ModLoader {
               if (poly) poly.setAttribute('fill', statusColor);
             }
 
-            // Update live popover content if currently open on screen
-            const portal = document.getElementById('antigravity-tachometer-popover-portal');
-            if (portal && portal.classList.contains('open') && window.__renderTachometerPopoverHtml) {
-              portal.innerHTML = window.__renderTachometerPopoverHtml(m);
+            if (window.__renderTachometerPopoverHtml) {
+              const renderedPopover = window.__renderTachometerPopoverHtml(m);
+              const tpl = badge.querySelector('.antigravity-popover-template') ||
+                badge.parentElement?.querySelector('.antigravity-popover-template');
+              if (tpl) {
+                tpl.innerHTML = renderedPopover;
+              }
+
+              // Update live popover content if currently open on screen
+              const portal = document.getElementById('antigravity-tachometer-popover-portal');
+              if (portal && portal.classList.contains('open')) {
+                portal.innerHTML = renderedPopover;
+              }
             }
           });
 
@@ -1101,6 +1149,9 @@ export class ModLoader {
 
         let mountDebounce = null;
         window.__antigravityModObserver = new MutationObserver(() => {
+          if (typeof window.__scrapeNativeModelQuota === 'function') {
+            window.__scrapeNativeModelQuota();
+          }
           const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
           let missingSlot = false;
           for (const btn of triggers) {

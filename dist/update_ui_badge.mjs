@@ -1476,6 +1476,45 @@ class ModLoader {
           });
         };
 
+        window.__scrapeNativeModelQuota = function() {
+          try {
+            if (!document.body) return null;
+            const bodyText = document.body.innerText || '';
+            const labels = [
+              'Five Hour Limit Remaining',
+              'Weekly Limit Remaining',
+              'Gemini 4 Argon Weekly Limit'
+            ];
+            const hasAny = labels.some(l => bodyText.includes(l));
+            if (!hasAny) return null;
+
+            const scraped = { updatedAt: Date.now(), items: {} };
+            const allElements = document.body.querySelectorAll('div, span, p, li, section');
+            for (const label of labels) {
+              for (const el of allElements) {
+                if (el.children.length === 0 && el.textContent && el.textContent.includes(label)) {
+                  const container = el.parentElement?.parentElement || el.parentElement || el;
+                  const text = container.textContent || '';
+                  const pctMatch = text.match(/\\b(\\d{1,3})%/);
+                  const resetMatch = text.match(/(?:resets?\\s+in|reset:?|in)\\s*([0-9dhms\\s]+)/i);
+                  if (pctMatch) {
+                    scraped.items[label] = {
+                      remainingPct: parseInt(pctMatch[1], 10),
+                      resetText: resetMatch ? resetMatch[1].trim() : null
+                    };
+                    break;
+                  }
+                }
+              }
+            }
+            if (Object.keys(scraped.items).length > 0) {
+              localStorage.setItem('__antigravity_native_quota_cache', JSON.stringify(scraped));
+              return scraped;
+            }
+          } catch (e) {}
+          return null;
+        };
+
         window.__updateAntigravityTelemetry = function(fallbackMetric) {
           const all = window.__antigravityAllMetrics || {};
           const latest = fallbackMetric || window.__antigravityLatestMetric;
@@ -1483,7 +1522,7 @@ class ModLoader {
           document.querySelectorAll('.antigravity-tachometer-badge').forEach(badge => {
             const activeId = window.__resolveCascadeId(badge);
 
-            const m = (activeId && all[activeId]) ? all[activeId] : latest;
+            const m = (activeId && all[activeId]) ? all[activeId] : (latest || window.__antigravityLatestMetric);
             if (!m) return;
 
             const pctNum = parseFloat(m.pct) || 0;
@@ -1505,10 +1544,19 @@ class ModLoader {
               if (poly) poly.setAttribute('fill', statusColor);
             }
 
-            // Update live popover content if currently open on screen
-            const portal = document.getElementById('antigravity-tachometer-popover-portal');
-            if (portal && portal.classList.contains('open') && window.__renderTachometerPopoverHtml) {
-              portal.innerHTML = window.__renderTachometerPopoverHtml(m);
+            if (window.__renderTachometerPopoverHtml) {
+              const renderedPopover = window.__renderTachometerPopoverHtml(m);
+              const tpl = badge.querySelector('.antigravity-popover-template') ||
+                badge.parentElement?.querySelector('.antigravity-popover-template');
+              if (tpl) {
+                tpl.innerHTML = renderedPopover;
+              }
+
+              // Update live popover content if currently open on screen
+              const portal = document.getElementById('antigravity-tachometer-popover-portal');
+              if (portal && portal.classList.contains('open')) {
+                portal.innerHTML = renderedPopover;
+              }
             }
           });
 
@@ -1761,6 +1809,9 @@ class ModLoader {
 
         let mountDebounce = null;
         window.__antigravityModObserver = new MutationObserver(() => {
+          if (typeof window.__scrapeNativeModelQuota === 'function') {
+            window.__scrapeNativeModelQuota();
+          }
           const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
           let missingSlot = false;
           for (const btn of triggers) {
@@ -1809,6 +1860,68 @@ class TelemetryService {
   }
 
   /**
+   * Formats token count into a compact human-readable string.
+   * @param {number} tokens
+   * @returns {string}
+   */
+  formatTokens(tokens) {
+    if (tokens >= 1_000_000) {
+      return (tokens / 1_000_000).toFixed(2) + 'M';
+    }
+    if (tokens >= 10_000) {
+      return (tokens / 1_000).toFixed(1) + 'k';
+    }
+    return tokens.toLocaleString();
+  }
+
+  /**
+   * Sanitizes a raw model name extracted from transcript logs, stripping
+   * system prompt instructions or trailing punctuation.
+   * @param {string} [rawName='']
+   * @returns {string}
+   */
+  sanitizeModelName(rawName = '') {
+    return String(rawName || '')
+      .replace(/\\n/g, ' ')
+      .split(/\r?\n/)[0]
+      .replace(/\.\s*No need to comment[\s\S]*$/i, '')
+      .replace(/\.\s*If reporting what model[\s\S]*$/i, '')
+      .replace(/[`'"]/g, '')
+      .replace(/\.\s*$/, '')
+      .trim();
+  }
+
+  /**
+   * Classifies a model name into its quota family and returns its quota limits.
+   * @param {string} modelName
+   * @returns {{ family: 'argon' | 'claude' | 'gemini', hasDualLimit: boolean, rollingCeiling: number, weeklyCeiling: number }}
+   */
+  classifyModelFamily(modelName = '') {
+    if (/argon/i.test(modelName)) {
+      return {
+        family: 'argon',
+        hasDualLimit: false,
+        rollingCeiling: 0,
+        weeklyCeiling: 500_000
+      };
+    }
+    if (/claude|gpt/i.test(modelName)) {
+      return {
+        family: 'claude',
+        hasDualLimit: true,
+        rollingCeiling: 150_000,
+        weeklyCeiling: 1_000_000
+      };
+    }
+    return {
+      family: 'gemini',
+      hasDualLimit: true,
+      rollingCeiling: 300_000,
+      weeklyCeiling: 1_500_000
+    };
+  }
+
+  /**
    * Default empty telemetry snapshot.
    */
   getEmptySnapshot() {
@@ -1818,11 +1931,21 @@ class TelemetryService {
       displayTokens: '0',
       sizeKb: 0,
       steps: 0,
+      compactions: [],
+      chatModels: [],
       modelQuota: {
-        hasDualLimit: false,
-        modelName: '',
+        hasDualLimit: true,
+        modelName: 'Gemini 3.8 Flash',
+        rollingLabel: 'Cuota 5h Restante',
+        rollingRemaining: 100,
+        rollingUsed: 0,
+        rollingReset: '5h',
+        weeklyLabel: 'Cuota Semanal Restante',
+        weeklyRemaining: 100,
+        weeklyUsed: 0,
+        weeklyReset: '7d',
         singleLabel: 'Cuota Disponible',
-        usagePct: 0
+        usagePct: 100
       },
       breakdown: {
         user: { tokens: 0, pct: 0 },
@@ -1863,42 +1986,107 @@ class TelemetryService {
 
       let totalRawChars = 0;
       const stepEntries = [];
+      const compactions = [];
       let detectedModel = '';
+      const modelLedger = new Map();
 
       for (const line of lines) {
         if (!line.trim()) continue;
         raw.steps++;
-        totalRawChars += line.length;
 
         let obj;
         try {
           obj = JSON.parse(line);
         } catch {
+          totalRawChars += line.length;
           continue;
         }
 
-        if (obj.model && !detectedModel) {
-          detectedModel = obj.model;
+        if (obj.type === 'CHECKPOINT') {
+          const preCompactTokens = Math.round(totalRawChars / this.charsPerToken);
+          const postCompactTokens = Math.round(line.length / this.charsPerToken);
+          compactions.push({
+            step: obj.step_index ?? raw.steps,
+            fromTokens: preCompactTokens,
+            toTokens: postCompactTokens,
+            displayFrom: this.formatTokens(preCompactTokens),
+            displayTo: this.formatTokens(postCompactTokens),
+            timestamp: obj.created_at || null
+          });
+          totalRawChars = line.length;
+          raw.userChars = 0;
+          raw.modelChars = 0;
+          raw.thinkingChars = 0;
+          raw.toolsChars = 0;
+          raw.mcpChars = 0;
+          raw.otherChars = 0;
+        } else {
+          totalRawChars += line.length;
         }
+
+        if (
+          (obj.type === 'USER_INPUT' || obj.source === 'USER_EXPLICIT') &&
+          typeof obj.content === 'string' &&
+          obj.content.includes('<USER_SETTINGS_CHANGE>')
+        ) {
+          const sectionMatch = obj.content.match(/<USER_SETTINGS_CHANGE>([\s\S]*?)<\/USER_SETTINGS_CHANGE>/i);
+          const settingsBlock = sectionMatch ? sectionMatch[1] : obj.content;
+          const match = settingsBlock.match(/Model Selection[`'"]?\s+from\s+.*?\s+to\s+([^\n<]+)/i);
+          if (match && match[1]) {
+            detectedModel = this.sanitizeModelName(match[1]);
+          }
+        }
+
+        if (obj.model) {
+          detectedModel = this.sanitizeModelName(obj.model);
+        }
+
+        const activeModel = this.sanitizeModelName(detectedModel) || 'Gemini 3.8 Flash';
+        const len = (str) => (typeof str === 'string' ? str.length : 0);
+        const contentLen = len(obj.content);
+        const thinkingLen = len(obj.thinking);
+        const toolCallsLen = obj.tool_calls ? JSON.stringify(obj.tool_calls).length : 0;
+
+        let stepBillingTokens = 0;
+        if (obj.type === 'PLANNER_RESPONSE' && (obj.input_tokens !== undefined || obj.output_tokens !== undefined)) {
+          if (obj.cache_read_tokens !== undefined) {
+            stepBillingTokens = Math.max(
+              obj.output_tokens || 0,
+              Math.round((contentLen + thinkingLen + toolCallsLen) / this.charsPerToken)
+            );
+          } else {
+            stepBillingTokens = (obj.input_tokens || 0) + (obj.output_tokens || 0);
+          }
+        } else if (obj.type === 'USER_INPUT' || obj.type === 'PLANNER_RESPONSE') {
+          stepBillingTokens = Math.round((contentLen + thinkingLen) / this.charsPerToken);
+        }
+
+        const stepContextTokens = Math.round(line.length / this.charsPerToken);
+
+        if (!modelLedger.has(activeModel)) {
+          modelLedger.set(activeModel, {
+            tokens: 0,
+            contextTokens: 0
+          });
+        }
+        const ledgerEntry = modelLedger.get(activeModel);
+        ledgerEntry.tokens += stepBillingTokens;
+        ledgerEntry.contextTokens += stepContextTokens;
 
         if (obj.created_at) {
           const t = new Date(obj.created_at).getTime();
           if (!isNaN(t)) {
             stepEntries.push({
               timestamp: t,
-              tokens: Math.round(((obj.content || '').length + (obj.thinking || '').length) / this.charsPerToken)
+              tokens: stepBillingTokens,
+              model: activeModel
             });
           }
         }
 
-        const len = (str) => (typeof str === 'string' ? str.length : 0);
-
         if (obj.thinking) {
-          raw.thinkingChars += len(obj.thinking);
+          raw.thinkingChars += thinkingLen;
         }
-
-        const contentLen = len(obj.content);
-        const toolCallsLen = obj.tool_calls ? JSON.stringify(obj.tool_calls).length : 0;
 
         if (obj.tool_calls && Array.isArray(obj.tool_calls)) {
           const isMcp = obj.tool_calls.some(tc =>
@@ -1934,14 +2122,31 @@ class TelemetryService {
       const mcpTokens = toTokens(raw.mcpChars);
       const otherTokens = toTokens(raw.otherChars);
 
-      let displayTokens = estTokens.toLocaleString();
-      if (estTokens >= 1_000_000) {
-        displayTokens = (estTokens / 1_000_000).toFixed(2) + 'M';
-      } else if (estTokens >= 10_000) {
-        displayTokens = (estTokens / 1_000).toFixed(1) + 'k';
+      const displayTokens = this.formatTokens(estTokens);
+
+      const chatModels = [];
+      for (const [modelName, data] of modelLedger.entries()) {
+        const { family, hasDualLimit, rollingCeiling, weeklyCeiling } = this.classifyModelFamily(modelName);
+        const chatRollingPct = hasDualLimit && rollingCeiling > 0
+          ? Math.min(100, Math.round((data.tokens / rollingCeiling) * 100))
+          : 0;
+        const chatWeeklyPct = weeklyCeiling > 0
+          ? Math.min(100, Math.round((data.tokens / weeklyCeiling) * 100))
+          : 0;
+
+        chatModels.push({
+          modelName,
+          family,
+          hasDualLimit,
+          tokens: data.tokens,
+          contextTokens: data.contextTokens,
+          displayTokens: this.formatTokens(data.tokens),
+          chatRollingPct,
+          chatWeeklyPct
+        });
       }
 
-      const modelQuota = this.resolveModelQuota(detectedModel, stepEntries);
+      const modelQuota = this.resolveModelQuota(detectedModel, stepEntries, chatModels);
 
       return {
         estTokens,
@@ -1949,6 +2154,10 @@ class TelemetryService {
         displayTokens,
         sizeKb: Math.round(totalBytes / 1024),
         steps: raw.steps,
+        compactions,
+        detectedModel: detectedModel || 'Gemini 3.8 Flash',
+        stepEntries,
+        chatModels,
         modelQuota,
         breakdown: {
           user: { tokens: userTokens, pct: catPct(userTokens) },
@@ -1966,14 +2175,14 @@ class TelemetryService {
 
   /**
    * Resolves model quota metrics based on the model tier and conversation activity.
-   * If model has a 5-hour rolling limit (e.g. Claude), computes rolling and weekly metrics.
-   * If single-tier model (e.g. Gemini), provides single quota metric.
    * @param {string} [detectedModel]
    * @param {Array<Object>} [stepEntries]
+   * @param {Array<Object>} [chatModels]
    * @returns {Object}
    */
-  resolveModelQuota(detectedModel = '', stepEntries = []) {
-    const isClaude = /claude/i.test(detectedModel);
+  resolveModelQuota(detectedModel = '', stepEntries = [], chatModels = []) {
+    const activeModel = this.sanitizeModelName(detectedModel) || 'Gemini 3.8 Flash';
+    const { family, hasDualLimit, rollingCeiling, weeklyCeiling } = this.classifyModelFamily(activeModel);
     const now = Date.now();
     const fiveHoursMs = 5 * 60 * 60 * 1000;
     const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
@@ -1981,12 +2190,20 @@ class TelemetryService {
     let rollingTokens = 0;
     let weeklyTokens = 0;
     let earliestRollingTimestamp = null;
+    let earliestWeeklyTimestamp = null;
 
     for (const step of stepEntries) {
       if (!step.timestamp) continue;
+      if (step.model) {
+        const stepFamily = this.classifyModelFamily(step.model).family;
+        if (stepFamily !== family) continue;
+      }
       const age = now - step.timestamp;
-      if (age <= sevenDaysMs) {
+      if (age >= 0 && age <= sevenDaysMs) {
         weeklyTokens += step.tokens;
+        if (!earliestWeeklyTimestamp || step.timestamp < earliestWeeklyTimestamp) {
+          earliestWeeklyTimestamp = step.timestamp;
+        }
         if (age <= fiveHoursMs) {
           rollingTokens += step.tokens;
           if (!earliestRollingTimestamp || step.timestamp < earliestRollingTimestamp) {
@@ -1996,50 +2213,98 @@ class TelemetryService {
       }
     }
 
-    if (isClaude) {
-      const rollingCeiling = 100_000;
-      const weeklyCeiling = 1_000_000;
-      const rollingPct = Math.min(100, Math.round((rollingTokens / rollingCeiling) * 100));
-      const weeklyPct = Math.min(100, Math.round((weeklyTokens / weeklyCeiling) * 100));
+    const activeChatModel = chatModels.find(m => m.modelName === activeModel)
+      || chatModels.find(m => m.family === family);
+    if (weeklyTokens === 0 && activeChatModel && activeChatModel.tokens > 0) {
+      weeklyTokens = activeChatModel.tokens;
+      rollingTokens = activeChatModel.tokens;
+    }
 
-      let resetStr = '5h';
-      if (earliestRollingTimestamp) {
-        const remainingMs = Math.max(0, (earliestRollingTimestamp + fiveHoursMs) - now);
-        const hours = Math.floor(remainingMs / (60 * 60 * 1000));
-        const mins = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
-        resetStr = `${hours}h ${mins}m`;
+    const rollingUsedPct = hasDualLimit && rollingCeiling > 0
+      ? Math.min(100, Math.round((rollingTokens / rollingCeiling) * 100))
+      : 0;
+    const weeklyUsedPct = weeklyCeiling > 0
+      ? Math.min(100, Math.round((weeklyTokens / weeklyCeiling) * 100))
+      : 0;
+
+    const rollingRemainingPct = Math.max(0, 100 - rollingUsedPct);
+    const weeklyRemainingPct = Math.max(0, 100 - weeklyUsedPct);
+
+    let resetStr = '5h';
+    if (earliestRollingTimestamp) {
+      const remainingMs = Math.max(0, (earliestRollingTimestamp + fiveHoursMs) - now);
+      const hours = Math.floor(remainingMs / (60 * 60 * 1000));
+      const mins = Math.max(hours === 0 ? 1 : 0, Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000)));
+      resetStr = `${hours}h ${mins}m`;
+    }
+
+    let weeklyResetStr = '7d';
+    if (earliestWeeklyTimestamp) {
+      const remainingMs = Math.max(0, (earliestWeeklyTimestamp + sevenDaysMs) - now);
+      const days = Math.floor(remainingMs / (24 * 60 * 60 * 1000));
+      const hours = Math.floor((remainingMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+      if (days === 0 && hours === 0) {
+        const mins = Math.max(1, Math.ceil(remainingMs / (60 * 1000)));
+        weeklyResetStr = `${mins}m`;
+      } else {
+        weeklyResetStr = `${days}d ${hours}h`;
       }
+    }
 
-      return {
-        hasDualLimit: true,
-        modelName: detectedModel || 'Claude',
-        rollingLabel: 'Límite 5 Horas',
-        rollingUsed: rollingPct,
-        rollingReset: resetStr,
-        weeklyLabel: 'Cuota Semanal',
-        weeklyUsed: weeklyPct
-      };
-    } else {
-      const singleCeiling = 1_000_000;
-      const usagePct = Math.min(100, Math.round((weeklyTokens / singleCeiling) * 100));
+    const currentModelChatWeeklyPct = activeChatModel
+      ? activeChatModel.chatWeeklyPct
+      : weeklyUsedPct;
+    const currentModelChatRollingPct = activeChatModel
+      ? activeChatModel.chatRollingPct
+      : rollingUsedPct;
 
+    if (family === 'argon') {
       return {
         hasDualLimit: false,
-        modelName: detectedModel || 'Gemini',
-        singleLabel: 'Cuota Disponible',
-        usagePct: Math.max(1, usagePct)
+        family,
+        modelName: activeModel,
+        singleLabel: 'Cuota Semanal Restante',
+        remainingPct: weeklyRemainingPct,
+        usedPct: weeklyUsedPct,
+        chatUsedPct: currentModelChatWeeklyPct,
+        resetStr: weeklyResetStr,
+        weeklyRemaining: weeklyRemainingPct,
+        weeklyUsed: weeklyUsedPct,
+        weeklyReset: weeklyResetStr,
+        usagePct: weeklyRemainingPct
       };
     }
+
+    return {
+      hasDualLimit: true,
+      family,
+      modelName: activeModel,
+      rollingLabel: 'Cuota 5h Restante',
+      rollingRemaining: rollingRemainingPct,
+      rollingUsed: rollingUsedPct,
+      rollingReset: resetStr,
+      chatRollingPct: currentModelChatRollingPct,
+      weeklyLabel: 'Cuota Semanal Restante',
+      weeklyRemaining: weeklyRemainingPct,
+      weeklyUsed: weeklyUsedPct,
+      weeklyReset: weeklyResetStr,
+      chatWeeklyPct: currentModelChatWeeklyPct,
+      usagePct: rollingRemainingPct
+    };
   }
 
   /**
-   * Retrieves telemetry metrics for all active conversations in the brain.
+   * Retrieves telemetry metrics for all active conversations in the brain,
+   * aggregating global account quota usage across all chats.
    * @returns {Record<string, Object>}
    */
   getAllMetrics() {
     const metrics = {};
     try {
       if (!fs.existsSync(this.brainDir)) return metrics;
+
+      const now = Date.now();
+      const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
 
       const dirs = fs.readdirSync(this.brainDir)
         .filter(d => /^[0-9a-fA-F-]{36}$/.test(d))
@@ -2061,10 +2326,28 @@ class TelemetryService {
           return { id: d, mtime, targetPath };
         })
         .filter(item => item.targetPath)
-        .sort((a, b) => b.mtime - a.mtime); // Sort newest/active conversations first!
+        .sort((a, b) => b.mtime - a.mtime);
 
-      for (const item of dirs) {
-        metrics[item.id] = this.parseTranscriptFile(item.targetPath);
+      const activeDirs = dirs.filter((item, idx) => idx < 25 || (now - item.mtime) <= sevenDaysMs);
+
+      const globalStepEntries = [];
+      for (const item of activeDirs) {
+        const snapshot = this.parseTranscriptFile(item.targetPath);
+        metrics[item.id] = snapshot;
+        if (Array.isArray(snapshot.stepEntries)) {
+          globalStepEntries.push(...snapshot.stepEntries);
+        }
+      }
+
+      // Re-resolve account-wide quota using global steps across active chats in brain
+      for (const id of Object.keys(metrics)) {
+        const snap = metrics[id];
+        snap.modelQuota = this.resolveModelQuota(
+          snap.detectedModel,
+          globalStepEntries,
+          snap.chatModels
+        );
+        delete snap.stepEntries;
       }
     } catch {
       // Gracefully prevent background hook crashes
@@ -2906,7 +3189,30 @@ class ModHost {
     const transcriptArgIdx = process.argv.indexOf('--transcript');
     if (transcriptArgIdx !== -1 && process.argv[transcriptArgIdx + 1]) {
       explicitPath = process.argv[transcriptArgIdx + 1];
-      primaryMetric = this.telemetryService.parseTranscriptFile(explicitPath);
+      const uuidMatch = explicitPath.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/);
+      const convId = uuidMatch ? uuidMatch[0] : null;
+      if (convId && allMetrics[convId]) {
+        primaryMetric = allMetrics[convId];
+      } else {
+        let targetTranscriptPath = explicitPath;
+        if (explicitPath.endsWith('transcript_full.jsonl')) {
+          const compactCandidate = path.join(path.dirname(explicitPath), 'transcript.jsonl');
+          if (fs.existsSync(compactCandidate)) {
+            targetTranscriptPath = compactCandidate;
+          }
+        }
+        const parsed = this.telemetryService.parseTranscriptFile(targetTranscriptPath);
+        parsed.modelQuota = this.telemetryService.resolveModelQuota(
+          parsed.detectedModel,
+          parsed.stepEntries,
+          parsed.chatModels
+        );
+        delete parsed.stepEntries;
+        primaryMetric = parsed;
+        if (convId) {
+          allMetrics[convId] = primaryMetric;
+        }
+      }
     }
 
     if (!primaryMetric) {
@@ -3085,93 +3391,177 @@ function renderPopoverHtml(metric) {
     statusColor = '#eab308';
   }
 
-  const renderRow = (icon, label, data, barColor) => `
-    <div style="margin-bottom: 7px;">
-      <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; color: #d4d4d8;">
-        <span style="display: flex; align-items: center; gap: 5px;">
-          <span>${icon}</span>
-          <span style="font-weight: 500;">${label}</span>
-        </span>
-        <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10.5px;">
-          ${data.tokens.toLocaleString()} tok <span style="color: ${barColor}; font-weight: 600;">(${data.pct}%)</span>
-        </span>
-      </div>
-      <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
-        <div style="width: ${Math.min(data.pct, 100)}%; height: 100%; background: ${barColor}; border-radius: 9999px;"></div>
-      </div>
+  const cleanModelName = (raw) => String(raw || '')
+    .replace(/\\n/g, ' ')
+    .split(/\r?\n/)[0]
+    .replace(/\.\s*No need to comment[\s\S]*$/i, '')
+    .replace(/\.\s*If reporting what model[\s\S]*$/i, '')
+    .replace(/[`'"]/g, '')
+    .replace(/\.\s*$/, '')
+    .trim();
+
+  const formatCompactTokens = (t) => {
+    const num = Number(t) || 0;
+    if (num >= 1_000_000) return (num / 1_000_000).toFixed(2) + 'M';
+    if (num >= 1_000) return (num / 1_000).toFixed(1) + 'k';
+    return String(num);
+  };
+
+  const renderCompactSource = (label, data, dotColor) => `
+    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 10px; padding: 2px 5px; background: rgba(255, 255, 255, 0.025); border-radius: 5px; color: #d4d4d8; white-space: nowrap;">
+      <span style="display: flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis;">
+        <span style="width: 6px; height: 6px; border-radius: 9999px; background: ${dotColor}; flex-shrink: 0;"></span>
+        <span style="font-weight: 500; color: #a1a1aa;">${label}</span>
+      </span>
+      <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #e4e4e7; font-size: 9.5px; margin-left: 4px;">
+        ${formatCompactTokens(data.tokens)} <span style="color: ${dotColor}; font-weight: 600;">(${data.pct}%)</span>
+      </span>
     </div>
   `;
 
   const quota = m.modelQuota || null;
-  const getBarColor = (pct) => {
-    if (pct >= 85) return '#ef4444';
-    if (pct >= 60) return '#f97316';
-    if (pct >= 25) return '#eab308';
+  const chatModels = Array.isArray(m.chatModels) ? m.chatModels : [];
+  const compactions = Array.isArray(m.compactions) ? m.compactions : [];
+
+  let compactionsHtml = '';
+  if (compactions.length > 0) {
+    const recentCompactions = compactions.slice(-4);
+    const compactionRowsHtml = recentCompactions.map((c) => `
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 10px; padding: 3px 0; border-top: 1px dashed rgba(255, 255, 255, 0.06); color: #d4d4d8; white-space: nowrap;">
+        <span style="font-weight: 500; color: #e4e4e7;">
+          ✂️ Turno #${c.step}
+        </span>
+        <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
+          ${c.displayFrom} → <strong style="color: #22c55e;">${c.displayTo}</strong>
+        </span>
+      </div>
+    `).join('');
+
+    compactionsHtml = `
+      <div style="margin-bottom: 10px; padding: 8px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
+        <div style="font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 3px;">
+          Historial de Compactación (/compact)
+        </div>
+        ${compactionRowsHtml}
+      </div>
+    `;
+  }
+
+  const getRemainingColor = (remainingPct) => {
+    if (remainingPct <= 15) return '#ef4444';
+    if (remainingPct <= 40) return '#f97316';
+    if (remainingPct <= 75) return '#eab308';
     return '#22c55e';
   };
 
+  let chatModelsLedgerHtml = '';
+  if (chatModels.length > 0) {
+    const modelRowsHtml = chatModels.map((cm) => {
+      const safeName = cleanModelName(cm.modelName) || 'Gemini';
+      const quotaShareText = cm.hasDualLimit
+        ? `5h:${cm.chatRollingPct}% · 7d:${cm.chatWeeklyPct}%`
+        : `7d:${cm.chatWeeklyPct}%`;
+      return `
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 10px; padding: 3px 0; border-top: 1px dashed rgba(255, 255, 255, 0.06); color: #d4d4d8; white-space: nowrap;">
+          <span style="font-weight: 500; color: #e4e4e7; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${safeName}">
+            🤖 ${safeName}
+          </span>
+          <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
+            ${cm.displayTokens} <span style="color: #38bdf8; font-weight: 600;">(${quotaShareText})</span>
+          </span>
+        </div>
+      `;
+    }).join('');
+
+    chatModelsLedgerHtml = `
+      <div style="margin-top: 7px; padding-top: 5px; border-top: 1px solid rgba(255, 255, 255, 0.08);">
+        <div style="font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 3px;">
+          Consumo por Modelo en este Chat
+        </div>
+        ${modelRowsHtml}
+      </div>
+    `;
+  }
+
   let modelQuotaHtml = '';
   if (quota) {
+    const safeQuotaModel = cleanModelName(quota.modelName) || (quota.hasDualLimit ? 'Gemini' : 'Gemini 4 Argon');
     if (quota.hasDualLimit) {
+      const rollingRem = quota.rollingRemaining !== undefined ? quota.rollingRemaining : Math.max(0, 100 - (quota.rollingUsed || 0));
+      const weeklyRem = quota.weeklyRemaining !== undefined ? quota.weeklyRemaining : Math.max(0, 100 - (quota.weeklyUsed || 0));
+      const rollingColor = getRemainingColor(rollingRem);
+      const weeklyColor = getRemainingColor(weeklyRem);
+
       modelQuotaHtml = `
-        <div style="margin-bottom: 12px; padding: 9px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 7px;">
-            <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #a1a1aa; font-weight: 600;">
-              Límites del Modelo (${quota.modelName || 'Claude'})
+        <div style="margin-bottom: 10px; padding: 8px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 6px;">
+            <span style="font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #a1a1aa; font-weight: 600; flex-shrink: 0;">
+              Cuota de Cuenta
+            </span>
+            <span style="font-size: 9.5px; color: #e4e4e7; background: rgba(255, 255, 255, 0.07); padding: 1px 6px; border-radius: 9999px; max-width: 155px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${safeQuotaModel}">
+              ${safeQuotaModel}
             </span>
           </div>
-          <div style="margin-bottom: 6px;">
-            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; color: #d4d4d8;">
+          <div style="margin-bottom: 5px;">
+            <div style="display: flex; justify-content: space-between; font-size: 10.5px; margin-bottom: 2px; color: #d4d4d8; white-space: nowrap;">
               <span style="display: flex; align-items: center; gap: 4px;">
                 <span>⏱️</span>
-                <span style="font-weight: 500;">${quota.rollingLabel || 'Límite 5h'}</span>
+                <span style="font-weight: 500;">${quota.rollingLabel || 'Cuota 5h Restante'}</span>
               </span>
-              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10.5px;">
-                <strong style="color: ${getBarColor(quota.rollingUsed)};">${quota.rollingUsed}%</strong> <span style="color: #71717a; font-size: 9.5px;">(reset: ${quota.rollingReset})</span>
+              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10px;">
+                <strong style="color: ${rollingColor};">${rollingRem}%</strong> <span style="color: #71717a; font-size: 9px;">(reset: ${quota.rollingReset || '5h'})</span>
               </span>
             </div>
             <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
-              <div style="width: ${Math.min(quota.rollingUsed, 100)}%; height: 100%; background: ${getBarColor(quota.rollingUsed)}; border-radius: 9999px;"></div>
+              <div style="width: ${Math.min(rollingRem, 100)}%; height: 100%; background: ${rollingColor}; border-radius: 9999px;"></div>
             </div>
           </div>
           <div>
-            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; color: #d4d4d8;">
+            <div style="display: flex; justify-content: space-between; font-size: 10.5px; margin-bottom: 2px; color: #d4d4d8; white-space: nowrap;">
               <span style="display: flex; align-items: center; gap: 4px;">
                 <span>📅</span>
-                <span style="font-weight: 500;">${quota.weeklyLabel || 'Cuota Semanal'}</span>
+                <span style="font-weight: 500;">${quota.weeklyLabel || 'Cuota Semanal Restante'}</span>
               </span>
-              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10.5px;">
-                <strong style="color: ${getBarColor(quota.weeklyUsed)};">${quota.weeklyUsed}%</strong>
+              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10px;">
+                <strong style="color: ${weeklyColor};">${weeklyRem}%</strong> <span style="color: #71717a; font-size: 9px;">(reset: ${quota.weeklyReset || '7d'})</span>
               </span>
             </div>
             <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
-              <div style="width: ${Math.min(quota.weeklyUsed, 100)}%; height: 100%; background: ${getBarColor(quota.weeklyUsed)}; border-radius: 9999px;"></div>
+              <div style="width: ${Math.min(weeklyRem, 100)}%; height: 100%; background: ${weeklyColor}; border-radius: 9999px;"></div>
             </div>
           </div>
+          ${chatModelsLedgerHtml}
         </div>
       `;
     } else {
+      const singleRem = quota.weeklyRemaining !== undefined ? quota.weeklyRemaining : (quota.remainingPct !== undefined ? quota.remainingPct : (quota.usagePct || 0));
+      const singleColor = getRemainingColor(singleRem);
+
       modelQuotaHtml = `
-        <div style="margin-bottom: 12px; padding: 9px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-            <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #a1a1aa; font-weight: 600;">
-              Cuota del Modelo (${quota.modelName || 'Gemini'})
+        <div style="margin-bottom: 10px; padding: 8px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 5px;">
+            <span style="font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #a1a1aa; font-weight: 600; flex-shrink: 0;">
+              Cuota de Cuenta
+            </span>
+            <span style="font-size: 9.5px; color: #e4e4e7; background: rgba(255, 255, 255, 0.07); padding: 1px 6px; border-radius: 9999px; max-width: 155px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${safeQuotaModel}">
+              ${safeQuotaModel}
             </span>
           </div>
           <div>
-            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; color: #d4d4d8;">
+            <div style="display: flex; justify-content: space-between; font-size: 10.5px; margin-bottom: 2px; color: #d4d4d8; white-space: nowrap;">
               <span style="display: flex; align-items: center; gap: 4px;">
-                <span>⚡</span>
-                <span style="font-weight: 500;">${quota.singleLabel || 'Cuota Disponible'}</span>
+                <span>📅</span>
+                <span style="font-weight: 500;">${quota.singleLabel || 'Cuota Semanal Restante'}</span>
               </span>
-              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10.5px;">
-                <strong style="color: ${getBarColor(quota.usagePct)};">${quota.usagePct}%</strong>
+              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10px;">
+                <strong style="color: ${singleColor};">${singleRem}%</strong> <span style="color: #71717a; font-size: 9px;">(reset: ${quota.weeklyReset || quota.resetStr || '7d'})</span>
               </span>
             </div>
             <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
-              <div style="width: ${Math.min(quota.usagePct, 100)}%; height: 100%; background: ${getBarColor(quota.usagePct)}; border-radius: 9999px;"></div>
+              <div style="width: ${Math.min(singleRem, 100)}%; height: 100%; background: ${singleColor}; border-radius: 9999px;"></div>
             </div>
           </div>
+          ${chatModelsLedgerHtml}
         </div>
       `;
     }
@@ -3232,14 +3622,25 @@ function renderPopoverHtml(metric) {
 
       ${modelQuotaHtml}
 
-      <!-- Category Breakdown Rows -->
-      <div style="margin-bottom: 12px;">
-        <div style="font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 8px;">Breakdown by Source</div>
-        ${renderRow('👤', 'User Prompts', user, '#38bdf8')}
-        ${renderRow('🤖', 'Assistant Replies', model, '#a855f7')}
-        ${renderRow('🧠', 'Thinking (CoT)', thinking, '#ec4899')}
-        ${renderRow('⚙️', 'Local Tools', tools, '#f59e0b')}
-        ${renderRow('🌐', 'MCP Protocol', mcp, '#10b981')}
+      ${compactionsHtml}
+
+      <!-- Compact Category Breakdown -->
+      <div style="margin-bottom: 10px;">
+        <div style="font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 5px;">Breakdown by Source</div>
+        <div style="display: flex; height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden; margin-bottom: 6px;">
+          <div style="width: ${Math.min(user.pct, 100)}%; background: #38bdf8;"></div>
+          <div style="width: ${Math.min(model.pct, 100)}%; background: #a855f7;"></div>
+          <div style="width: ${Math.min(thinking.pct, 100)}%; background: #ec4899;"></div>
+          <div style="width: ${Math.min(tools.pct, 100)}%; background: #f59e0b;"></div>
+          <div style="width: ${Math.min(mcp.pct, 100)}%; background: #10b981;"></div>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px 6px;">
+          ${renderCompactSource('Prompts', user, '#38bdf8')}
+          ${renderCompactSource('Replies', model, '#a855f7')}
+          ${renderCompactSource('Thinking', thinking, '#ec4899')}
+          ${renderCompactSource('Tools', tools, '#f59e0b')}
+          ${renderCompactSource('MCP', mcp, '#10b981')}
+        </div>
       </div>
 
       <!-- Footer Info -->

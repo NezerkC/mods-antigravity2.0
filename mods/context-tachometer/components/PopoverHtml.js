@@ -39,93 +39,177 @@ export function renderPopoverHtml(metric) {
     statusColor = '#eab308';
   }
 
-  const renderRow = (icon, label, data, barColor) => `
-    <div style="margin-bottom: 7px;">
-      <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; color: #d4d4d8;">
-        <span style="display: flex; align-items: center; gap: 5px;">
-          <span>${icon}</span>
-          <span style="font-weight: 500;">${label}</span>
-        </span>
-        <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10.5px;">
-          ${data.tokens.toLocaleString()} tok <span style="color: ${barColor}; font-weight: 600;">(${data.pct}%)</span>
-        </span>
-      </div>
-      <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
-        <div style="width: ${Math.min(data.pct, 100)}%; height: 100%; background: ${barColor}; border-radius: 9999px;"></div>
-      </div>
+  const cleanModelName = (raw) => String(raw || '')
+    .replace(/\\n/g, ' ')
+    .split(/\r?\n/)[0]
+    .replace(/\.\s*No need to comment[\s\S]*$/i, '')
+    .replace(/\.\s*If reporting what model[\s\S]*$/i, '')
+    .replace(/[`'"]/g, '')
+    .replace(/\.\s*$/, '')
+    .trim();
+
+  const formatCompactTokens = (t) => {
+    const num = Number(t) || 0;
+    if (num >= 1_000_000) return (num / 1_000_000).toFixed(2) + 'M';
+    if (num >= 1_000) return (num / 1_000).toFixed(1) + 'k';
+    return String(num);
+  };
+
+  const renderCompactSource = (label, data, dotColor) => `
+    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 10px; padding: 2px 5px; background: rgba(255, 255, 255, 0.025); border-radius: 5px; color: #d4d4d8; white-space: nowrap;">
+      <span style="display: flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis;">
+        <span style="width: 6px; height: 6px; border-radius: 9999px; background: ${dotColor}; flex-shrink: 0;"></span>
+        <span style="font-weight: 500; color: #a1a1aa;">${label}</span>
+      </span>
+      <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #e4e4e7; font-size: 9.5px; margin-left: 4px;">
+        ${formatCompactTokens(data.tokens)} <span style="color: ${dotColor}; font-weight: 600;">(${data.pct}%)</span>
+      </span>
     </div>
   `;
 
   const quota = m.modelQuota || null;
-  const getBarColor = (pct) => {
-    if (pct >= 85) return '#ef4444';
-    if (pct >= 60) return '#f97316';
-    if (pct >= 25) return '#eab308';
+  const chatModels = Array.isArray(m.chatModels) ? m.chatModels : [];
+  const compactions = Array.isArray(m.compactions) ? m.compactions : [];
+
+  let compactionsHtml = '';
+  if (compactions.length > 0) {
+    const recentCompactions = compactions.slice(-4);
+    const compactionRowsHtml = recentCompactions.map((c) => `
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 10px; padding: 3px 0; border-top: 1px dashed rgba(255, 255, 255, 0.06); color: #d4d4d8; white-space: nowrap;">
+        <span style="font-weight: 500; color: #e4e4e7;">
+          ✂️ Turno #${c.step}
+        </span>
+        <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
+          ${c.displayFrom} → <strong style="color: #22c55e;">${c.displayTo}</strong>
+        </span>
+      </div>
+    `).join('');
+
+    compactionsHtml = `
+      <div style="margin-bottom: 10px; padding: 8px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
+        <div style="font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 3px;">
+          Historial de Compactación (/compact)
+        </div>
+        ${compactionRowsHtml}
+      </div>
+    `;
+  }
+
+  const getRemainingColor = (remainingPct) => {
+    if (remainingPct <= 15) return '#ef4444';
+    if (remainingPct <= 40) return '#f97316';
+    if (remainingPct <= 75) return '#eab308';
     return '#22c55e';
   };
 
+  let chatModelsLedgerHtml = '';
+  if (chatModels.length > 0) {
+    const modelRowsHtml = chatModels.map((cm) => {
+      const safeName = cleanModelName(cm.modelName) || 'Gemini';
+      const quotaShareText = cm.hasDualLimit
+        ? `5h:${cm.chatRollingPct}% · 7d:${cm.chatWeeklyPct}%`
+        : `7d:${cm.chatWeeklyPct}%`;
+      return `
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 10px; padding: 3px 0; border-top: 1px dashed rgba(255, 255, 255, 0.06); color: #d4d4d8; white-space: nowrap;">
+          <span style="font-weight: 500; color: #e4e4e7; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${safeName}">
+            🤖 ${safeName}
+          </span>
+          <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
+            ${cm.displayTokens} <span style="color: #38bdf8; font-weight: 600;">(${quotaShareText})</span>
+          </span>
+        </div>
+      `;
+    }).join('');
+
+    chatModelsLedgerHtml = `
+      <div style="margin-top: 7px; padding-top: 5px; border-top: 1px solid rgba(255, 255, 255, 0.08);">
+        <div style="font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 3px;">
+          Consumo por Modelo en este Chat
+        </div>
+        ${modelRowsHtml}
+      </div>
+    `;
+  }
+
   let modelQuotaHtml = '';
   if (quota) {
+    const safeQuotaModel = cleanModelName(quota.modelName) || (quota.hasDualLimit ? 'Gemini' : 'Gemini 4 Argon');
     if (quota.hasDualLimit) {
+      const rollingRem = quota.rollingRemaining !== undefined ? quota.rollingRemaining : Math.max(0, 100 - (quota.rollingUsed || 0));
+      const weeklyRem = quota.weeklyRemaining !== undefined ? quota.weeklyRemaining : Math.max(0, 100 - (quota.weeklyUsed || 0));
+      const rollingColor = getRemainingColor(rollingRem);
+      const weeklyColor = getRemainingColor(weeklyRem);
+
       modelQuotaHtml = `
-        <div style="margin-bottom: 12px; padding: 9px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 7px;">
-            <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #a1a1aa; font-weight: 600;">
-              Límites del Modelo (${quota.modelName || 'Claude'})
+        <div style="margin-bottom: 10px; padding: 8px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 6px;">
+            <span style="font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #a1a1aa; font-weight: 600; flex-shrink: 0;">
+              Cuota de Cuenta
+            </span>
+            <span style="font-size: 9.5px; color: #e4e4e7; background: rgba(255, 255, 255, 0.07); padding: 1px 6px; border-radius: 9999px; max-width: 155px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${safeQuotaModel}">
+              ${safeQuotaModel}
             </span>
           </div>
-          <div style="margin-bottom: 6px;">
-            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; color: #d4d4d8;">
+          <div style="margin-bottom: 5px;">
+            <div style="display: flex; justify-content: space-between; font-size: 10.5px; margin-bottom: 2px; color: #d4d4d8; white-space: nowrap;">
               <span style="display: flex; align-items: center; gap: 4px;">
                 <span>⏱️</span>
-                <span style="font-weight: 500;">${quota.rollingLabel || 'Límite 5h'}</span>
+                <span style="font-weight: 500;">${quota.rollingLabel || 'Cuota 5h Restante'}</span>
               </span>
-              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10.5px;">
-                <strong style="color: ${getBarColor(quota.rollingUsed)};">${quota.rollingUsed}%</strong> <span style="color: #71717a; font-size: 9.5px;">(reset: ${quota.rollingReset})</span>
+              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10px;">
+                <strong style="color: ${rollingColor};">${rollingRem}%</strong> <span style="color: #71717a; font-size: 9px;">(reset: ${quota.rollingReset || '5h'})</span>
               </span>
             </div>
             <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
-              <div style="width: ${Math.min(quota.rollingUsed, 100)}%; height: 100%; background: ${getBarColor(quota.rollingUsed)}; border-radius: 9999px;"></div>
+              <div style="width: ${Math.min(rollingRem, 100)}%; height: 100%; background: ${rollingColor}; border-radius: 9999px;"></div>
             </div>
           </div>
           <div>
-            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; color: #d4d4d8;">
+            <div style="display: flex; justify-content: space-between; font-size: 10.5px; margin-bottom: 2px; color: #d4d4d8; white-space: nowrap;">
               <span style="display: flex; align-items: center; gap: 4px;">
                 <span>📅</span>
-                <span style="font-weight: 500;">${quota.weeklyLabel || 'Cuota Semanal'}</span>
+                <span style="font-weight: 500;">${quota.weeklyLabel || 'Cuota Semanal Restante'}</span>
               </span>
-              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10.5px;">
-                <strong style="color: ${getBarColor(quota.weeklyUsed)};">${quota.weeklyUsed}%</strong>
+              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10px;">
+                <strong style="color: ${weeklyColor};">${weeklyRem}%</strong> <span style="color: #71717a; font-size: 9px;">(reset: ${quota.weeklyReset || '7d'})</span>
               </span>
             </div>
             <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
-              <div style="width: ${Math.min(quota.weeklyUsed, 100)}%; height: 100%; background: ${getBarColor(quota.weeklyUsed)}; border-radius: 9999px;"></div>
+              <div style="width: ${Math.min(weeklyRem, 100)}%; height: 100%; background: ${weeklyColor}; border-radius: 9999px;"></div>
             </div>
           </div>
+          ${chatModelsLedgerHtml}
         </div>
       `;
     } else {
+      const singleRem = quota.weeklyRemaining !== undefined ? quota.weeklyRemaining : (quota.remainingPct !== undefined ? quota.remainingPct : (quota.usagePct || 0));
+      const singleColor = getRemainingColor(singleRem);
+
       modelQuotaHtml = `
-        <div style="margin-bottom: 12px; padding: 9px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-            <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #a1a1aa; font-weight: 600;">
-              Cuota del Modelo (${quota.modelName || 'Gemini'})
+        <div style="margin-bottom: 10px; padding: 8px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 5px;">
+            <span style="font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #a1a1aa; font-weight: 600; flex-shrink: 0;">
+              Cuota de Cuenta
+            </span>
+            <span style="font-size: 9.5px; color: #e4e4e7; background: rgba(255, 255, 255, 0.07); padding: 1px 6px; border-radius: 9999px; max-width: 155px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${safeQuotaModel}">
+              ${safeQuotaModel}
             </span>
           </div>
           <div>
-            <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; color: #d4d4d8;">
+            <div style="display: flex; justify-content: space-between; font-size: 10.5px; margin-bottom: 2px; color: #d4d4d8; white-space: nowrap;">
               <span style="display: flex; align-items: center; gap: 4px;">
-                <span>⚡</span>
-                <span style="font-weight: 500;">${quota.singleLabel || 'Cuota Disponible'}</span>
+                <span>📅</span>
+                <span style="font-weight: 500;">${quota.singleLabel || 'Cuota Semanal Restante'}</span>
               </span>
-              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10.5px;">
-                <strong style="color: ${getBarColor(quota.usagePct)};">${quota.usagePct}%</strong>
+              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10px;">
+                <strong style="color: ${singleColor};">${singleRem}%</strong> <span style="color: #71717a; font-size: 9px;">(reset: ${quota.weeklyReset || quota.resetStr || '7d'})</span>
               </span>
             </div>
             <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
-              <div style="width: ${Math.min(quota.usagePct, 100)}%; height: 100%; background: ${getBarColor(quota.usagePct)}; border-radius: 9999px;"></div>
+              <div style="width: ${Math.min(singleRem, 100)}%; height: 100%; background: ${singleColor}; border-radius: 9999px;"></div>
             </div>
           </div>
+          ${chatModelsLedgerHtml}
         </div>
       `;
     }
@@ -186,14 +270,25 @@ export function renderPopoverHtml(metric) {
 
       ${modelQuotaHtml}
 
-      <!-- Category Breakdown Rows -->
-      <div style="margin-bottom: 12px;">
-        <div style="font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 8px;">Breakdown by Source</div>
-        ${renderRow('👤', 'User Prompts', user, '#38bdf8')}
-        ${renderRow('🤖', 'Assistant Replies', model, '#a855f7')}
-        ${renderRow('🧠', 'Thinking (CoT)', thinking, '#ec4899')}
-        ${renderRow('⚙️', 'Local Tools', tools, '#f59e0b')}
-        ${renderRow('🌐', 'MCP Protocol', mcp, '#10b981')}
+      ${compactionsHtml}
+
+      <!-- Compact Category Breakdown -->
+      <div style="margin-bottom: 10px;">
+        <div style="font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 5px;">Breakdown by Source</div>
+        <div style="display: flex; height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden; margin-bottom: 6px;">
+          <div style="width: ${Math.min(user.pct, 100)}%; background: #38bdf8;"></div>
+          <div style="width: ${Math.min(model.pct, 100)}%; background: #a855f7;"></div>
+          <div style="width: ${Math.min(thinking.pct, 100)}%; background: #ec4899;"></div>
+          <div style="width: ${Math.min(tools.pct, 100)}%; background: #f59e0b;"></div>
+          <div style="width: ${Math.min(mcp.pct, 100)}%; background: #10b981;"></div>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px 6px;">
+          ${renderCompactSource('Prompts', user, '#38bdf8')}
+          ${renderCompactSource('Replies', model, '#a855f7')}
+          ${renderCompactSource('Thinking', thinking, '#ec4899')}
+          ${renderCompactSource('Tools', tools, '#f59e0b')}
+          ${renderCompactSource('MCP', mcp, '#10b981')}
+        </div>
       </div>
 
       <!-- Footer Info -->
