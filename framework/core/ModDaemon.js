@@ -98,11 +98,16 @@ export class ModDaemon {
         ? allMetrics[convIds[0]]
         : (typeof this.modHost.telemetryService.getEmptySnapshot === 'function' ? this.modHost.telemetryService.getEmptySnapshot() : {});
 
+      const activeAgents = (this.modHost.syncServer && typeof this.modHost.syncServer.readActiveAgents === 'function')
+        ? this.modHost.syncServer.readActiveAgents()
+        : {};
+
       const refreshScript = `
         (() => {
           if (typeof window.__updateAntigravityTelemetry === 'function') {
             window.__antigravityAllMetrics = ${JSON.stringify(allMetrics)};
             window.__antigravityLatestMetric = ${JSON.stringify(primaryMetric)};
+            window.__antigravityActiveAgents = ${JSON.stringify(activeAgents)};
             window.__updateAntigravityTelemetry();
           }
         })()

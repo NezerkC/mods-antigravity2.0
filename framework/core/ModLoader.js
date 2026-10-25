@@ -102,6 +102,65 @@ export class ModLoader {
         styleTag.textContent = ${JSON.stringify(cssBundle)};
 
         // 2. Global Agent Selector & Tachometer Portal Handlers
+        window.__resolveCascadeId = function(badge) {
+          const cascadeEl = badge ? badge.closest('[data-cascade-id]') : null;
+          const cascadeId = cascadeEl ? cascadeEl.getAttribute('data-cascade-id') : null;
+          if (cascadeId) return cascadeId;
+          const urlPath = window.location.pathname || '';
+          const pathParts = urlPath.split('/c/');
+          const urlPathId = (pathParts.length > 1 && pathParts[1]) ? pathParts[1].split('/')[0].split('?')[0] : null;
+          if (urlPathId) return urlPathId;
+          const searchMatch = (window.location.search || '').match(/[?&](?:focused|conversationId)=([0-9a-fA-F-]+)/);
+          return searchMatch ? searchMatch[1] : null;
+        };
+
+        window.__classifyPromptMode = function(prompt) {
+          if (!prompt || typeof prompt !== 'string') return 'PLAN';
+          const text = prompt.trim();
+          if (!text) return 'PLAN';
+          const planRe = /\\b(diseñ|plan|arquitect|estructur|diagram|rfc|adr|evalu|compar|como\\s+(hacer|estructurar|abordar|organizar)|analiz|estrateg|roadmap|criterio|decision|flujo|explic|por\\s*qu[eé]|evaluaci[oó]n|diagn[oó]stic)/i;
+          const buildRe = /\\b(implement|escrib|crea|agreg|corrig|arregl|fix|refactor|test|prueb|npm|git\\s+commit|ejecut|corr|instal|modific|edit|program|actualiz|agrega|elimina|borra)/i;
+          const hasPlan = planRe.test(text);
+          const hasBuild = buildRe.test(text);
+          if (hasBuild && !hasPlan) return 'BUILD';
+          if (hasPlan && !hasBuild) return 'PLAN';
+          const lower = text.toLowerCase();
+          if (/^(cómo|como|por qué|porque|explica|cuál|cual|analiza|revisa)\\b/.test(lower)) return 'PLAN';
+          if (/^(haz|crea|agrega|modifica|corrige|ejecuta|implementa)\\b/.test(lower)) return 'BUILD';
+          return 'PLAN';
+        };
+
+        window.__resolveAgentForCascade = function(cascadeId) {
+          const defaultAgent = { id: 'default', name: 'Sin Agente', color: 'hsl(215, 16%, 65%)', filePath: '' };
+          try {
+            const mapRaw = localStorage.getItem('__antigravity_selected_agents_map');
+            const map = mapRaw ? JSON.parse(mapRaw) : {};
+            const fallbackRaw = localStorage.getItem('__antigravity_selected_agent');
+            const fallbackAgent = fallbackRaw ? JSON.parse(fallbackRaw) : null;
+            const serverMap = window.__antigravityActiveAgents || {};
+
+            let resolved = null;
+            if (cascadeId && map[cascadeId]) {
+              resolved = { ...map[cascadeId] };
+              if (
+                resolved.id === 'auto' &&
+                serverMap[cascadeId] &&
+                serverMap[cascadeId].id === 'auto' &&
+                serverMap[cascadeId].effectiveMode
+              ) {
+                resolved.effectiveMode = serverMap[cascadeId].effectiveMode;
+              }
+            } else if (cascadeId && serverMap[cascadeId]) {
+              resolved = { ...serverMap[cascadeId] };
+            } else if (fallbackAgent && fallbackAgent.id) {
+              resolved = { ...fallbackAgent };
+            }
+            return resolved || defaultAgent;
+          } catch (e) {
+            return defaultAgent;
+          }
+        };
+
         window.__applyAgentToBadge = function(badge, agent) {
           if (!badge || !agent) return;
           const name = agent.name || 'Sin Agente';
@@ -109,20 +168,29 @@ export class ModLoader {
           const label = badge.querySelector('.antigravity-active-agent-name');
           const dot = badge.querySelector('.antigravity-active-agent-dot');
 
+          badge.setAttribute('data-agent-id', agent.id || 'default');
+
           if (agent.id === 'auto') {
+            const effMode = (agent.effectiveMode || 'PLAN').toUpperCase() === 'BUILD' ? 'BUILD' : 'PLAN';
             badge.classList.add('mode-auto');
-            badge.setAttribute('title', 'Modo Automático: Oscilando entre Plan y Build');
+            badge.classList.toggle('auto-state-build', effMode === 'BUILD');
+            badge.classList.toggle('auto-state-plan', effMode !== 'BUILD');
+            badge.setAttribute('data-effective-mode', effMode);
+            badge.setAttribute('title', 'Modo Automático: Contexto en ' + effMode);
             badge.style.borderColor = '';
             badge.style.boxShadow = '';
             if (label) {
-              label.innerHTML = '<span class="auto-oscillate-track"><span class="auto-oscillate-step plan">Plan</span><span class="auto-oscillate-step build">Build</span></span>';
+              if (!label.querySelector('.auto-oscillate-track')) {
+                label.innerHTML = '<span class="auto-oscillate-track"><span class="auto-oscillate-step plan">Plan</span><span class="auto-oscillate-step build">Build</span></span>';
+              }
             }
             if (dot) {
               dot.style.background = '';
               dot.style.boxShadow = '';
             }
           } else {
-            badge.classList.remove('mode-auto');
+            badge.classList.remove('mode-auto', 'auto-state-build', 'auto-state-plan');
+            badge.removeAttribute('data-effective-mode');
             badge.setAttribute('title', 'Modo Activo: ' + name);
             badge.style.borderColor = color + '66';
             badge.style.boxShadow = '0 0 8px ' + color + '33';
@@ -135,7 +203,9 @@ export class ModLoader {
 
           const iconWrap = badge.querySelector('.antigravity-active-agent-icon');
           if (iconWrap && agent.id) {
-            const item = document.querySelector('.antigravity-agent-item[data-agent-id="' + agent.id + '"]');
+            const portal = document.getElementById('antigravity-agent-dropdown-portal');
+            const item = (portal ? portal.querySelector('.antigravity-agent-item[data-agent-id="' + agent.id + '"]') : null) ||
+              document.querySelector('.antigravity-agent-item[data-agent-id="' + agent.id + '"]');
             if (item) {
               const svg = item.querySelector('svg');
               if (svg) {
@@ -171,8 +241,7 @@ export class ModLoader {
             portal.innerHTML = template.innerHTML;
           }
 
-          const cascade = badge.closest('[data-cascade-id]');
-          const cascadeId = cascade ? cascade.getAttribute('data-cascade-id') : null;
+          const cascadeId = window.__resolveCascadeId(badge);
 
           const isCurrentOpen = portal.classList.contains('open') && portal.__currentBadge === badge;
 
@@ -201,16 +270,10 @@ export class ModLoader {
             portal.__currentBadge = badge;
             portal.__currentCascadeId = cascadeId;
 
-            // Determine active agent for THIS chat
-            let activeId = 'default';
-            let activeName = 'Sin Agente';
-            try {
-              const map = JSON.parse(localStorage.getItem('__antigravity_selected_agents_map') || '{}');
-              if (cascadeId && map[cascadeId]) {
-                activeId = map[cascadeId].id;
-                activeName = map[cascadeId].name;
-              }
-            } catch (err) {}
+            // Determine active agent for THIS chat consistently with badge state
+            const resolvedAgent = window.__resolveAgentForCascade(cascadeId);
+            const activeId = resolvedAgent.id || 'default';
+            const activeName = resolvedAgent.name || 'Sin Agente';
 
             // Update item highlights inside portal
             portal.querySelectorAll('.antigravity-agent-item').forEach(el => {
@@ -262,39 +325,29 @@ export class ModLoader {
 
         window.__selectAntigravityAgent = function(agentId, agentName, agentColor, agentFilePath) {
           const portal = document.getElementById('antigravity-agent-dropdown-portal');
-          const currentBadge = portal ? portal.__currentBadge : null;
+          const currentBadge = (portal && portal.__currentBadge && portal.__currentBadge.isConnected)
+            ? portal.__currentBadge
+            : document.querySelector('.antigravity-agent-badge');
           const cascadeId = (portal && portal.__currentCascadeId) ||
-            (currentBadge && currentBadge.closest('[data-cascade-id]')?.getAttribute('data-cascade-id')) ||
+            window.__resolveCascadeId(currentBadge) ||
             null;
 
+          const isPlanRole = ['auto', 'lead-architect', 'product-manager', 'context-distiller', 'sdd-explore', 'sdd-spec'].includes(agentId);
           const agentData = {
             id: agentId,
             name: agentName,
             color: agentColor,
-            filePath: agentFilePath || ''
+            filePath: agentFilePath || '',
+            effectiveMode: isPlanRole ? 'PLAN' : 'BUILD'
           };
 
-          // Find target badge scoped to this chat
-          let targetBadge = currentBadge;
+          // Keep in-memory active agents map synchronized immediately
+          window.__antigravityActiveAgents = window.__antigravityActiveAgents || {};
           if (cascadeId) {
-            const container = document.querySelector('[data-cascade-id="' + cascadeId + '"]');
-            if (container) {
-              targetBadge = container.querySelector('.antigravity-agent-badge') || currentBadge;
-            }
+            window.__antigravityActiveAgents[cascadeId] = agentData;
           }
 
-          if (targetBadge) {
-            window.__applyAgentToBadge(targetBadge, agentData);
-            targetBadge.classList.remove('open');
-          } else {
-            // Fallback for standalone badge
-            document.querySelectorAll('.antigravity-agent-badge').forEach(b => {
-              window.__applyAgentToBadge(b, agentData);
-              b.classList.remove('open');
-            });
-          }
-
-          // Save scoped per-chat state in localStorage
+          // Save scoped per-chat state in localStorage before updating badges
           try {
             const map = JSON.parse(localStorage.getItem('__antigravity_selected_agents_map') || '{}');
             if (cascadeId) {
@@ -304,6 +357,21 @@ export class ModLoader {
             // Keep legacy single-entry fallback
             localStorage.setItem('__antigravity_selected_agent', JSON.stringify(agentData));
           } catch (e) {}
+
+          // Update live badge(s) in the chat box directly (avoid matching sidebar items)
+          let updatedAny = false;
+          document.querySelectorAll('.antigravity-agent-badge').forEach(b => {
+            const bCascadeId = window.__resolveCascadeId(b);
+            if (!cascadeId || !bCascadeId || bCascadeId === cascadeId || b === currentBadge) {
+              window.__applyAgentToBadge(b, agentData);
+              b.classList.remove('open');
+              updatedAny = true;
+            }
+          });
+          if (!updatedAny && currentBadge) {
+            window.__applyAgentToBadge(currentBadge, agentData);
+            currentBadge.classList.remove('open');
+          }
 
           // Non-blocking sync to local bridge server (active_agents.json)
           try {
@@ -722,22 +790,38 @@ export class ModLoader {
           document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
         };
 
-        // Store all per-conversation metrics and current primary snapshot
+        // Store all per-conversation metrics, active agents, and current primary snapshot
         window.__antigravityAllMetrics = ${JSON.stringify(context.allMetrics || {})};
         window.__antigravityLatestMetric = ${JSON.stringify(context.telemetry || {})};
+        window.__antigravityActiveAgents = Object.assign(
+          window.__antigravityActiveAgents || {},
+          ${JSON.stringify(context.activeAgents || {})}
+        );
+
+        window.__syncAgentBadges = function() {
+          document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {
+            const cId = window.__resolveCascadeId(badge);
+            const agentToApply = window.__resolveAgentForCascade(cId);
+            if (agentToApply && agentToApply.name) {
+              const currentAgentId = badge.getAttribute('data-agent-id');
+              const currentEffMode = badge.getAttribute('data-effective-mode');
+              const nextEffMode = agentToApply.id === 'auto'
+                ? ((agentToApply.effectiveMode || 'PLAN').toUpperCase() === 'BUILD' ? 'BUILD' : 'PLAN')
+                : null;
+              if (currentAgentId !== agentToApply.id || currentEffMode !== nextEffMode || badge.__lastCascadeId !== cId) {
+                badge.__lastCascadeId = cId;
+                window.__applyAgentToBadge(badge, agentToApply);
+              }
+            }
+          });
+        };
 
         window.__updateAntigravityTelemetry = function(fallbackMetric) {
           const all = window.__antigravityAllMetrics || {};
           const latest = fallbackMetric || window.__antigravityLatestMetric;
 
           document.querySelectorAll('.antigravity-tachometer-badge').forEach(badge => {
-            const cascadeEl = badge.closest('[data-cascade-id]');
-            const cascadeId = cascadeEl ? cascadeEl.getAttribute('data-cascade-id') : null;
-            const urlPath = window.location.pathname || '';
-            const pathParts = urlPath.split('/c/');
-            const urlPathId = (pathParts.length > 1 && pathParts[1]) ? pathParts[1].split('/')[0].split('?')[0] : null;
-            const searchMatch = (window.location.search || '').match(/[?&](?:focused|conversationId)=([0-9a-fA-F-]+)/);
-            const activeId = cascadeId || urlPathId || (searchMatch ? searchMatch[1] : null);
+            const activeId = window.__resolveCascadeId(badge);
 
             const m = (activeId && all[activeId]) ? all[activeId] : latest;
             if (!m) return;
@@ -767,11 +851,51 @@ export class ModLoader {
               portal.innerHTML = window.__renderTachometerPopoverHtml(m);
             }
           });
+
+          if (typeof window.__syncAgentBadges === 'function') {
+            window.__syncAgentBadges();
+          }
+        };
+
+        window.__handleAutoPromptContextUpdate = function(promptText, sourceEl) {
+          if (!promptText || !promptText.trim()) return;
+          const badge = (sourceEl && sourceEl.closest('[data-cascade-id]')?.querySelector('.antigravity-agent-badge')) ||
+            document.querySelector('.antigravity-agent-badge');
+          if (!badge) return;
+          const cId = window.__resolveCascadeId(badge);
+          const currentAgent = window.__resolveAgentForCascade(cId);
+          if (!currentAgent || currentAgent.id !== 'auto') return;
+
+          const nextMode = window.__classifyPromptMode(promptText);
+          currentAgent.effectiveMode = nextMode;
+          window.__antigravityActiveAgents = window.__antigravityActiveAgents || {};
+          if (cId) {
+            window.__antigravityActiveAgents[cId] = currentAgent;
+          }
+          try {
+            const map = JSON.parse(localStorage.getItem('__antigravity_selected_agents_map') || '{}');
+            if (cId) {
+              map[cId] = currentAgent;
+              localStorage.setItem('__antigravity_selected_agents_map', JSON.stringify(map));
+            }
+            localStorage.setItem('__antigravity_selected_agent', JSON.stringify(currentAgent));
+          } catch (e) {}
+          window.__applyAgentToBadge(badge, currentAgent);
         };
 
         if (!window.__antigravityGlobalEventsBound) {
           window.__antigravityGlobalEventsBound = true;
           document.addEventListener('click', (e) => {
+            const sendBtn = e.target.closest('button[data-testid="send-button"]');
+            if (sendBtn) {
+              const container = sendBtn.closest('[data-cascade-id]') || document;
+              const editor = container.querySelector('[contenteditable="true"], textarea');
+              const text = editor ? (editor.value || editor.textContent || '') : '';
+              if (text && window.__handleAutoPromptContextUpdate) {
+                window.__handleAutoPromptContextUpdate(text, sendBtn);
+              }
+            }
+
             const isAgentBadge = e.target.closest('.antigravity-agent-badge');
             const isAgentPortal = e.target.closest('#antigravity-agent-dropdown-portal');
             if (!isAgentBadge && !isAgentPortal) {
@@ -804,6 +928,15 @@ export class ModLoader {
           }, true);
 
           document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+              const editor = e.target.closest('[contenteditable="true"], textarea');
+              if (editor) {
+                const text = editor.value || editor.textContent || '';
+                if (text && window.__handleAutoPromptContextUpdate) {
+                  window.__handleAutoPromptContextUpdate(text, editor);
+                }
+              }
+            }
             if (e.key === 'Escape') {
               const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
               if (aPortal) {
@@ -826,7 +959,7 @@ export class ModLoader {
               }
               document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
             }
-          });
+          }, true);
         }
 
         // 3. Mount individual mods into target slots across all conversations
@@ -846,7 +979,7 @@ export class ModLoader {
             document.body.appendChild(agentPortal);
           }
           const agentTemplate = document.querySelector('.antigravity-agent-dropdown-template');
-          if (agentTemplate) {
+          if (agentTemplate && !agentPortal.classList.contains('open')) {
             agentPortal.innerHTML = agentTemplate.innerHTML;
             agentPortal.setAttribute('data-v', '2');
           }
@@ -904,21 +1037,14 @@ export class ModLoader {
           window.__applyModsVisibility();
 
           // Restore saved agent selection across mounted badges (scoped per chat)
-          try {
-            const mapRaw = localStorage.getItem('__antigravity_selected_agents_map');
-            const map = mapRaw ? JSON.parse(mapRaw) : {};
-            const fallbackRaw = localStorage.getItem('__antigravity_selected_agent');
-            const fallbackAgent = fallbackRaw ? JSON.parse(fallbackRaw) : null;
-
-            document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {
-              const cascade = badge.closest('[data-cascade-id]');
-              const cId = cascade ? cascade.getAttribute('data-cascade-id') : null;
-              const agentToApply = (cId && map[cId]) ? map[cId] : (fallbackAgent || null);
-              if (agentToApply && agentToApply.name) {
-                window.__applyAgentToBadge(badge, agentToApply);
-              }
-            });
-          } catch (e) {}
+          document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {
+            const cId = window.__resolveCascadeId(badge);
+            const agentToApply = window.__resolveAgentForCascade(cId);
+            if (agentToApply && agentToApply.name) {
+              badge.__lastCascadeId = cId;
+              window.__applyAgentToBadge(badge, agentToApply);
+            }
+          });
 
           // Apply current telemetry
           window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})});
@@ -990,6 +1116,8 @@ export class ModLoader {
           if (missingSlot) {
             if (mountDebounce) clearTimeout(mountDebounce);
             mountDebounce = setTimeout(mountAllMods, 80);
+          } else if (typeof window.__syncAgentBadges === 'function') {
+            window.__syncAgentBadges();
           }
         });
 

@@ -131,3 +131,16 @@ test('ModLoader - exposes window.__antigravityMountAll in client script', () => 
   const script = loader.buildInjectionPayload({});
   assert.ok(script.includes('window.__antigravityMountAll = mountAllMods;'));
 });
+
+test('ModLoader - includes context-driven auto mode classifier and direct badge persistence', () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({});
+
+  assert.ok(script.includes('window.__resolveCascadeId'));
+  assert.ok(script.includes('window.__classifyPromptMode'));
+  assert.ok(script.includes('window.__resolveAgentForCascade'));
+  assert.ok(script.includes('window.__syncAgentBadges'));
+  assert.ok(script.includes('window.__handleAutoPromptContextUpdate'));
+  assert.ok(script.includes('auto-state-build'));
+  assert.ok(script.includes('auto-state-plan'));
+});

@@ -115,7 +115,9 @@ export class SlotManager {
             container.appendChild(modNode);
           }
           modNode.setAttribute('data-version', '2');
-          modNode.innerHTML = ${JSON.stringify(htmlContent)};
+          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
+            modNode.innerHTML = ${JSON.stringify(htmlContent)};
+          }
         });
 
         if (!anchors.length) return;
@@ -196,7 +198,9 @@ export class SlotManager {
             container.appendChild(modNode);
           }
           modNode.setAttribute('data-version', '2');
-          modNode.innerHTML = ${JSON.stringify(htmlContent)};
+          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
+            modNode.innerHTML = ${JSON.stringify(htmlContent)};
+          }
         }
       })();
     `;

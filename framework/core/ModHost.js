@@ -157,9 +157,12 @@ export class ModHost {
       github = this.gitService.getGitHubMetadata({ repoPath });
     } catch (err) {}
 
+    const activeAgents = this.syncServer.readActiveAgents();
+
     const hostContext = {
       telemetry: primaryMetric,
       allMetrics,
+      activeAgents,
       gitLog,
       gitStatus,
       github,
@@ -172,14 +175,26 @@ export class ModHost {
     const payload = this.compilePayload(hostContext);
     const evalRes = await cdpClient.evaluate(payload);
 
-    // Sync selected agents from renderer localStorage to disk
+    // Sync selected agents from renderer localStorage to disk while preserving server effectiveMode
     try {
       const mapRes = await cdpClient.evaluate("localStorage.getItem('__antigravity_selected_agents_map')");
       if (mapRes && mapRes.value) {
         const parsed = JSON.parse(mapRes.value);
         if (parsed && typeof parsed === 'object') {
           const current = this.syncServer.readActiveAgents();
-          const merged = { ...current, ...parsed };
+          const merged = { ...current };
+          for (const [k, v] of Object.entries(parsed)) {
+            if (v && typeof v === 'object') {
+              const existing = current[k] || {};
+              merged[k] = {
+                ...existing,
+                ...v,
+                effectiveMode: (existing.id === v.id && existing.effectiveMode)
+                  ? existing.effectiveMode
+                  : (v.effectiveMode || (v.id === 'auto' ? 'PLAN' : undefined))
+              };
+            }
+          }
           this.syncServer.writeActiveAgents(merged);
         }
       }
