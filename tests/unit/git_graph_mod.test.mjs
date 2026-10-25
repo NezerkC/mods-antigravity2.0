@@ -190,3 +190,47 @@ test('GitGraphPanelHtml - renders commits collapsed by default with toggle all b
   assert.ok(panelHtml.includes('style="display: none;"'));
   assert.ok(panelHtml.includes('git-commit-chevron'));
 });
+
+test('GitGraphPanelHtml - renders sync badges and unpushed/unpulled indicators', () => {
+  const panelHtml = renderGitGraphPanelHtml({
+    status: { branch: 'feat/sync-test', ahead: 2, behind: 1, isClean: false },
+    commits: [
+      {
+        hash: 'c_ahead',
+        shortHash: 'cahead',
+        subject: 'local ahead commit',
+        refs: ['HEAD -> feat/sync-test'],
+        syncStatus: 'ahead',
+        isUnpushed: true,
+        files: []
+      },
+      {
+        hash: 'c_behind',
+        shortHash: 'cbehind',
+        subject: 'remote behind commit',
+        refs: ['origin/feat/sync-test'],
+        syncStatus: 'behind',
+        isUnpulled: true,
+        files: []
+      }
+    ]
+  });
+
+  assert.ok(panelHtml.includes('git-sync-badge'));
+  assert.ok(panelHtml.includes('⇡2'));
+  assert.ok(panelHtml.includes('⇣1'));
+  assert.ok(panelHtml.includes('git-pill-unpushed'));
+  assert.ok(panelHtml.includes('git-pill-unpulled'));
+
+  const aheadCommit = {
+    hash: 'c_ahead',
+    shortHash: 'cahead',
+    author: { name: 'Dev', email: 'dev@test.com' },
+    subject: 'local ahead commit',
+    syncStatus: 'ahead',
+    isUnpushed: true
+  };
+  const cardHtml = renderInspectorCard(aheadCommit);
+  assert.ok(cardHtml.includes('git-inspector-sync-badge'));
+  assert.ok(cardHtml.includes('is-unpushed'));
+});
