@@ -1,3 +1,5 @@
+import { escapeGitHtml } from './GitGraphPanelHtml.js';
+
 /**
  * Generates HTML for the Pull Request and CI/CD status card.
  * @param {Object | null} pr Active Pull Request or null
@@ -97,13 +99,4 @@ export function renderPrCiCardHtml(pr, status = {}, github = {}) {
       </div>
     </div>
   `.trim();
-}
-
-function escapeGitHtml(str = '') {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }

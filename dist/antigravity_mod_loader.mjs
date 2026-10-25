@@ -4972,6 +4972,7 @@ class ModsManagerMod extends AntigravityMod {
 
 
 // ===================== Git Graph Mod =====================
+
 /**
  * Generates HTML for the Pull Request and CI/CD status card.
  * @param {Object | null} pr Active Pull Request or null
@@ -5071,15 +5072,6 @@ function renderPrCiCardHtml(pr, status = {}, github = {}) {
       </div>
     </div>
   `.trim();
-}
-
-function escapeGitHtml(str = '') {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }
 
 
