@@ -8,10 +8,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /**
- * Mod providing live topological Git branch & commit visualization in the Auxiliary Pane.
+ * Mod providing live topological Git branch & commit visualization
+ * alongside GitHub Pull Requests and CI/CD status in the Auxiliary Pane.
  */
 export class GitGraphMod extends AntigravityMod {
-  constructor() {
+  /**
+   * @param {Object} [options]
+   * @param {Object} [options.initialContext] Pre-computed VCS overview
+   */
+  constructor(options = {}) {
     super({
       id: 'git-graph',
       name: 'Git & GitHub Topological Graph',
@@ -20,6 +25,7 @@ export class GitGraphMod extends AntigravityMod {
       priority: 60
     });
 
+    this.initialContext = options.initialContext || {};
     this.cachedCss = '';
     try {
       const cssPath = path.join(__dirname, 'styles.css');
@@ -37,8 +43,9 @@ export class GitGraphMod extends AntigravityMod {
    * @returns {{ html: string, css: string }}
    */
   render(context = {}) {
+    const ctx = (context && Object.keys(context).length > 0) ? context : this.initialContext;
     const tabButtonHtml = renderGitGraphTabButton();
-    const panelHtml = renderGitGraphPanelHtml(context);
+    const panelHtml = renderGitGraphPanelHtml(ctx);
 
     const html = `
       ${tabButtonHtml}

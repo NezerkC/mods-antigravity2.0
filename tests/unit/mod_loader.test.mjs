@@ -131,3 +131,27 @@ test('ModLoader - exposes window.__antigravityMountAll in client script', () => 
   const script = loader.buildInjectionPayload({});
   assert.ok(script.includes('window.__antigravityMountAll = mountAllMods;'));
 });
+
+test('ModLoader - includes context-driven auto mode classifier and direct badge persistence', () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({});
+
+  assert.ok(script.includes('window.__resolveCascadeId'));
+  assert.ok(script.includes('window.__classifyPromptMode'));
+  assert.ok(script.includes('window.__resolveAgentForCascade'));
+  assert.ok(script.includes('window.__syncAgentBadges'));
+  assert.ok(script.includes('window.__handleAutoPromptContextUpdate'));
+  assert.ok(script.includes('auto-state-build'));
+  assert.ok(script.includes('auto-state-plan'));
+});
+
+test('ModLoader - generates CI/CD accordion trigger and VCS refresh handler in Git panel', () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({});
+
+  assert.ok(script.includes('#antigravity-git-ci-rollup-trigger'));
+  assert.ok(script.includes('#antigravity-git-ci-accordion'));
+  assert.ok(script.includes('/vcs/overview'));
+  assert.ok(script.includes('window.__toggleGitGraphPanel()'));
+});
+

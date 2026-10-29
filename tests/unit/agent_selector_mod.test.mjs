@@ -125,3 +125,13 @@ test('AgentDropdownHtml - escapes malicious XSS payloads in agent name and role'
   assert.ok(!rendered.html.includes('<img src=x onerror=alert(1)>'));
   assert.ok(rendered.html.includes('&lt;img src=x onerror=alert(1)&gt;'));
 });
+
+test('AgentSelectorMod - mode-auto uses context-driven transition instead of infinite keyframe loop', () => {
+  const mod = new AgentSelectorMod();
+  const rendered = mod.render({});
+
+  assert.ok(!rendered.css.includes('oscillatePlanBuild 5s infinite'), 'Must not loop infinitely every 5s');
+  assert.ok(!rendered.css.includes('autoBadgeGlow 5s infinite'), 'Must not loop glow infinitely');
+  assert.ok(rendered.css.includes('.antigravity-agent-badge.mode-auto.auto-state-build'), 'Must define build state class');
+  assert.ok(rendered.css.includes('translateY(-28px)'), 'Must transition track vertically when switching to build');
+});

@@ -28,7 +28,7 @@ class CdpPortResolver {
     this.host = options.host || '127.0.0.1';
     this.logDir = options.logDir || path.join(os.homedir(), 'AppData', 'Roaming', 'Antigravity', 'logs');
     this.defaultPort = options.defaultPort ?? 53908;
-    this.candidatePorts = options.candidatePorts || [53908, 9222, 9229, 53909, 53910];
+    this.candidatePorts = options.candidatePorts || [56547, 53908, 9222, 9229, 53909, 53910];
     this.probeTimeoutMs = options.probeTimeoutMs ?? 150;
   }
 
@@ -370,8 +370,15 @@ class SlotManager {
 
     return `
       (() => {
-        const anchors = Array.from(document.querySelectorAll('${slot.selector}'));
-        if (!anchors.length) return;
+        let anchors = Array.from(document.querySelectorAll('${slot.selector}'));
+        if (!anchors.length && '${slotId}' === 'aux-pane-tab') {
+          const auxBar = document.querySelector('[data-active-tab-id]') ||
+                         document.querySelector('.shrink-0.flex.items-center.gap-0\\\\.5.border-b') ||
+                         document.querySelector('div[class*="shrink-0"][class*="border-b"]');
+          if (auxBar) {
+            anchors = [auxBar.querySelector('.overflow-x-auto') || auxBar];
+          }
+        }
 
         // Clean up any misplaced legacy slot containers that were injected directly inside non-flex wrappers
         document.querySelectorAll('#${containerId}').forEach(el => {
@@ -379,6 +386,26 @@ class SlotManager {
             el.remove();
           }
         });
+
+        // If containers already exist in the DOM, ensure mod nodes are refreshed immediately
+        document.querySelectorAll('#${containerId}').forEach(container => {
+          let modNode = container.querySelector('#${modWrapperId}');
+          if (!modNode) {
+            modNode = document.createElement('div');
+            modNode.id = '${modWrapperId}';
+            modNode.className = '${modWrapperId}';
+            modNode.style.display = 'inline-flex';
+            modNode.style.alignItems = 'center';
+            modNode.style.height = '28px';
+            container.appendChild(modNode);
+          }
+          modNode.setAttribute('data-version', '2');
+          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
+            modNode.innerHTML = ${JSON.stringify(htmlContent)};
+          }
+        });
+
+        if (!anchors.length) return;
 
         for (const anchor of anchors) {
           let parent;
@@ -446,17 +473,17 @@ class SlotManager {
           }
 
           let modNode = container.querySelector('#${modWrapperId}');
-          if (!modNode || modNode.getAttribute('data-version') !== '2') {
-            if (!modNode) {
-              modNode = document.createElement('div');
-              modNode.id = '${modWrapperId}';
-              modNode.className = '${modWrapperId}';
-              modNode.style.display = 'inline-flex';
-              modNode.style.alignItems = 'center';
-              modNode.style.height = '28px';
-              container.appendChild(modNode);
-            }
-            modNode.setAttribute('data-version', '2');
+          if (!modNode) {
+            modNode = document.createElement('div');
+            modNode.id = '${modWrapperId}';
+            modNode.className = '${modWrapperId}';
+            modNode.style.display = 'inline-flex';
+            modNode.style.alignItems = 'center';
+            modNode.style.height = '28px';
+            container.appendChild(modNode);
+          }
+          modNode.setAttribute('data-version', '2');
+          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
             modNode.innerHTML = ${JSON.stringify(htmlContent)};
           }
         }
@@ -538,6 +565,8 @@ class StyleIsolator {
             sel.includes('-portal') ||
             sel.includes('antigravity-agent-dropdown') ||
             sel.includes('antigravity-mods-manager-portal') ||
+            sel.includes('antigravity-git') ||
+            sel.includes('git-') ||
             sel.startsWith('.mod-') ||
             sel.startsWith('.mods-manager-') ||
             sel.startsWith('.agent-') ||
@@ -628,6 +657,7 @@ class AntigravityMod {
    */
   onDestroy() {}
 }
+
 
 
 
@@ -733,6 +763,65 @@ class ModLoader {
         styleTag.textContent = ${JSON.stringify(cssBundle)};
 
         // 2. Global Agent Selector & Tachometer Portal Handlers
+        window.__resolveCascadeId = function(badge) {
+          const cascadeEl = badge ? badge.closest('[data-cascade-id]') : null;
+          const cascadeId = cascadeEl ? cascadeEl.getAttribute('data-cascade-id') : null;
+          if (cascadeId) return cascadeId;
+          const urlPath = window.location.pathname || '';
+          const pathParts = urlPath.split('/c/');
+          const urlPathId = (pathParts.length > 1 && pathParts[1]) ? pathParts[1].split('/')[0].split('?')[0] : null;
+          if (urlPathId) return urlPathId;
+          const searchMatch = (window.location.search || '').match(/[?&](?:focused|conversationId)=([0-9a-fA-F-]+)/);
+          return searchMatch ? searchMatch[1] : null;
+        };
+
+        window.__classifyPromptMode = function(prompt) {
+          if (!prompt || typeof prompt !== 'string') return 'PLAN';
+          const text = prompt.trim();
+          if (!text) return 'PLAN';
+          const planRe = /\\b(diseñ|plan|arquitect|estructur|diagram|rfc|adr|evalu|compar|como\\s+(hacer|estructurar|abordar|organizar)|analiz|estrateg|roadmap|criterio|decision|flujo|explic|por\\s*qu[eé]|evaluaci[oó]n|diagn[oó]stic)/i;
+          const buildRe = /\\b(implement|escrib|crea|agreg|corrig|arregl|fix|refactor|test|prueb|npm|git\\s+commit|ejecut|corr|instal|modific|edit|program|actualiz|agrega|elimina|borra)/i;
+          const hasPlan = planRe.test(text);
+          const hasBuild = buildRe.test(text);
+          if (hasBuild && !hasPlan) return 'BUILD';
+          if (hasPlan && !hasBuild) return 'PLAN';
+          const lower = text.toLowerCase();
+          if (/^(cómo|como|por qué|porque|explica|cuál|cual|analiza|revisa)\\b/.test(lower)) return 'PLAN';
+          if (/^(haz|crea|agrega|modifica|corrige|ejecuta|implementa)\\b/.test(lower)) return 'BUILD';
+          return 'PLAN';
+        };
+
+        window.__resolveAgentForCascade = function(cascadeId) {
+          const defaultAgent = { id: 'default', name: 'Sin Agente', color: 'hsl(215, 16%, 65%)', filePath: '' };
+          try {
+            const mapRaw = localStorage.getItem('__antigravity_selected_agents_map');
+            const map = mapRaw ? JSON.parse(mapRaw) : {};
+            const fallbackRaw = localStorage.getItem('__antigravity_selected_agent');
+            const fallbackAgent = fallbackRaw ? JSON.parse(fallbackRaw) : null;
+            const serverMap = window.__antigravityActiveAgents || {};
+
+            let resolved = null;
+            if (cascadeId && map[cascadeId]) {
+              resolved = { ...map[cascadeId] };
+              if (
+                resolved.id === 'auto' &&
+                serverMap[cascadeId] &&
+                serverMap[cascadeId].id === 'auto' &&
+                serverMap[cascadeId].effectiveMode
+              ) {
+                resolved.effectiveMode = serverMap[cascadeId].effectiveMode;
+              }
+            } else if (cascadeId && serverMap[cascadeId]) {
+              resolved = { ...serverMap[cascadeId] };
+            } else if (fallbackAgent && fallbackAgent.id) {
+              resolved = { ...fallbackAgent };
+            }
+            return resolved || defaultAgent;
+          } catch (e) {
+            return defaultAgent;
+          }
+        };
+
         window.__applyAgentToBadge = function(badge, agent) {
           if (!badge || !agent) return;
           const name = agent.name || 'Sin Agente';
@@ -740,20 +829,29 @@ class ModLoader {
           const label = badge.querySelector('.antigravity-active-agent-name');
           const dot = badge.querySelector('.antigravity-active-agent-dot');
 
+          badge.setAttribute('data-agent-id', agent.id || 'default');
+
           if (agent.id === 'auto') {
+            const effMode = (agent.effectiveMode || 'PLAN').toUpperCase() === 'BUILD' ? 'BUILD' : 'PLAN';
             badge.classList.add('mode-auto');
-            badge.setAttribute('title', 'Modo Automático: Oscilando entre Plan y Build');
+            badge.classList.toggle('auto-state-build', effMode === 'BUILD');
+            badge.classList.toggle('auto-state-plan', effMode !== 'BUILD');
+            badge.setAttribute('data-effective-mode', effMode);
+            badge.setAttribute('title', 'Modo Automático: Contexto en ' + effMode);
             badge.style.borderColor = '';
             badge.style.boxShadow = '';
             if (label) {
-              label.innerHTML = '<span class="auto-oscillate-track"><span class="auto-oscillate-step plan">Plan</span><span class="auto-oscillate-step build">Build</span></span>';
+              if (!label.querySelector('.auto-oscillate-track')) {
+                label.innerHTML = '<span class="auto-oscillate-track"><span class="auto-oscillate-step plan">Plan</span><span class="auto-oscillate-step build">Build</span></span>';
+              }
             }
             if (dot) {
               dot.style.background = '';
               dot.style.boxShadow = '';
             }
           } else {
-            badge.classList.remove('mode-auto');
+            badge.classList.remove('mode-auto', 'auto-state-build', 'auto-state-plan');
+            badge.removeAttribute('data-effective-mode');
             badge.setAttribute('title', 'Modo Activo: ' + name);
             badge.style.borderColor = color + '66';
             badge.style.boxShadow = '0 0 8px ' + color + '33';
@@ -766,7 +864,9 @@ class ModLoader {
 
           const iconWrap = badge.querySelector('.antigravity-active-agent-icon');
           if (iconWrap && agent.id) {
-            const item = document.querySelector('.antigravity-agent-item[data-agent-id="' + agent.id + '"]');
+            const portal = document.getElementById('antigravity-agent-dropdown-portal');
+            const item = (portal ? portal.querySelector('.antigravity-agent-item[data-agent-id="' + agent.id + '"]') : null) ||
+              document.querySelector('.antigravity-agent-item[data-agent-id="' + agent.id + '"]');
             if (item) {
               const svg = item.querySelector('svg');
               if (svg) {
@@ -802,8 +902,7 @@ class ModLoader {
             portal.innerHTML = template.innerHTML;
           }
 
-          const cascade = badge.closest('[data-cascade-id]');
-          const cascadeId = cascade ? cascade.getAttribute('data-cascade-id') : null;
+          const cascadeId = window.__resolveCascadeId(badge);
 
           const isCurrentOpen = portal.classList.contains('open') && portal.__currentBadge === badge;
 
@@ -832,16 +931,10 @@ class ModLoader {
             portal.__currentBadge = badge;
             portal.__currentCascadeId = cascadeId;
 
-            // Determine active agent for THIS chat
-            let activeId = 'default';
-            let activeName = 'Sin Agente';
-            try {
-              const map = JSON.parse(localStorage.getItem('__antigravity_selected_agents_map') || '{}');
-              if (cascadeId && map[cascadeId]) {
-                activeId = map[cascadeId].id;
-                activeName = map[cascadeId].name;
-              }
-            } catch (err) {}
+            // Determine active agent for THIS chat consistently with badge state
+            const resolvedAgent = window.__resolveAgentForCascade(cascadeId);
+            const activeId = resolvedAgent.id || 'default';
+            const activeName = resolvedAgent.name || 'Sin Agente';
 
             // Update item highlights inside portal
             portal.querySelectorAll('.antigravity-agent-item').forEach(el => {
@@ -893,39 +986,29 @@ class ModLoader {
 
         window.__selectAntigravityAgent = function(agentId, agentName, agentColor, agentFilePath) {
           const portal = document.getElementById('antigravity-agent-dropdown-portal');
-          const currentBadge = portal ? portal.__currentBadge : null;
+          const currentBadge = (portal && portal.__currentBadge && portal.__currentBadge.isConnected)
+            ? portal.__currentBadge
+            : document.querySelector('.antigravity-agent-badge');
           const cascadeId = (portal && portal.__currentCascadeId) ||
-            (currentBadge && currentBadge.closest('[data-cascade-id]')?.getAttribute('data-cascade-id')) ||
+            window.__resolveCascadeId(currentBadge) ||
             null;
 
+          const isPlanRole = ['auto', 'lead-architect', 'product-manager', 'context-distiller', 'sdd-explore', 'sdd-spec'].includes(agentId);
           const agentData = {
             id: agentId,
             name: agentName,
             color: agentColor,
-            filePath: agentFilePath || ''
+            filePath: agentFilePath || '',
+            effectiveMode: isPlanRole ? 'PLAN' : 'BUILD'
           };
 
-          // Find target badge scoped to this chat
-          let targetBadge = currentBadge;
+          // Keep in-memory active agents map synchronized immediately
+          window.__antigravityActiveAgents = window.__antigravityActiveAgents || {};
           if (cascadeId) {
-            const container = document.querySelector('[data-cascade-id="' + cascadeId + '"]');
-            if (container) {
-              targetBadge = container.querySelector('.antigravity-agent-badge') || currentBadge;
-            }
+            window.__antigravityActiveAgents[cascadeId] = agentData;
           }
 
-          if (targetBadge) {
-            window.__applyAgentToBadge(targetBadge, agentData);
-            targetBadge.classList.remove('open');
-          } else {
-            // Fallback for standalone badge
-            document.querySelectorAll('.antigravity-agent-badge').forEach(b => {
-              window.__applyAgentToBadge(b, agentData);
-              b.classList.remove('open');
-            });
-          }
-
-          // Save scoped per-chat state in localStorage
+          // Save scoped per-chat state in localStorage before updating badges
           try {
             const map = JSON.parse(localStorage.getItem('__antigravity_selected_agents_map') || '{}');
             if (cascadeId) {
@@ -935,6 +1018,21 @@ class ModLoader {
             // Keep legacy single-entry fallback
             localStorage.setItem('__antigravity_selected_agent', JSON.stringify(agentData));
           } catch (e) {}
+
+          // Update live badge(s) in the chat box directly (avoid matching sidebar items)
+          let updatedAny = false;
+          document.querySelectorAll('.antigravity-agent-badge').forEach(b => {
+            const bCascadeId = window.__resolveCascadeId(b);
+            if (!cascadeId || !bCascadeId || bCascadeId === cascadeId || b === currentBadge) {
+              window.__applyAgentToBadge(b, agentData);
+              b.classList.remove('open');
+              updatedAny = true;
+            }
+          });
+          if (!updatedAny && currentBadge) {
+            window.__applyAgentToBadge(currentBadge, agentData);
+            currentBadge.classList.remove('open');
+          }
 
           // Non-blocking sync to local bridge server (active_agents.json)
           try {
@@ -1002,6 +1100,10 @@ class ModLoader {
           }
         };
 
+        const renderSvgIcon = ${renderSvgIcon.toString()};
+        window.__renderSvgIcon = renderSvgIcon;
+        window.__formatResetTime = ${formatResetTime.toString()};
+        window.__resolveNativeQuotaForModel = ${resolveNativeQuotaForModel.toString()};
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
         window.__renderModsManagerPanelHtml = ${renderModsManagerPanelHtml.toString()};
 
@@ -1136,6 +1238,198 @@ class ModLoader {
           }
         };
 
+        window.__bindGitPanelEvents = function(hostEl) {
+          if (!hostEl) return;
+
+          // Commit row click and file expansion
+          hostEl.querySelectorAll('.git-commit-row').forEach(row => {
+            row.addEventListener('click', (ev) => {
+              hostEl.querySelectorAll('.git-commit-row.selected').forEach(r => r.classList.remove('selected'));
+              row.classList.add('selected');
+
+              const item = row.closest('.git-commit-item');
+              const isPillClick = ev.target.closest('.git-pill-files') || ev.target.closest('.git-commit-chevron');
+
+              if (item && isPillClick) {
+                ev.stopPropagation();
+                const filesContainer = item.querySelector('.git-commit-files-container');
+                const chevron = item.querySelector('.git-commit-chevron');
+                if (filesContainer) {
+                  const isNowOpen = filesContainer.style.display !== 'none';
+                  filesContainer.style.display = isNowOpen ? 'none' : 'flex';
+                  item.classList.toggle('is-expanded', !isNowOpen);
+                  if (chevron && chevron.classList.contains('has-files')) {
+                    chevron.textContent = isNowOpen ? '▸' : '▾';
+                  }
+                }
+              }
+
+              const hash = row.getAttribute('data-hash');
+              const inspector = hostEl.querySelector('#antigravity-git-inspector');
+              if (inspector && hash) {
+                const authorName = row.getAttribute('data-author') || 'Unknown';
+                const authorEmail = row.getAttribute('data-email') || '';
+                const avatarUrl = row.getAttribute('data-avatar') || '';
+                const commitUrl = row.getAttribute('data-commit-url') || '';
+                const shortHash = row.getAttribute('data-short-hash') || hash.slice(0, 7);
+                const subject = row.getAttribute('data-subject') || '';
+                const relativeDate = row.getAttribute('data-date') || '';
+                const filesCount = parseInt(row.getAttribute('data-files-count') || '0', 10);
+
+                function esc(str) {
+                  return String(str || '')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#039;');
+                }
+
+                const safeAuthor = esc(authorName);
+                const safeEmail = authorEmail ? ('&lt;' + esc(authorEmail) + '&gt;') : '';
+                const safeSubject = esc(subject);
+                const safeShortHash = esc(shortHash);
+                const initials = (authorName || 'U').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
+                const linkHtml = commitUrl
+                  ? '<a href="' + esc(commitUrl) + '" target="_blank" rel="noopener" class="git-inspector-btn-gh" title="Ver commit en GitHub">GitHub ↗</a>'
+                  : '';
+
+                inspector.innerHTML = '<div class="git-inspector-card">' +
+                  '<div class="git-inspector-top">' +
+                  '<div class="git-inspector-author-group">' +
+                  '<div class="git-avatar-frame">' +
+                  '<div class="git-inspector-avatar-fallback">' + esc(initials) + '</div>' +
+                  (avatarUrl ? '<img class="git-inspector-avatar" src="' + avatarUrl + '" alt="' + safeAuthor + '" onerror="this.remove()"/>' : '') +
+                  '</div>' +
+                  '<div class="git-inspector-author-text">' +
+                  '<div class="git-inspector-name-row">' +
+                  '<span class="git-inspector-author-name">' + safeAuthor + '</span>' +
+                  (relativeDate ? '<span class="git-inspector-date">' + esc(relativeDate) + '</span>' : '') +
+                  '</div>' +
+                  (safeEmail ? '<span class="git-inspector-author-email">' + safeEmail + '</span>' : '') +
+                  '</div></div>' +
+                  '<div class="git-inspector-meta-group">' +
+                  '<span class="git-inspector-hash-pill" title="Hash: ' + esc(hash) + '">' + safeShortHash + '</span>' +
+                  linkHtml +
+                  '<button class="git-inspector-btn-close" id="antigravity-git-inspector-close-btn" title="Cerrar inspector">✕</button>' +
+                  '</div></div>' +
+                  '<div class="git-inspector-subject-line">' + safeSubject + '</div>' +
+                  (filesCount > 0 ? '<div class="git-inspector-footer-stats"><span class="git-inspector-files-badge">📄 ' + filesCount + ' archivo' + (filesCount > 1 ? 's' : '') + ' modificado' + (filesCount > 1 ? 's' : '') + '</span></div>' : '') +
+                  '</div>';
+                inspector.style.display = 'block';
+
+                const inspClose = inspector.querySelector('#antigravity-git-inspector-close-btn');
+                if (inspClose) {
+                  inspClose.onclick = (eClose) => {
+                    eClose.stopPropagation();
+                    inspector.style.display = 'none';
+                  };
+                }
+              }
+            });
+          });
+
+          // Expand/Collapse all files toggle button
+          const toggleAllBtn = hostEl.querySelector('#antigravity-git-toggle-all-btn');
+          if (toggleAllBtn) {
+            let allExpanded = false;
+            toggleAllBtn.onclick = (e) => {
+              e.stopPropagation();
+              allExpanded = !allExpanded;
+              hostEl.querySelectorAll('.git-commit-item').forEach(item => {
+                const filesContainer = item.querySelector('.git-commit-files-container');
+                const chevron = item.querySelector('.git-commit-chevron');
+                if (filesContainer) {
+                  filesContainer.style.display = allExpanded ? 'flex' : 'none';
+                  item.classList.toggle('is-expanded', allExpanded);
+                  if (chevron && chevron.classList.contains('has-files')) {
+                    chevron.textContent = allExpanded ? '▾' : '▸';
+                  }
+                }
+              });
+            };
+          }
+
+          // Branch filter pills (Todas / Locales / GitHub)
+          hostEl.querySelectorAll('.git-filter-pill').forEach(pill => {
+            pill.onclick = (e) => {
+              e.stopPropagation();
+              hostEl.querySelectorAll('.git-filter-pill.active').forEach(p => p.classList.remove('active'));
+              pill.classList.add('active');
+
+              const filterType = pill.getAttribute('data-branch-filter') || 'all';
+              hostEl.querySelectorAll('.git-commit-item').forEach(item => {
+                const type = item.getAttribute('data-commit-type');
+                if (filterType === 'all') {
+                  item.style.display = '';
+                } else if (filterType === 'local') {
+                  item.style.display = type === 'local' ? '' : 'none';
+                } else if (filterType === 'remote') {
+                  item.style.display = type === 'remote' ? '' : 'none';
+                }
+              });
+            };
+          });
+
+          // Branches Drawer dropdown toggle
+          const drawerBtn = hostEl.querySelector('#antigravity-git-branches-drawer-btn');
+          const drawer = hostEl.querySelector('#antigravity-git-branches-drawer');
+          if (drawerBtn && drawer) {
+            drawerBtn.onclick = (e) => {
+              e.stopPropagation();
+              const isHidden = drawer.style.display === 'none';
+              drawer.style.display = isHidden ? 'block' : 'none';
+              const caret = drawerBtn.querySelector('.git-drawer-caret');
+              if (caret) caret.textContent = isHidden ? '▴' : '▾';
+            };
+          }
+
+          const ciTrigger = hostEl.querySelector('#antigravity-git-ci-rollup-trigger');
+          const ciAccordion = hostEl.querySelector('#antigravity-git-ci-accordion');
+          if (ciTrigger && ciAccordion) {
+            ciTrigger.onclick = (e) => {
+              e.stopPropagation();
+              const isHidden = ciAccordion.style.display === 'none';
+              ciAccordion.style.display = isHidden ? 'block' : 'none';
+              const caret = ciTrigger.querySelector('.git-ci-caret');
+              if (caret) caret.textContent = isHidden ? '▴' : '▾';
+            };
+          }
+
+          const refreshBtn = hostEl.querySelector('#antigravity-git-refresh-btn');
+          if (refreshBtn) {
+            refreshBtn.onclick = async (e) => {
+              if (e) e.stopPropagation();
+              refreshBtn.style.transform = 'rotate(360deg)';
+              refreshBtn.style.transition = 'transform 0.5s ease';
+              setTimeout(() => { refreshBtn.style.transform = ''; }, 500);
+
+              try {
+                const res = await fetch('http://127.0.0.1:53912/vcs/overview');
+                if (res.ok) {
+                  const data = await res.json();
+                  if (window.__antigravityUpdateVcsData) {
+                    window.__antigravityUpdateVcsData(data);
+                    return;
+                  }
+                }
+              } catch {}
+
+              if (window.__antigravityMountAll) {
+                window.__antigravityMountAll();
+              }
+            };
+          }
+
+          const closeBtn = hostEl.querySelector('#antigravity-git-close-btn');
+          if (closeBtn) {
+            closeBtn.onclick = (e) => {
+              e.stopPropagation();
+              window.__toggleGitGraphPanel();
+            };
+          }
+        };
+
         window.__toggleGitGraphPanel = function(e, btnEl) {
           if (e) {
             e.stopPropagation();
@@ -1160,86 +1454,32 @@ class ModLoader {
             hostEl.id = 'antigravity-git-panel-host';
             if (auxBody) {
               auxBody.style.position = 'relative';
-              hostEl.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:none; flex-direction:column; overflow:hidden; z-index:50; background:#0f111a;';
               auxBody.appendChild(hostEl);
             } else {
-              hostEl.style.cssText = 'position:fixed; right:0; top:40px; bottom:24px; width:420px; display:none; flex-direction:column; overflow:hidden; z-index:99999; background:#0f111a; box-shadow:-12px 0 30px rgba(0,0,0,0.7); border-left:1px solid #1e2438;';
               document.body.appendChild(hostEl);
             }
           }
 
+          if (auxBody && hostEl.parentElement !== auxBody) {
+            auxBody.style.position = 'relative';
+            auxBody.appendChild(hostEl);
+          }
+
+          if (hostEl.parentElement === auxBody) {
+            hostEl.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:' + (isCurrentActive ? 'none' : 'flex') + '; flex-direction:column; overflow:hidden; z-index:50; background:#0f111a;';
+          } else {
+            hostEl.style.cssText = 'position:fixed; right:0; top:40px; bottom:24px; width:420px; display:' + (isCurrentActive ? 'none' : 'flex') + '; flex-direction:column; overflow:hidden; z-index:99999; background:#0f111a; box-shadow:-12px 0 30px rgba(0,0,0,0.7); border-left:1px solid #1e2438;';
+          }
+
           if (isCurrentActive) {
-            hostEl.style.display = 'none';
+            // panel closed
           } else {
             const template = document.getElementById('antigravity-git-panel-template');
             if (template) {
               hostEl.innerHTML = template.innerHTML;
             }
             hostEl.style.display = 'flex';
-
-            hostEl.querySelectorAll('.git-commit-row').forEach(row => {
-              row.addEventListener('click', () => {
-                hostEl.querySelectorAll('.git-commit-row.selected').forEach(r => r.classList.remove('selected'));
-                row.classList.add('selected');
-                const hash = row.getAttribute('data-hash');
-                const inspector = hostEl.querySelector('#antigravity-git-inspector');
-                if (inspector && hash) {
-                  const authorName = row.getAttribute('data-author') || (row.querySelector('.git-author-name')?.textContent) || 'Unknown';
-                  const authorEmail = row.getAttribute('data-email') || '';
-                  const avatarUrl = row.getAttribute('data-avatar') || (row.querySelector('.git-author-avatar')?.getAttribute('src')) || '';
-                  const commitUrl = row.getAttribute('data-commit-url') || '';
-                  const shortHash = row.getAttribute('data-short-hash') || hash.slice(0, 7);
-                  const subject = row.getAttribute('data-subject') || (row.querySelector('.git-commit-subject')?.textContent) || '';
-
-                  function esc(str) {
-                    return String(str || '')
-                      .replace(/&/g, '&amp;')
-                      .replace(/</g, '&lt;')
-                      .replace(/>/g, '&gt;')
-                      .replace(/"/g, '&quot;')
-                      .replace(/'/g, '&#039;');
-                  }
-
-                  const safeAuthor = esc(authorName);
-                  const safeEmail = authorEmail ? ('&lt;' + esc(authorEmail) + '&gt;') : '';
-                  const safeSubject = esc(subject);
-                  const safeShortHash = esc(shortHash);
-                  const linkHtml = commitUrl
-                    ? '<a href="' + esc(commitUrl) + '" target="_blank" rel="noopener" class="git-inspector-gh-link">View Commit ↗</a>'
-                    : '';
-
-                  inspector.innerHTML = '<div class="git-inspector-header">' +
-                    '<div class="git-inspector-author">' +
-                    '<img class="git-inspector-avatar" src="' + avatarUrl + '" alt="' + safeAuthor + '"/>' +
-                    '<div class="git-inspector-author-col">' +
-                    '<span class="git-inspector-author-name">' + safeAuthor + '</span>' +
-                    (safeEmail ? '<span class="git-inspector-author-email">' + safeEmail + '</span>' : '') +
-                    '</div></div>' +
-                    '<div class="git-inspector-hash-wrap">' +
-                    '<span class="git-inspector-hash" title="' + esc(hash) + '">' + safeShortHash + '</span>' +
-                    linkHtml +
-                    '</div></div>' +
-                    '<div class="git-inspector-subject">' + safeSubject + '</div>';
-                }
-              });
-            });
-
-            const refreshBtn = hostEl.querySelector('#antigravity-git-refresh-btn');
-            if (refreshBtn) {
-              refreshBtn.onclick = () => {
-                if (window.__antigravityMountAll) {
-                  window.__antigravityMountAll();
-                }
-              };
-            }
-
-            const closeBtn = hostEl.querySelector('#antigravity-git-close-btn');
-            if (closeBtn) {
-              closeBtn.onclick = (e) => {
-                e.stopPropagation();
-                window.__toggleGitPanel();
-              };
-            }
+            window.__bindGitPanelEvents(hostEl);
           }
         };
 
@@ -1298,8 +1538,33 @@ class ModLoader {
             const all = window.__antigravityAllMetrics || {};
             const m = (activeId && all[activeId]) ? all[activeId] : window.__antigravityLatestMetric;
 
+            const nativeGroups = window.__antigravityNativeQuotaSummary || (() => {
+              try {
+                const raw = localStorage.getItem('__antigravity_native_quota_summary');
+                return raw ? JSON.parse(raw).groups : null;
+              } catch (e) { return null; }
+            })();
+
+            if (nativeGroups && m && typeof window.__resolveNativeQuotaForModel === 'function') {
+              const triggerBtn = document.querySelector('button[data-testid="model-selector-trigger"]');
+              const activeModelName = (triggerBtn ? triggerBtn.innerText.trim() : '') || m.detectedModel || m.modelQuota?.modelName || 'Gemini 3.8 Flash';
+              const nativeQuota = window.__resolveNativeQuotaForModel(nativeGroups, activeModelName);
+              if (nativeQuota) {
+                if (m.modelQuota) {
+                  nativeQuota.chatWeeklyPct = m.modelQuota.chatWeeklyPct;
+                  nativeQuota.chatRollingPct = m.modelQuota.chatRollingPct;
+                  nativeQuota.chatUsedPct = m.modelQuota.chatUsedPct;
+                }
+                m.modelQuota = nativeQuota;
+              }
+            }
+
             if (m && window.__renderTachometerPopoverHtml) {
               portal.innerHTML = window.__renderTachometerPopoverHtml(m);
+            }
+
+            if (typeof window.__fetchNativeUserQuotaSummary === 'function') {
+              window.__fetchNativeUserQuotaSummary();
             }
 
             const rect = badge.getBoundingClientRect();
@@ -1333,25 +1598,101 @@ class ModLoader {
           document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
         };
 
-        // Store all per-conversation metrics and current primary snapshot
+        // Store all per-conversation metrics, active agents, and current primary snapshot
         window.__antigravityAllMetrics = ${JSON.stringify(context.allMetrics || {})};
         window.__antigravityLatestMetric = ${JSON.stringify(context.telemetry || {})};
+        window.__antigravityActiveAgents = Object.assign(
+          window.__antigravityActiveAgents || {},
+          ${JSON.stringify(context.activeAgents || {})}
+        );
+
+        window.__syncAgentBadges = function() {
+          document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {
+            const cId = window.__resolveCascadeId(badge);
+            const agentToApply = window.__resolveAgentForCascade(cId);
+            if (agentToApply && agentToApply.name) {
+              const currentAgentId = badge.getAttribute('data-agent-id');
+              const currentEffMode = badge.getAttribute('data-effective-mode');
+              const nextEffMode = agentToApply.id === 'auto'
+                ? ((agentToApply.effectiveMode || 'PLAN').toUpperCase() === 'BUILD' ? 'BUILD' : 'PLAN')
+                : null;
+              if (currentAgentId !== agentToApply.id || currentEffMode !== nextEffMode || badge.__lastCascadeId !== cId) {
+                badge.__lastCascadeId = cId;
+                window.__applyAgentToBadge(badge, agentToApply);
+              }
+            }
+          });
+        };
+
+        window.__fetchNativeUserQuotaSummary = async function() {
+          try {
+            const csrf = window.__APP_CONFIG__?.csrfToken;
+            if (!csrf) return null;
+            const res = await fetch('/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Connect-Protocol-Version': '1',
+                'x-codeium-csrf-token': csrf
+              },
+              body: '{}'
+            });
+            if (!res.ok) return null;
+            const data = await res.json();
+            const groups = data?.response?.groups || null;
+            if (groups && Array.isArray(groups)) {
+              window.__antigravityNativeQuotaSummary = groups;
+              try {
+                localStorage.setItem('__antigravity_native_quota_summary', JSON.stringify({
+                  updatedAt: Date.now(),
+                  groups
+                }));
+              } catch (e) {}
+              if (typeof window.__updateAntigravityTelemetry === 'function') {
+                window.__updateAntigravityTelemetry();
+              }
+              return groups;
+            }
+          } catch (e) {}
+          return null;
+        };
+
+        window.__scrapeNativeModelQuota = function() {
+          if (typeof window.__fetchNativeUserQuotaSummary === 'function') {
+            window.__fetchNativeUserQuotaSummary();
+          }
+        };
 
         window.__updateAntigravityTelemetry = function(fallbackMetric) {
           const all = window.__antigravityAllMetrics || {};
           const latest = fallbackMetric || window.__antigravityLatestMetric;
 
-          document.querySelectorAll('.antigravity-tachometer-badge').forEach(badge => {
-            const cascadeEl = badge.closest('[data-cascade-id]');
-            const cascadeId = cascadeEl ? cascadeEl.getAttribute('data-cascade-id') : null;
-            const urlPath = window.location.pathname || '';
-            const pathParts = urlPath.split('/c/');
-            const urlPathId = (pathParts.length > 1 && pathParts[1]) ? pathParts[1].split('/')[0].split('?')[0] : null;
-            const searchMatch = (window.location.search || '').match(/[?&](?:focused|conversationId)=([0-9a-fA-F-]+)/);
-            const activeId = cascadeId || urlPathId || (searchMatch ? searchMatch[1] : null);
+          const nativeGroups = window.__antigravityNativeQuotaSummary || (() => {
+            try {
+              const raw = localStorage.getItem('__antigravity_native_quota_summary');
+              return raw ? JSON.parse(raw).groups : null;
+            } catch (e) { return null; }
+          })();
 
-            const m = (activeId && all[activeId]) ? all[activeId] : latest;
+          document.querySelectorAll('.antigravity-tachometer-badge').forEach(badge => {
+            const activeId = window.__resolveCascadeId(badge);
+
+            const m = (activeId && all[activeId]) ? all[activeId] : (latest || window.__antigravityLatestMetric);
             if (!m) return;
+
+            if (nativeGroups && typeof window.__resolveNativeQuotaForModel === 'function') {
+              const triggerBtn = document.querySelector('button[data-testid="model-selector-trigger"]');
+              const activeModelName = (triggerBtn ? triggerBtn.innerText.trim() : '') || m.detectedModel || m.modelQuota?.modelName || 'Gemini 3.8 Flash';
+              const nativeQuota = window.__resolveNativeQuotaForModel(nativeGroups, activeModelName);
+              if (nativeQuota) {
+                if (m.modelQuota) {
+                  nativeQuota.chatWeeklyPct = m.modelQuota.chatWeeklyPct;
+                  nativeQuota.chatRollingPct = m.modelQuota.chatRollingPct;
+                  nativeQuota.chatUsedPct = m.modelQuota.chatUsedPct;
+                }
+                m.modelQuota = nativeQuota;
+              }
+            }
 
             const pctNum = parseFloat(m.pct) || 0;
             let statusColor = '#22c55e';
@@ -1372,17 +1713,66 @@ class ModLoader {
               if (poly) poly.setAttribute('fill', statusColor);
             }
 
-            // Update live popover content if currently open on screen
-            const portal = document.getElementById('antigravity-tachometer-popover-portal');
-            if (portal && portal.classList.contains('open') && window.__renderTachometerPopoverHtml) {
-              portal.innerHTML = window.__renderTachometerPopoverHtml(m);
+            if (window.__renderTachometerPopoverHtml) {
+              const renderedPopover = window.__renderTachometerPopoverHtml(m);
+              const tpl = badge.querySelector('.antigravity-popover-template') ||
+                badge.parentElement?.querySelector('.antigravity-popover-template');
+              if (tpl) {
+                tpl.innerHTML = renderedPopover;
+              }
+
+              // Update live popover content if currently open on screen
+              const portal = document.getElementById('antigravity-tachometer-popover-portal');
+              if (portal && portal.classList.contains('open')) {
+                portal.innerHTML = renderedPopover;
+              }
             }
           });
+
+          if (typeof window.__syncAgentBadges === 'function') {
+            window.__syncAgentBadges();
+          }
+        };
+
+        window.__handleAutoPromptContextUpdate = function(promptText, sourceEl) {
+          if (!promptText || !promptText.trim()) return;
+          const badge = (sourceEl && sourceEl.closest('[data-cascade-id]')?.querySelector('.antigravity-agent-badge')) ||
+            document.querySelector('.antigravity-agent-badge');
+          if (!badge) return;
+          const cId = window.__resolveCascadeId(badge);
+          const currentAgent = window.__resolveAgentForCascade(cId);
+          if (!currentAgent || currentAgent.id !== 'auto') return;
+
+          const nextMode = window.__classifyPromptMode(promptText);
+          currentAgent.effectiveMode = nextMode;
+          window.__antigravityActiveAgents = window.__antigravityActiveAgents || {};
+          if (cId) {
+            window.__antigravityActiveAgents[cId] = currentAgent;
+          }
+          try {
+            const map = JSON.parse(localStorage.getItem('__antigravity_selected_agents_map') || '{}');
+            if (cId) {
+              map[cId] = currentAgent;
+              localStorage.setItem('__antigravity_selected_agents_map', JSON.stringify(map));
+            }
+            localStorage.setItem('__antigravity_selected_agent', JSON.stringify(currentAgent));
+          } catch (e) {}
+          window.__applyAgentToBadge(badge, currentAgent);
         };
 
         if (!window.__antigravityGlobalEventsBound) {
           window.__antigravityGlobalEventsBound = true;
           document.addEventListener('click', (e) => {
+            const sendBtn = e.target.closest('button[data-testid="send-button"]');
+            if (sendBtn) {
+              const container = sendBtn.closest('[data-cascade-id]') || document;
+              const editor = container.querySelector('[contenteditable="true"], textarea');
+              const text = editor ? (editor.value || editor.textContent || '') : '';
+              if (text && window.__handleAutoPromptContextUpdate) {
+                window.__handleAutoPromptContextUpdate(text, sendBtn);
+              }
+            }
+
             const isAgentBadge = e.target.closest('.antigravity-agent-badge');
             const isAgentPortal = e.target.closest('#antigravity-agent-dropdown-portal');
             if (!isAgentBadge && !isAgentPortal) {
@@ -1415,6 +1805,15 @@ class ModLoader {
           }, true);
 
           document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+              const editor = e.target.closest('[contenteditable="true"], textarea');
+              if (editor) {
+                const text = editor.value || editor.textContent || '';
+                if (text && window.__handleAutoPromptContextUpdate) {
+                  window.__handleAutoPromptContextUpdate(text, editor);
+                }
+              }
+            }
             if (e.key === 'Escape') {
               const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
               if (aPortal) {
@@ -1437,7 +1836,7 @@ class ModLoader {
               }
               document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
             }
-          });
+          }, true);
         }
 
         // 3. Mount individual mods into target slots across all conversations
@@ -1457,7 +1856,7 @@ class ModLoader {
             document.body.appendChild(agentPortal);
           }
           const agentTemplate = document.querySelector('.antigravity-agent-dropdown-template');
-          if (agentTemplate) {
+          if (agentTemplate && !agentPortal.classList.contains('open')) {
             agentPortal.innerHTML = agentTemplate.innerHTML;
             agentPortal.setAttribute('data-v', '2');
           }
@@ -1514,22 +1913,25 @@ class ModLoader {
           // Restore saved mod visibility states
           window.__applyModsVisibility();
 
-          // Restore saved agent selection across mounted badges (scoped per chat)
-          try {
-            const mapRaw = localStorage.getItem('__antigravity_selected_agents_map');
-            const map = mapRaw ? JSON.parse(mapRaw) : {};
-            const fallbackRaw = localStorage.getItem('__antigravity_selected_agent');
-            const fallbackAgent = fallbackRaw ? JSON.parse(fallbackRaw) : null;
+          // Refresh active Git panel host if currently open
+          const activeGitHost = document.getElementById('antigravity-git-panel-host');
+          const gitTemplate = document.getElementById('antigravity-git-panel-template');
+          if (activeGitHost && activeGitHost.style.display !== 'none' && gitTemplate) {
+            activeGitHost.innerHTML = gitTemplate.innerHTML;
+            if (window.__bindGitPanelEvents) {
+              window.__bindGitPanelEvents(activeGitHost);
+            }
+          }
 
-            document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {
-              const cascade = badge.closest('[data-cascade-id]');
-              const cId = cascade ? cascade.getAttribute('data-cascade-id') : null;
-              const agentToApply = (cId && map[cId]) ? map[cId] : (fallbackAgent || null);
-              if (agentToApply && agentToApply.name) {
-                window.__applyAgentToBadge(badge, agentToApply);
-              }
-            });
-          } catch (e) {}
+          // Restore saved agent selection across mounted badges (scoped per chat)
+          document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {
+            const cId = window.__resolveCascadeId(badge);
+            const agentToApply = window.__resolveAgentForCascade(cId);
+            if (agentToApply && agentToApply.name) {
+              badge.__lastCascadeId = cId;
+              window.__applyAgentToBadge(badge, agentToApply);
+            }
+          });
 
           // Apply current telemetry
           window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})});
@@ -1577,6 +1979,9 @@ class ModLoader {
 
         window.__antigravityMountAll = mountAllMods;
         mountAllMods();
+        if (typeof window.__fetchNativeUserQuotaSummary === 'function') {
+          window.__fetchNativeUserQuotaSummary();
+        }
 
         // 4. Observe DOM mutations with smart slot check to avoid DOM thrashing
         if (window.__antigravityModObserver) {
@@ -1586,6 +1991,9 @@ class ModLoader {
 
         let mountDebounce = null;
         window.__antigravityModObserver = new MutationObserver(() => {
+          if (typeof window.__scrapeNativeModelQuota === 'function') {
+            window.__scrapeNativeModelQuota();
+          }
           const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
           let missingSlot = false;
           for (const btn of triggers) {
@@ -1601,6 +2009,8 @@ class ModLoader {
           if (missingSlot) {
             if (mountDebounce) clearTimeout(mountDebounce);
             mountDebounce = setTimeout(mountAllMods, 80);
+          } else if (typeof window.__syncAgentBadges === 'function') {
+            window.__syncAgentBadges();
           }
         });
 
@@ -1632,6 +2042,68 @@ class TelemetryService {
   }
 
   /**
+   * Formats token count into a compact human-readable string.
+   * @param {number} tokens
+   * @returns {string}
+   */
+  formatTokens(tokens) {
+    if (tokens >= 1_000_000) {
+      return (tokens / 1_000_000).toFixed(2) + 'M';
+    }
+    if (tokens >= 10_000) {
+      return (tokens / 1_000).toFixed(1) + 'k';
+    }
+    return tokens.toLocaleString();
+  }
+
+  /**
+   * Sanitizes a raw model name extracted from transcript logs, stripping
+   * system prompt instructions or trailing punctuation.
+   * @param {string} [rawName='']
+   * @returns {string}
+   */
+  sanitizeModelName(rawName = '') {
+    return String(rawName || '')
+      .replace(/\\n/g, ' ')
+      .split(/\r?\n/)[0]
+      .replace(/\.\s*No need to comment[\s\S]*$/i, '')
+      .replace(/\.\s*If reporting what model[\s\S]*$/i, '')
+      .replace(/[`'"]/g, '')
+      .replace(/\.\s*$/, '')
+      .trim();
+  }
+
+  /**
+   * Classifies a model name into its quota family and returns its quota limits.
+   * @param {string} modelName
+   * @returns {{ family: 'argon' | 'claude' | 'gemini', hasDualLimit: boolean, rollingCeiling: number, weeklyCeiling: number }}
+   */
+  classifyModelFamily(modelName = '') {
+    if (/argon/i.test(modelName)) {
+      return {
+        family: 'argon',
+        hasDualLimit: false,
+        rollingCeiling: 0,
+        weeklyCeiling: 500_000
+      };
+    }
+    if (/claude|gpt/i.test(modelName)) {
+      return {
+        family: 'claude',
+        hasDualLimit: true,
+        rollingCeiling: 150_000,
+        weeklyCeiling: 1_000_000
+      };
+    }
+    return {
+      family: 'gemini',
+      hasDualLimit: true,
+      rollingCeiling: 300_000,
+      weeklyCeiling: 1_500_000
+    };
+  }
+
+  /**
    * Default empty telemetry snapshot.
    */
   getEmptySnapshot() {
@@ -1641,6 +2113,22 @@ class TelemetryService {
       displayTokens: '0',
       sizeKb: 0,
       steps: 0,
+      compactions: [],
+      chatModels: [],
+      modelQuota: {
+        hasDualLimit: true,
+        modelName: 'Gemini 3.8 Flash',
+        rollingLabel: 'Cuota 5h Restante',
+        rollingRemaining: 100,
+        rollingUsed: 0,
+        rollingReset: '5h',
+        weeklyLabel: 'Cuota Semanal Restante',
+        weeklyRemaining: 100,
+        weeklyUsed: 0,
+        weeklyReset: '7d',
+        singleLabel: 'Cuota Disponible',
+        usagePct: 100
+      },
       breakdown: {
         user: { tokens: 0, pct: 0 },
         model: { tokens: 0, pct: 0 },
@@ -1679,27 +2167,108 @@ class TelemetryService {
       };
 
       let totalRawChars = 0;
+      const stepEntries = [];
+      const compactions = [];
+      let detectedModel = '';
+      const modelLedger = new Map();
 
       for (const line of lines) {
         if (!line.trim()) continue;
         raw.steps++;
-        totalRawChars += line.length;
 
         let obj;
         try {
           obj = JSON.parse(line);
         } catch {
+          totalRawChars += line.length;
           continue;
         }
 
-        const len = (str) => (typeof str === 'string' ? str.length : 0);
-
-        if (obj.thinking) {
-          raw.thinkingChars += len(obj.thinking);
+        if (obj.type === 'CHECKPOINT') {
+          const preCompactTokens = Math.round(totalRawChars / this.charsPerToken);
+          const postCompactTokens = Math.round(line.length / this.charsPerToken);
+          compactions.push({
+            step: obj.step_index ?? raw.steps,
+            fromTokens: preCompactTokens,
+            toTokens: postCompactTokens,
+            displayFrom: this.formatTokens(preCompactTokens),
+            displayTo: this.formatTokens(postCompactTokens),
+            timestamp: obj.created_at || null
+          });
+          totalRawChars = line.length;
+          raw.userChars = 0;
+          raw.modelChars = 0;
+          raw.thinkingChars = 0;
+          raw.toolsChars = 0;
+          raw.mcpChars = 0;
+          raw.otherChars = 0;
+        } else {
+          totalRawChars += line.length;
         }
 
+        if (
+          (obj.type === 'USER_INPUT' || obj.source === 'USER_EXPLICIT') &&
+          typeof obj.content === 'string' &&
+          obj.content.includes('<USER_SETTINGS_CHANGE>')
+        ) {
+          const sectionMatch = obj.content.match(/<USER_SETTINGS_CHANGE>([\s\S]*?)<\/USER_SETTINGS_CHANGE>/i);
+          const settingsBlock = sectionMatch ? sectionMatch[1] : obj.content;
+          const match = settingsBlock.match(/Model Selection[`'"]?\s+from\s+.*?\s+to\s+([^\n<]+)/i);
+          if (match && match[1]) {
+            detectedModel = this.sanitizeModelName(match[1]);
+          }
+        }
+
+        if (obj.model) {
+          detectedModel = this.sanitizeModelName(obj.model);
+        }
+
+        const activeModel = this.sanitizeModelName(detectedModel) || 'Gemini 3.8 Flash';
+        const len = (str) => (typeof str === 'string' ? str.length : 0);
         const contentLen = len(obj.content);
+        const thinkingLen = len(obj.thinking);
         const toolCallsLen = obj.tool_calls ? JSON.stringify(obj.tool_calls).length : 0;
+
+        let stepBillingTokens = 0;
+        if (obj.type === 'PLANNER_RESPONSE' && (obj.input_tokens !== undefined || obj.output_tokens !== undefined)) {
+          if (obj.cache_read_tokens !== undefined) {
+            stepBillingTokens = Math.max(
+              obj.output_tokens || 0,
+              Math.round((contentLen + thinkingLen + toolCallsLen) / this.charsPerToken)
+            );
+          } else {
+            stepBillingTokens = (obj.input_tokens || 0) + (obj.output_tokens || 0);
+          }
+        } else if (obj.type === 'USER_INPUT' || obj.type === 'PLANNER_RESPONSE') {
+          stepBillingTokens = Math.round((contentLen + thinkingLen) / this.charsPerToken);
+        }
+
+        const stepContextTokens = Math.round(line.length / this.charsPerToken);
+
+        if (!modelLedger.has(activeModel)) {
+          modelLedger.set(activeModel, {
+            tokens: 0,
+            contextTokens: 0
+          });
+        }
+        const ledgerEntry = modelLedger.get(activeModel);
+        ledgerEntry.tokens += stepBillingTokens;
+        ledgerEntry.contextTokens += stepContextTokens;
+
+        if (obj.created_at) {
+          const t = new Date(obj.created_at).getTime();
+          if (!isNaN(t)) {
+            stepEntries.push({
+              timestamp: t,
+              tokens: stepBillingTokens,
+              model: activeModel
+            });
+          }
+        }
+
+        if (obj.thinking) {
+          raw.thinkingChars += thinkingLen;
+        }
 
         if (obj.tool_calls && Array.isArray(obj.tool_calls)) {
           const isMcp = obj.tool_calls.some(tc =>
@@ -1735,12 +2304,31 @@ class TelemetryService {
       const mcpTokens = toTokens(raw.mcpChars);
       const otherTokens = toTokens(raw.otherChars);
 
-      let displayTokens = estTokens.toLocaleString();
-      if (estTokens >= 1_000_000) {
-        displayTokens = (estTokens / 1_000_000).toFixed(2) + 'M';
-      } else if (estTokens >= 10_000) {
-        displayTokens = (estTokens / 1_000).toFixed(1) + 'k';
+      const displayTokens = this.formatTokens(estTokens);
+
+      const chatModels = [];
+      for (const [modelName, data] of modelLedger.entries()) {
+        const { family, hasDualLimit, rollingCeiling, weeklyCeiling } = this.classifyModelFamily(modelName);
+        const chatRollingPct = hasDualLimit && rollingCeiling > 0
+          ? Math.min(100, Math.round((data.tokens / rollingCeiling) * 100))
+          : 0;
+        const chatWeeklyPct = weeklyCeiling > 0
+          ? Math.min(100, Math.round((data.tokens / weeklyCeiling) * 100))
+          : 0;
+
+        chatModels.push({
+          modelName,
+          family,
+          hasDualLimit,
+          tokens: data.tokens,
+          contextTokens: data.contextTokens,
+          displayTokens: this.formatTokens(data.tokens),
+          chatRollingPct,
+          chatWeeklyPct
+        });
       }
+
+      const modelQuota = this.resolveModelQuota(detectedModel, stepEntries, chatModels);
 
       return {
         estTokens,
@@ -1748,6 +2336,11 @@ class TelemetryService {
         displayTokens,
         sizeKb: Math.round(totalBytes / 1024),
         steps: raw.steps,
+        compactions,
+        detectedModel: detectedModel || 'Gemini 3.8 Flash',
+        stepEntries,
+        chatModels,
+        modelQuota,
         breakdown: {
           user: { tokens: userTokens, pct: catPct(userTokens) },
           model: { tokens: modelTokens, pct: catPct(modelTokens) },
@@ -1763,13 +2356,150 @@ class TelemetryService {
   }
 
   /**
-   * Retrieves telemetry metrics for all active conversations in the brain.
+   * Resolves model quota metrics based on the model tier and conversation activity.
+   * @param {string} [detectedModel]
+   * @param {Array<Object>} [stepEntries]
+   * @param {Array<Object>} [chatModels]
+   * @returns {Object}
+   */
+  resolveModelQuota(detectedModel = '', stepEntries = [], chatModels = [], nativeQuotaGroups = null) {
+    const activeModel = this.sanitizeModelName(detectedModel) || 'Gemini 3.8 Flash';
+    const now = Date.now();
+
+    if (Array.isArray(nativeQuotaGroups) && nativeQuotaGroups.length > 0) {
+      const nativeQuota = resolveNativeQuotaForModel(nativeQuotaGroups, activeModel, now);
+      if (nativeQuota) {
+        const activeChatModel = chatModels.find(m => m.modelName === activeModel)
+          || chatModels.find(m => m.family === nativeQuota.family);
+        nativeQuota.chatWeeklyPct = activeChatModel ? activeChatModel.chatWeeklyPct : 0;
+        nativeQuota.chatRollingPct = activeChatModel ? activeChatModel.chatRollingPct : 0;
+        nativeQuota.chatUsedPct = activeChatModel ? activeChatModel.chatWeeklyPct : 0;
+        return nativeQuota;
+      }
+    }
+
+    const { family, hasDualLimit, rollingCeiling, weeklyCeiling } = this.classifyModelFamily(activeModel);
+    const fiveHoursMs = 5 * 60 * 60 * 1000;
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+
+    let rollingTokens = 0;
+    let weeklyTokens = 0;
+    let earliestRollingTimestamp = null;
+    let earliestWeeklyTimestamp = null;
+
+    for (const step of stepEntries) {
+      if (!step.timestamp) continue;
+      if (step.model) {
+        const stepFamily = this.classifyModelFamily(step.model).family;
+        if (stepFamily !== family) continue;
+      }
+      const age = now - step.timestamp;
+      if (age >= 0 && age <= sevenDaysMs) {
+        weeklyTokens += step.tokens;
+        if (!earliestWeeklyTimestamp || step.timestamp < earliestWeeklyTimestamp) {
+          earliestWeeklyTimestamp = step.timestamp;
+        }
+        if (age <= fiveHoursMs) {
+          rollingTokens += step.tokens;
+          if (!earliestRollingTimestamp || step.timestamp < earliestRollingTimestamp) {
+            earliestRollingTimestamp = step.timestamp;
+          }
+        }
+      }
+    }
+
+    const activeChatModel = chatModels.find(m => m.modelName === activeModel)
+      || chatModels.find(m => m.family === family);
+    if (weeklyTokens === 0 && activeChatModel && activeChatModel.tokens > 0) {
+      weeklyTokens = activeChatModel.tokens;
+      rollingTokens = activeChatModel.tokens;
+    }
+
+    const rollingUsedPct = hasDualLimit && rollingCeiling > 0
+      ? Math.min(100, Math.round((rollingTokens / rollingCeiling) * 100))
+      : 0;
+    const weeklyUsedPct = weeklyCeiling > 0
+      ? Math.min(100, Math.round((weeklyTokens / weeklyCeiling) * 100))
+      : 0;
+
+    const rollingRemainingPct = Math.max(0, 100 - rollingUsedPct);
+    const weeklyRemainingPct = Math.max(0, 100 - weeklyUsedPct);
+
+    let resetStr = '5h';
+    if (earliestRollingTimestamp) {
+      const remainingMs = Math.max(0, (earliestRollingTimestamp + fiveHoursMs) - now);
+      const hours = Math.floor(remainingMs / (60 * 60 * 1000));
+      const mins = Math.max(hours === 0 ? 1 : 0, Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000)));
+      resetStr = `${hours}h ${mins}m`;
+    }
+
+    let weeklyResetStr = '7d';
+    if (earliestWeeklyTimestamp) {
+      const remainingMs = Math.max(0, (earliestWeeklyTimestamp + sevenDaysMs) - now);
+      const days = Math.floor(remainingMs / (24 * 60 * 60 * 1000));
+      const hours = Math.floor((remainingMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+      if (days === 0 && hours === 0) {
+        const mins = Math.max(1, Math.ceil(remainingMs / (60 * 1000)));
+        weeklyResetStr = `${mins}m`;
+      } else {
+        weeklyResetStr = `${days}d ${hours}h`;
+      }
+    }
+
+    const currentModelChatWeeklyPct = activeChatModel
+      ? activeChatModel.chatWeeklyPct
+      : weeklyUsedPct;
+    const currentModelChatRollingPct = activeChatModel
+      ? activeChatModel.chatRollingPct
+      : rollingUsedPct;
+
+    if (family === 'argon') {
+      return {
+        hasDualLimit: false,
+        family,
+        modelName: activeModel,
+        singleLabel: 'Cuota Semanal Restante',
+        remainingPct: weeklyRemainingPct,
+        usedPct: weeklyUsedPct,
+        chatUsedPct: currentModelChatWeeklyPct,
+        resetStr: weeklyResetStr,
+        weeklyRemaining: weeklyRemainingPct,
+        weeklyUsed: weeklyUsedPct,
+        weeklyReset: weeklyResetStr,
+        usagePct: weeklyRemainingPct
+      };
+    }
+
+    return {
+      hasDualLimit: true,
+      family,
+      modelName: activeModel,
+      rollingLabel: 'Cuota 5h Restante',
+      rollingRemaining: rollingRemainingPct,
+      rollingUsed: rollingUsedPct,
+      rollingReset: resetStr,
+      chatRollingPct: currentModelChatRollingPct,
+      weeklyLabel: 'Cuota Semanal Restante',
+      weeklyRemaining: weeklyRemainingPct,
+      weeklyUsed: weeklyUsedPct,
+      weeklyReset: weeklyResetStr,
+      chatWeeklyPct: currentModelChatWeeklyPct,
+      usagePct: rollingRemainingPct
+    };
+  }
+
+  /**
+   * Retrieves telemetry metrics for all active conversations in the brain,
+   * aggregating global account quota usage across all chats.
    * @returns {Record<string, Object>}
    */
   getAllMetrics() {
     const metrics = {};
     try {
       if (!fs.existsSync(this.brainDir)) return metrics;
+
+      const now = Date.now();
+      const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
 
       const dirs = fs.readdirSync(this.brainDir)
         .filter(d => /^[0-9a-fA-F-]{36}$/.test(d))
@@ -1780,21 +2510,39 @@ class TelemetryService {
           let mtime = 0;
           let targetPath = '';
           try {
-            if (fs.existsSync(fullPath)) {
-              mtime = fs.statSync(fullPath).mtimeMs;
-              targetPath = fullPath;
-            } else if (fs.existsSync(compactPath)) {
+            if (fs.existsSync(compactPath)) {
               mtime = fs.statSync(compactPath).mtimeMs;
               targetPath = compactPath;
+            } else if (fs.existsSync(fullPath)) {
+              mtime = fs.statSync(fullPath).mtimeMs;
+              targetPath = fullPath;
             }
           } catch {}
           return { id: d, mtime, targetPath };
         })
         .filter(item => item.targetPath)
-        .sort((a, b) => b.mtime - a.mtime); // Sort newest/active conversations first!
+        .sort((a, b) => b.mtime - a.mtime);
 
-      for (const item of dirs) {
-        metrics[item.id] = this.parseTranscriptFile(item.targetPath);
+      const activeDirs = dirs.filter((item, idx) => idx < 25 || (now - item.mtime) <= sevenDaysMs);
+
+      const globalStepEntries = [];
+      for (const item of activeDirs) {
+        const snapshot = this.parseTranscriptFile(item.targetPath);
+        metrics[item.id] = snapshot;
+        if (Array.isArray(snapshot.stepEntries)) {
+          globalStepEntries.push(...snapshot.stepEntries);
+        }
+      }
+
+      // Re-resolve account-wide quota using global steps across active chats in brain
+      for (const id of Object.keys(metrics)) {
+        const snap = metrics[id];
+        snap.modelQuota = this.resolveModelQuota(
+          snap.detectedModel,
+          globalStepEntries,
+          snap.chatModels
+        );
+        delete snap.stepEntries;
       }
     } catch {
       // Gracefully prevent background hook crashes
@@ -1803,6 +2551,856 @@ class TelemetryService {
   }
 }
 
+/**
+ * Formats an ISO reset timestamp or remaining milliseconds into a human-readable countdown string.
+ * @param {string|number|Date} [resetTimeIso]
+ * @param {number} [now=Date.now()]
+ * @returns {string}
+ */
+function formatResetTime(resetTimeIso, now = Date.now()) {
+  if (!resetTimeIso) return '7d';
+  const resetMs = typeof resetTimeIso === 'number'
+    ? resetTimeIso
+    : new Date(resetTimeIso).getTime();
+  if (isNaN(resetMs)) return '7d';
+
+  const diffMs = resetMs - now;
+  if (diffMs <= 0) return '<1m';
+
+  const totalMins = Math.floor(diffMs / (60 * 1000));
+  const days = Math.floor(totalMins / 1440);
+  const hours = Math.floor((totalMins % 1440) / 60);
+  const mins = totalMins % 60;
+
+  if (days > 0) {
+    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  }
+  if (hours > 0) {
+    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+  }
+  if (mins > 0) {
+    return `${mins}m`;
+  }
+  return '<1m';
+}
+
+/**
+ * Resolves accurate native quota metrics for a target model from RetrieveUserQuotaSummary groups.
+ * @param {Array<Object>} groups
+ * @param {string} [activeModelName='']
+ * @param {number} [now=Date.now()]
+ * @returns {Object|null}
+ */
+function resolveNativeQuotaForModel(groups, activeModelName = '', now = Date.now()) {
+  if (!Array.isArray(groups) || groups.length === 0) return null;
+
+  const getResetTime = (time, fallback) => {
+    if (!time) return fallback;
+    if (typeof formatResetTime === 'function') return formatResetTime(time, now);
+    if (typeof window !== 'undefined' && typeof window.__formatResetTime === 'function') {
+      return window.__formatResetTime(time, now);
+    }
+    return fallback;
+  };
+
+  const modelLower = (activeModelName || '').toLowerCase();
+  const isArgon = /argon/i.test(modelLower);
+  const isClaudeOrGpt = /claude|gpt|opus|sonnet/i.test(modelLower);
+
+  let targetGroup = null;
+  if (isArgon) {
+    targetGroup = groups.find(g => /argon/i.test(g.displayName || '') || /argon/i.test(g.description || ''));
+  } else if (isClaudeOrGpt) {
+    targetGroup = groups.find(g => /claude|gpt/i.test(g.displayName || '') || /claude|gpt/i.test(g.description || ''));
+  } else {
+    targetGroup = groups.find(g => /gemini/i.test(g.displayName || '') && !/argon/i.test(g.displayName || ''));
+  }
+
+  if (!targetGroup && groups.length > 0) {
+    targetGroup = groups[0];
+  }
+  if (!targetGroup || !Array.isArray(targetGroup.buckets)) return null;
+
+  const buckets = targetGroup.buckets;
+  const weeklyBucket = buckets.find(b => b.window === 'weekly' || /weekly/i.test(b.displayName || '') || /weekly/i.test(b.bucketId || ''));
+  const rollingBucket = buckets.find(b => b.window === '5h' || /5h|five hour/i.test(b.displayName || '') || /5h/i.test(b.bucketId || ''));
+
+  if (isArgon) {
+    const weeklyFraction = (weeklyBucket && typeof weeklyBucket.remainingFraction === 'number')
+      ? weeklyBucket.remainingFraction
+      : 1;
+    const weeklyRemaining = Math.max(0, Math.min(100, Math.round(weeklyFraction * 100)));
+    const weeklyUsed = Math.max(0, 100 - weeklyRemaining);
+    const weeklyReset = getResetTime(weeklyBucket?.resetTime, '7d');
+
+    return {
+      hasDualLimit: false,
+      family: 'argon',
+      modelName: activeModelName || 'Gemini 4 Argon',
+      singleLabel: 'Cuota Semanal Restante',
+      remainingPct: weeklyRemaining,
+      usedPct: weeklyUsed,
+      weeklyRemaining,
+      weeklyUsed,
+      weeklyReset,
+      resetStr: weeklyReset,
+      usagePct: weeklyRemaining,
+      isNative: true
+    };
+  }
+
+  const weeklyFraction = (weeklyBucket && typeof weeklyBucket.remainingFraction === 'number')
+    ? weeklyBucket.remainingFraction
+    : 1;
+  const rollingFraction = (rollingBucket && typeof rollingBucket.remainingFraction === 'number')
+    ? rollingBucket.remainingFraction
+    : 1;
+
+  const weeklyRemaining = Math.max(0, Math.min(100, Math.round(weeklyFraction * 100)));
+  const weeklyUsed = Math.max(0, 100 - weeklyRemaining);
+  const weeklyReset = getResetTime(weeklyBucket?.resetTime, '7d');
+
+  const rollingRemaining = Math.max(0, Math.min(100, Math.round(rollingFraction * 100)));
+  const rollingUsed = Math.max(0, 100 - rollingRemaining);
+  const rollingReset = getResetTime(rollingBucket?.resetTime, '5h');
+
+  return {
+    hasDualLimit: true,
+    family: isClaudeOrGpt ? 'claude' : 'gemini',
+    modelName: activeModelName || (isClaudeOrGpt ? 'Claude' : 'Gemini'),
+    rollingLabel: 'Cuota 5h Restante',
+    rollingRemaining,
+    rollingUsed,
+    rollingReset,
+    weeklyLabel: 'Cuota Semanal Restante',
+    weeklyRemaining,
+    weeklyUsed,
+    weeklyReset,
+    usagePct: rollingRemaining,
+    isNative: true
+  };
+}
+
+
+
+
+
+
+/**
+ * Service providing high-performance Git operations, DAG topology graph calculation,
+ * collaborator avatar resolution, and GitHub metadata for Antigravity UI mods.
+ */
+class GitService {
+  /**
+   * Computes Gravatar identicon URL based on author email.
+   * @param {string} [email='']
+   * @returns {string}
+   */
+  computeAvatarUrl(email = '') {
+    const clean = String(email).trim().toLowerCase();
+    const hash = crypto.createHash('md5').update(clean).digest('hex');
+    return `https://www.gravatar.com/avatar/${hash}?d=identicon&s=64`;
+  }
+
+  /**
+   * Parses a Git remote URL to extract GitHub owner and repository metadata.
+   * @param {string} remoteUrl
+   * @returns {Object}
+   */
+  parseGitHubRemote(remoteUrl) {
+    if (!remoteUrl || typeof remoteUrl !== 'string') {
+      return { isGitHub: false };
+    }
+
+    const trimmed = remoteUrl.trim();
+    // Match HTTPS: https://github.com/:owner/:repo(.git)?
+    // Match SSH: git@github.com::owner/:repo(.git)?
+    const httpsMatch = trimmed.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/i);
+    const sshMatch = trimmed.match(/^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i);
+
+    const match = httpsMatch || sshMatch;
+    if (!match) {
+      return { isGitHub: false };
+    }
+
+    const owner = match[1];
+    const repo = match[2];
+    const webUrl = `https://github.com/${owner}/${repo}`;
+
+    return {
+      isGitHub: true,
+      owner,
+      repo,
+      fullName: `${owner}/${repo}`,
+      webUrl,
+      getCommitUrl: (hash) => `${webUrl}/commit/${hash}`,
+      getBranchUrl: (branch) => `${webUrl}/tree/${branch}`,
+      getPrUrl: (prNumber) => `${webUrl}/pull/${prNumber}`
+    };
+  }
+
+  /**
+   * Reads GitHub metadata from the local repository's `origin` remote.
+   * @param {Object} [options]
+   * @param {string} [options.repoPath]
+   * @returns {Object}
+   */
+  getGitHubMetadata(options = {}) {
+    const repoPath = options.repoPath || process.cwd();
+    try {
+      const remoteUrl = execSync('git remote get-url origin', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      }).trim();
+      return this.parseGitHubRemote(remoteUrl);
+    } catch {
+      return { isGitHub: false };
+    }
+  }
+
+  /**
+   * Computes topological lanes and Bezier branch route connections for commits.
+   * Uses an iterative lane allocation algorithm.
+   * @param {Array<Object>} commits
+   * @returns {Array<Object>}
+   */
+  computeTopology(commits) {
+    if (!Array.isArray(commits) || commits.length === 0) {
+      return [];
+    }
+
+    /** @type {Array<string | null>} active lanes containing expected commit hashes */
+    const activeLanes = [];
+    const enriched = [];
+
+    for (let i = 0; i < commits.length; i++) {
+      const commit = commits[i];
+      const { hash, parents = [] } = commit;
+
+      // 1. Find or allocate lane for this commit
+      let laneIndex = activeLanes.indexOf(hash);
+      if (laneIndex === -1) {
+        // Allocate in the first empty slot or append
+        laneIndex = activeLanes.indexOf(null);
+        if (laneIndex === -1) {
+          laneIndex = activeLanes.length;
+          activeLanes.push(hash);
+        } else {
+          activeLanes[laneIndex] = hash;
+        }
+      }
+
+      const routes = [];
+
+      if (parents.length === 0) {
+        // Root commit: free up lane
+        activeLanes[laneIndex] = null;
+      } else {
+        // First parent continues on this lane
+        const primaryParent = parents[0];
+        activeLanes[laneIndex] = primaryParent;
+        routes.push({ fromLane: laneIndex, toLane: laneIndex, type: 'straight' });
+
+        // Additional parents (merges)
+        for (let p = 1; p < parents.length; p++) {
+          const mergeParent = parents[p];
+          let parentLane = activeLanes.indexOf(mergeParent);
+          if (parentLane === -1) {
+            parentLane = activeLanes.indexOf(null);
+            if (parentLane === -1) {
+              parentLane = activeLanes.length;
+              activeLanes.push(mergeParent);
+            } else {
+              activeLanes[parentLane] = mergeParent;
+            }
+          }
+          routes.push({ fromLane: laneIndex, toLane: parentLane, type: 'merge' });
+        }
+      }
+
+      // Clean trailing nulls
+      while (activeLanes.length > 0 && activeLanes[activeLanes.length - 1] === null) {
+        activeLanes.pop();
+      }
+
+      enriched.push({
+        ...commit,
+        lane: laneIndex,
+        routes
+      });
+    }
+
+    return enriched;
+  }
+
+  /**
+   * Retrieves Git commit history and topological DAG graph.
+   * @param {Object} [options]
+   * @param {string} [options.repoPath]
+   * @param {number} [options.limit=50]
+   * @returns {Array<Object>}
+   */
+  getGitLog(options = {}) {
+    const repoPath = options.repoPath || process.cwd();
+    const limit = options.limit ?? 50;
+
+    try {
+      let aheadHashes = new Set();
+      let behindHashes = new Set();
+      try {
+        const aheadOut = execSync('git rev-list @{u}..HEAD', {
+          cwd: repoPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore']
+        }).trim();
+        if (aheadOut) {
+          aheadOut.split(/\s+/).filter(Boolean).forEach(h => aheadHashes.add(h));
+        }
+      } catch {}
+
+      try {
+        const behindOut = execSync('git rev-list HEAD..@{u}', {
+          cwd: repoPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore']
+        }).trim();
+        if (behindOut) {
+          behindOut.split(/\s+/).filter(Boolean).forEach(h => behindHashes.add(h));
+        }
+      } catch {}
+
+      const format = 'COMMIT:%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%D';
+      const rawLog = execSync(`git log --format="${format}" --name-status -n ${limit}`, {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+
+      const rawCommits = [];
+      let currentCommit = null;
+
+      const lines = rawLog.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        if (trimmed.startsWith('COMMIT:')) {
+          const parts = trimmed.slice(7).split('\0');
+          const hash = parts[0] || '';
+          const parents = parts[1] ? parts[1].split(' ').filter(Boolean) : [];
+          const authorName = parts[2] || 'Unknown';
+          const authorEmail = parts[3] || '';
+          const timestamp = parseInt(parts[4], 10) || Math.floor(Date.now() / 1000);
+          const subject = parts[5] || '';
+          const refNamesStr = parts[6] || '';
+          const refs = refNamesStr
+            ? refNamesStr.split(',').map(r => r.trim()).filter(Boolean)
+            : [];
+
+          const syncStatus = aheadHashes.has(hash) ? 'ahead' : behindHashes.has(hash) ? 'behind' : 'synced';
+          currentCommit = {
+            hash,
+            shortHash: hash.slice(0, 7),
+            parents,
+            author: {
+              name: authorName,
+              email: authorEmail,
+              avatarUrl: this.computeAvatarUrl(authorEmail)
+            },
+            date: timestamp,
+            relativeDate: this._formatRelativeTime(timestamp),
+            subject,
+            refs,
+            syncStatus,
+            isUnpushed: syncStatus === 'ahead',
+            isUnpulled: syncStatus === 'behind',
+            files: []
+          };
+          rawCommits.push(currentCommit);
+        } else if (currentCommit) {
+          const parts = trimmed.split('\t');
+          if (parts.length >= 2) {
+            const status = parts[0].trim();
+            const filePath = parts[1].trim();
+            const fileName = path.basename(filePath);
+            const normDir = path.dirname(filePath).replace(/\//g, '\\');
+            const ext = path.extname(fileName).replace('.', '').toUpperCase() || 'FILE';
+            currentCommit.files.push({
+              status,
+              path: filePath,
+              fileName,
+              dir: normDir === '.' ? '' : normDir,
+              ext
+            });
+          }
+        }
+      }
+
+      return this.computeTopology(rawCommits);
+    } catch (err) {
+      return [];
+    }
+  }
+
+  /**
+   * Retrieves working tree and branch status.
+   * @param {Object} [options]
+   * @param {string} [options.repoPath]
+   * @returns {Object}
+   */
+  getGitStatus(options = {}) {
+    const repoPath = options.repoPath || process.cwd();
+
+    try {
+      const branch = execSync('git rev-parse --abbrev-ref HEAD', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      }).trim();
+
+      const porcelain = execSync('git status --porcelain', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+
+      const changedFiles = porcelain
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+        .map(line => {
+          const code = line.slice(0, 2).trim();
+          const file = line.slice(2).trim();
+          return { code, file };
+        });
+
+      let ahead = 0;
+      let behind = 0;
+      let upstream = null;
+      try {
+        upstream = execSync('git rev-parse --abbrev-ref @{u}', {
+          cwd: repoPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore']
+        }).trim();
+      } catch {}
+
+      try {
+        const revCounts = execSync('git rev-list --left-right --count HEAD...@{u}', {
+          cwd: repoPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore']
+        }).trim();
+        const parts = revCounts.split(/\s+/);
+        if (parts.length >= 2) {
+          ahead = parseInt(parts[0], 10) || 0;
+          behind = parseInt(parts[1], 10) || 0;
+        }
+      } catch {
+        // No upstream tracked
+      }
+
+      return {
+        isRepo: true,
+        branch,
+        upstream: upstream || null,
+        isClean: changedFiles.length === 0,
+        changedFiles,
+        ahead,
+        behind
+      };
+    } catch {
+      return {
+        isRepo: false,
+        branch: '',
+        upstream: null,
+        isClean: true,
+        changedFiles: [],
+        ahead: 0,
+        behind: 0
+      };
+    }
+  }
+
+  /**
+   * Watches a git repository for head and ref changes and invokes callback.
+   * @param {Object} options
+   * @param {string} options.repoPath
+   * @param {Function} options.onChange
+   * @returns {Function} cleanup unsubscribe function
+   */
+  watchRepository(options = {}) {
+    const repoPath = options.repoPath || process.cwd();
+    const onChange = options.onChange || (() => {});
+    const gitDir = path.join(repoPath, '.git');
+
+    if (!fs.existsSync(gitDir)) {
+      return () => {};
+    }
+
+    const watchers = [];
+    let debounceTimer = null;
+    const notify = () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        onChange();
+      }, 250);
+    };
+
+    try {
+      const headPath = path.join(gitDir, 'HEAD');
+      if (fs.existsSync(headPath)) {
+        watchers.push(fs.watch(headPath, notify));
+      }
+
+      const refsDir = path.join(gitDir, 'refs');
+      if (fs.existsSync(refsDir)) {
+        watchers.push(fs.watch(refsDir, { recursive: true }, notify));
+      }
+    } catch {
+      // Silently ignore watching errors on non-supported environments
+    }
+
+    return () => {
+      clearTimeout(debounceTimer);
+      for (const w of watchers) {
+        try {
+          w.close();
+        } catch {}
+      }
+    };
+  }
+
+  /**
+   * Retrieves all local and remote branches categorized.
+   * @param {Object} [options]
+   * @param {string} [options.repoPath]
+   * @returns {{ local: Array<{ name: string, isCurrent: boolean, hash: string }>, remote: Array<{ name: string, shortName: string, hash: string }> }}
+   */
+  getBranches(options = {}) {
+    const repoPath = options.repoPath || process.cwd();
+    try {
+      const raw = execSync('git branch -a --format="%(refname:short)%00%(objectname:short)%00%(HEAD)"', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+
+      const local = [];
+      const remote = [];
+
+      for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const parts = trimmed.split('\0');
+        const ref = parts[0] || '';
+        const hash = parts[1] || '';
+        const headMarker = parts[2] || '';
+        const isCurrent = headMarker === '*';
+
+        if (ref.startsWith('origin/') || ref.startsWith('remotes/origin/')) {
+          const cleanName = ref.replace(/^remotes\//, '');
+          if (!cleanName.includes('HEAD')) {
+            remote.push({
+              name: cleanName,
+              shortName: cleanName.replace(/^origin\//, ''),
+              hash: hash ? hash.slice(0, 7) : ''
+            });
+          }
+        } else {
+          local.push({
+            name: ref,
+            isCurrent,
+            hash: hash ? hash.slice(0, 7) : ''
+          });
+        }
+      }
+
+      return { local, remote };
+    } catch {
+      return { local: [], remote: [] };
+    }
+  }
+
+  /**
+   * Fetches latest changes from all configured remotes.
+   * @param {Object} [options]
+   * @param {string} [options.repoPath]
+   * @returns {boolean}
+   */
+  fetch(options = {}) {
+    const repoPath = options.repoPath || process.cwd();
+    try {
+      execSync('git fetch --all --prune', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'ignore', 'ignore']
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Helper formatting relative timestamp.
+   * @private
+   */
+  _formatRelativeTime(unixTimestamp) {
+    const elapsedSeconds = Math.max(0, Math.floor(Date.now() / 1000 - unixTimestamp));
+    if (elapsedSeconds < 60) return `${elapsedSeconds}s ago`;
+    const minutes = Math.floor(elapsedSeconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  }
+}
+
+
+
+/**
+ * Service for interacting with GitHub CLI (`gh`) in native JSON mode,
+ * extracting Pull Requests, commit check status rollups, and CI/CD workflow runs.
+ */
+class GitHubCliService {
+  /**
+   * @param {Object} [options]
+   * @param {Function} [options.execFn] Custom executor function for testing / mocking
+   * @param {string} [options.repoPath] Working repository directory
+   */
+  constructor(options = {}) {
+    this.execFn = options.execFn || ((cmd, opts) => execSync(cmd, {
+      cwd: opts?.cwd || this.repoPath,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }));
+    this.repoPath = options.repoPath || process.cwd();
+  }
+
+  /**
+   * Checks whether GitHub CLI is installed and user is authenticated.
+   * @returns {{ isInstalled: boolean, isAuthenticated: boolean, account: string, scopes: string[] }}
+   */
+  checkAuth() {
+    try {
+      const output = this.execFn('gh auth status', { cwd: this.repoPath });
+      const str = String(output || '');
+
+      const isAuthed = str.includes('Logged in to github.com') || str.includes('✓');
+      let account = '';
+      const accountMatch = str.match(/account\s+([A-Za-z0-9_-]+)/i);
+      if (accountMatch) {
+        account = accountMatch[1];
+      }
+
+      const scopes = [];
+      const scopesMatch = str.match(/Token scopes:\s*([^\r\n]+)/i);
+      if (scopesMatch) {
+        const rawTokens = scopesMatch[1].replace(/['"]/g, '').split(',');
+        for (const s of rawTokens) {
+          const trimmed = s.trim();
+          if (trimmed) scopes.push(trimmed);
+        }
+      }
+
+      return {
+        isInstalled: true,
+        isAuthenticated: isAuthed,
+        account,
+        scopes
+      };
+    } catch (err) {
+      // Check if command not found
+      return {
+        isInstalled: false,
+        isAuthenticated: false,
+        account: '',
+        scopes: []
+      };
+    }
+  }
+
+  /**
+   * Retrieves active Pull Request for a given branch name.
+   * @param {string} branch
+   * @returns {Object | null}
+   */
+  getActivePullRequest(branch) {
+    if (!branch) return null;
+
+    try {
+      const fields = 'number,title,headRefName,baseRefName,url,state,author,statusCheckRollup';
+      const cmd = `gh pr list --head "${branch}" --limit 1 --json ${fields}`;
+      const raw = this.execFn(cmd, { cwd: this.repoPath });
+      const parsed = JSON.parse(raw);
+
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        return null;
+      }
+
+      const pr = parsed[0];
+      const rawChecks = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : [];
+      const checks = rawChecks.map(c => ({
+        name: c.name || '',
+        workflowName: c.workflowName || '',
+        status: (c.status || '').toUpperCase(),
+        conclusion: c.conclusion ? c.conclusion.toUpperCase() : null,
+        detailsUrl: c.detailsUrl || ''
+      }));
+
+      // Summarize checks
+      let successCount = 0;
+      let failureCount = 0;
+      let pendingCount = 0;
+
+      for (const check of checks) {
+        if (check.conclusion === 'SUCCESS') {
+          successCount++;
+        } else if (check.conclusion === 'FAILURE' || check.conclusion === 'TIMED_OUT' || check.conclusion === 'STARTUP_FAILURE') {
+          failureCount++;
+        } else {
+          pendingCount++;
+        }
+      }
+
+      let summaryStatus = 'SUCCESS';
+      if (failureCount > 0) {
+        summaryStatus = 'FAILURE';
+      } else if (pendingCount > 0 || checks.length === 0) {
+        summaryStatus = 'PENDING';
+      }
+
+      return {
+        number: pr.number,
+        title: pr.title,
+        headRef: pr.headRefName,
+        baseRef: pr.baseRefName,
+        url: pr.url,
+        state: pr.state,
+        author: pr.author?.login || 'Unknown',
+        checks,
+        checksSummary: {
+          total: checks.length,
+          success: successCount,
+          failure: failureCount,
+          pending: pendingCount,
+          status: summaryStatus
+        }
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Retrieves recent CI/CD workflow runs.
+   * @param {Object} [options]
+   * @param {number} [options.limit=5]
+   * @param {string} [options.branch]
+   * @returns {Array<Object>}
+   */
+  getRecentRuns(options = {}) {
+    const limit = options.limit ?? 5;
+    const branchFlag = options.branch ? `--branch "${options.branch}"` : '';
+
+    try {
+      const fields = 'name,workflowName,headSha,status,conclusion,url';
+      const cmd = `gh run list ${branchFlag} --limit ${limit} --json ${fields}`.trim();
+      const raw = this.execFn(cmd, { cwd: this.repoPath });
+      const parsed = JSON.parse(raw);
+
+      if (!Array.isArray(parsed)) return [];
+
+      return parsed.map(r => ({
+        name: r.name || '',
+        workflowName: r.workflowName || r.name || '',
+        headSha: r.headSha || '',
+        shortSha: (r.headSha || '').slice(0, 7),
+        status: (r.status || '').toUpperCase(),
+        conclusion: r.conclusion ? r.conclusion.toUpperCase() : null,
+        url: r.url || ''
+      }));
+    } catch {
+      return [];
+    }
+  }
+}
+
+
+
+
+/**
+ * Orchestrator combining local Git repository data and remote GitHub CLI metadata
+ * into a single unified payload for the Antigravity VCS mod and HTTP bridge.
+ */
+class VcsOrchestrator {
+  /**
+   * @param {Object} [options]
+   * @param {GitService} [options.gitService]
+   * @param {GitHubCliService} [options.githubCliService]
+   * @param {string} [options.repoPath]
+   */
+  constructor(options = {}) {
+    this.repoPath = options.repoPath || process.cwd();
+    this.gitService = options.gitService || new GitService();
+    this.githubCliService = options.githubCliService || new GitHubCliService({ repoPath: this.repoPath });
+  }
+
+  /**
+   * Produces unified repository status, commit DAG, active PR, and CI/CD runs.
+   * @param {Object} [options]
+   * @param {string} [options.repoPath]
+   * @param {number} [options.limit=50]
+   * @returns {Object}
+   */
+  getRepositoryOverview(options = {}) {
+    const limit = options.limit ?? 50;
+    const repoPath = options.repoPath || this.repoPath;
+
+    const status = this.gitService.getGitStatus({ repoPath });
+    if (!status || !status.isRepo) {
+      return {
+        isRepo: false,
+        status: status || { branch: '', isClean: true, changedFiles: [], ahead: 0, behind: 0 },
+        github: { isGitHub: false },
+        pullRequest: null,
+        recentRuns: [],
+        commits: [],
+        branches: { local: [], remote: [] }
+      };
+    }
+
+    const githubMeta = this.gitService.getGitHubMetadata({ repoPath });
+    const commits = this.gitService.getGitLog({ repoPath, limit });
+    const branches = this.gitService.getBranches({ repoPath });
+
+    let pullRequest = null;
+    let recentRuns = [];
+
+    if (githubMeta && githubMeta.isGitHub) {
+      const ghService = (repoPath === this.repoPath) ? this.githubCliService : new GitHubCliService({ repoPath });
+      pullRequest = ghService.getActivePullRequest(status.branch);
+      recentRuns = ghService.getRecentRuns({ branch: status.branch, limit: 5 });
+    }
+
+    return {
+      isRepo: true,
+      repoPath,
+      activeRepo: githubMeta.fullName || 'workspace',
+      status,
+      github: githubMeta,
+      branches,
+      pullRequest,
+      recentRuns,
+      commits
+    };
+  }
+}
+
+
 
 
 
@@ -1810,7 +3408,8 @@ class TelemetryService {
 
 /**
  * Lightweight local HTTP bridge server for synchronizing active agent selections
- * from the Electron renderer directly to disk (~/.gemini/config/mods/active_agents.json).
+ * from the Electron renderer directly to disk (~/.gemini/config/mods/active_agents.json)
+ * and providing unified VCS (Git + GitHub PR/CI) telemetry.
  */
 class AgentSyncServer {
   /**
@@ -1818,11 +3417,15 @@ class AgentSyncServer {
    * @param {number} [options.port] Port to listen on (default 53912)
    * @param {string} [options.host] Host address (default 127.0.0.1)
    * @param {string} [options.configPath] Path to active_agents.json
+   * @param {VcsOrchestrator} [options.vcsOrchestrator] Custom VCS orchestrator
+   * @param {string} [options.repoPath] Path to git repository
    */
   constructor(options = {}) {
     this.port = options.port ?? 53912;
     this.host = options.host || '127.0.0.1';
     this.configPath = options.configPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'active_agents.json');
+    this.repoPath = options.repoPath || process.cwd();
+    this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ repoPath: this.repoPath });
     this.server = null;
   }
 
@@ -1916,6 +3519,42 @@ class AgentSyncServer {
           const data = this.readActiveAgents();
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(data));
+          return;
+        }
+
+        if (req.method === 'GET' && (req.url === '/vcs/overview' || req.url.startsWith('/vcs/overview?'))) {
+          try {
+            let targetRepo = this.repoPath;
+            try {
+              const urlObj = new URL(req.url, 'http://127.0.0.1');
+              const qRepo = urlObj.searchParams.get('repoPath');
+              if (qRepo && fs.existsSync(qRepo)) {
+                targetRepo = qRepo;
+                this.repoPath = qRepo;
+              }
+            } catch {}
+
+            const data = this.vcsOrchestrator.getRepositoryOverview({ repoPath: targetRepo });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(data));
+          } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+          }
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/vcs/fetch') {
+          try {
+            if (this.vcsOrchestrator?.gitService && typeof this.vcsOrchestrator.gitService.fetch === 'function') {
+              this.vcsOrchestrator.gitService.fetch({ repoPath: this.repoPath });
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true }));
+          } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: err.message }));
+          }
           return;
         }
 
@@ -2140,355 +3779,6 @@ class AgentDiscoveryService {
 
 
 
-/**
- * Service providing high-performance Git operations, DAG topology graph calculation,
- * collaborator avatar resolution, and GitHub metadata for Antigravity UI mods.
- */
-class GitService {
-  /**
-   * Computes Gravatar identicon URL based on author email.
-   * @param {string} [email='']
-   * @returns {string}
-   */
-  computeAvatarUrl(email = '') {
-    const clean = String(email).trim().toLowerCase();
-    const hash = crypto.createHash('md5').update(clean).digest('hex');
-    return `https://www.gravatar.com/avatar/${hash}?d=identicon&s=64`;
-  }
-
-  /**
-   * Parses a Git remote URL to extract GitHub owner and repository metadata.
-   * @param {string} remoteUrl
-   * @returns {Object}
-   */
-  parseGitHubRemote(remoteUrl) {
-    if (!remoteUrl || typeof remoteUrl !== 'string') {
-      return { isGitHub: false };
-    }
-
-    const trimmed = remoteUrl.trim();
-    // Match HTTPS: https://github.com/:owner/:repo(.git)?
-    // Match SSH: git@github.com::owner/:repo(.git)?
-    const httpsMatch = trimmed.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/i);
-    const sshMatch = trimmed.match(/^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i);
-
-    const match = httpsMatch || sshMatch;
-    if (!match) {
-      return { isGitHub: false };
-    }
-
-    const owner = match[1];
-    const repo = match[2];
-    const webUrl = `https://github.com/${owner}/${repo}`;
-
-    return {
-      isGitHub: true,
-      owner,
-      repo,
-      fullName: `${owner}/${repo}`,
-      webUrl,
-      getCommitUrl: (hash) => `${webUrl}/commit/${hash}`,
-      getBranchUrl: (branch) => `${webUrl}/tree/${branch}`,
-      getPrUrl: (prNumber) => `${webUrl}/pull/${prNumber}`
-    };
-  }
-
-  /**
-   * Reads GitHub metadata from the local repository's `origin` remote.
-   * @param {Object} [options]
-   * @param {string} [options.repoPath]
-   * @returns {Object}
-   */
-  getGitHubMetadata(options = {}) {
-    const repoPath = options.repoPath || process.cwd();
-    try {
-      const remoteUrl = execSync('git remote get-url origin', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
-      }).trim();
-      return this.parseGitHubRemote(remoteUrl);
-    } catch {
-      return { isGitHub: false };
-    }
-  }
-
-  /**
-   * Computes topological lanes and Bezier branch route connections for commits.
-   * Uses an iterative lane allocation algorithm.
-   * @param {Array<Object>} commits
-   * @returns {Array<Object>}
-   */
-  computeTopology(commits) {
-    if (!Array.isArray(commits) || commits.length === 0) {
-      return [];
-    }
-
-    /** @type {Array<string | null>} active lanes containing expected commit hashes */
-    const activeLanes = [];
-    const enriched = [];
-
-    for (let i = 0; i < commits.length; i++) {
-      const commit = commits[i];
-      const { hash, parents = [] } = commit;
-
-      // 1. Find or allocate lane for this commit
-      let laneIndex = activeLanes.indexOf(hash);
-      if (laneIndex === -1) {
-        // Allocate in the first empty slot or append
-        laneIndex = activeLanes.indexOf(null);
-        if (laneIndex === -1) {
-          laneIndex = activeLanes.length;
-          activeLanes.push(hash);
-        } else {
-          activeLanes[laneIndex] = hash;
-        }
-      }
-
-      const routes = [];
-
-      if (parents.length === 0) {
-        // Root commit: free up lane
-        activeLanes[laneIndex] = null;
-      } else {
-        // First parent continues on this lane
-        const primaryParent = parents[0];
-        activeLanes[laneIndex] = primaryParent;
-        routes.push({ fromLane: laneIndex, toLane: laneIndex, type: 'straight' });
-
-        // Additional parents (merges)
-        for (let p = 1; p < parents.length; p++) {
-          const mergeParent = parents[p];
-          let parentLane = activeLanes.indexOf(mergeParent);
-          if (parentLane === -1) {
-            parentLane = activeLanes.indexOf(null);
-            if (parentLane === -1) {
-              parentLane = activeLanes.length;
-              activeLanes.push(mergeParent);
-            } else {
-              activeLanes[parentLane] = mergeParent;
-            }
-          }
-          routes.push({ fromLane: laneIndex, toLane: parentLane, type: 'merge' });
-        }
-      }
-
-      // Clean trailing nulls
-      while (activeLanes.length > 0 && activeLanes[activeLanes.length - 1] === null) {
-        activeLanes.pop();
-      }
-
-      enriched.push({
-        ...commit,
-        lane: laneIndex,
-        routes
-      });
-    }
-
-    return enriched;
-  }
-
-  /**
-   * Retrieves Git commit history and topological DAG graph.
-   * @param {Object} [options]
-   * @param {string} [options.repoPath]
-   * @param {number} [options.limit=50]
-   * @returns {Array<Object>}
-   */
-  getGitLog(options = {}) {
-    const repoPath = options.repoPath || process.cwd();
-    const limit = options.limit ?? 50;
-
-    try {
-      // Format delimiter %x00 (null character):
-      // %H: commit hash
-      // %P: parent hashes
-      // %an: author name
-      // %ae: author email
-      // %at: author date UNIX timestamp
-      // %s: subject
-      // %D: ref names
-      const format = '%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%D';
-      const rawLog = execSync(`git log --format="${format}" -n ${limit}`, {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
-      });
-
-      const lines = rawLog.split('\n').filter(Boolean);
-      const rawCommits = lines.map(line => {
-        const parts = line.split('\0');
-        const hash = parts[0] || '';
-        const parents = parts[1] ? parts[1].split(' ').filter(Boolean) : [];
-        const authorName = parts[2] || 'Unknown';
-        const authorEmail = parts[3] || '';
-        const timestamp = parseInt(parts[4], 10) || Math.floor(Date.now() / 1000);
-        const subject = parts[5] || '';
-        const refNamesStr = parts[6] || '';
-        const refs = refNamesStr
-          ? refNamesStr.split(',').map(r => r.trim()).filter(Boolean)
-          : [];
-
-        return {
-          hash,
-          shortHash: hash.slice(0, 7),
-          parents,
-          author: {
-            name: authorName,
-            email: authorEmail,
-            avatarUrl: this.computeAvatarUrl(authorEmail)
-          },
-          date: timestamp,
-          relativeDate: this._formatRelativeTime(timestamp),
-          subject,
-          refs
-        };
-      });
-
-      return this.computeTopology(rawCommits);
-    } catch (err) {
-      return [];
-    }
-  }
-
-  /**
-   * Retrieves working tree and branch status.
-   * @param {Object} [options]
-   * @param {string} [options.repoPath]
-   * @returns {Object}
-   */
-  getGitStatus(options = {}) {
-    const repoPath = options.repoPath || process.cwd();
-
-    try {
-      const branch = execSync('git rev-parse --abbrev-ref HEAD', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
-      }).trim();
-
-      const porcelain = execSync('git status --porcelain', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
-      });
-
-      const changedFiles = porcelain
-        .split('\n')
-        .map(line => line.trim())
-        .filter(Boolean)
-        .map(line => {
-          const code = line.slice(0, 2).trim();
-          const file = line.slice(2).trim();
-          return { code, file };
-        });
-
-      let ahead = 0;
-      let behind = 0;
-      try {
-        const revCounts = execSync('git rev-list --left-right --count HEAD...@{u}', {
-          cwd: repoPath,
-          encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'ignore']
-        }).trim();
-        const parts = revCounts.split(/\s+/);
-        if (parts.length >= 2) {
-          ahead = parseInt(parts[0], 10) || 0;
-          behind = parseInt(parts[1], 10) || 0;
-        }
-      } catch {
-        // No upstream tracked
-      }
-
-      return {
-        isRepo: true,
-        branch,
-        isClean: changedFiles.length === 0,
-        changedFiles,
-        ahead,
-        behind
-      };
-    } catch {
-      return {
-        isRepo: false,
-        branch: '',
-        isClean: true,
-        changedFiles: [],
-        ahead: 0,
-        behind: 0
-      };
-    }
-  }
-
-  /**
-   * Watches a git repository for head and ref changes and invokes callback.
-   * @param {Object} options
-   * @param {string} options.repoPath
-   * @param {Function} options.onChange
-   * @returns {Function} cleanup unsubscribe function
-   */
-  watchRepository(options = {}) {
-    const repoPath = options.repoPath || process.cwd();
-    const onChange = options.onChange || (() => {});
-    const gitDir = path.join(repoPath, '.git');
-
-    if (!fs.existsSync(gitDir)) {
-      return () => {};
-    }
-
-    const watchers = [];
-    let debounceTimer = null;
-    const notify = () => {
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        onChange();
-      }, 250);
-    };
-
-    try {
-      const headPath = path.join(gitDir, 'HEAD');
-      if (fs.existsSync(headPath)) {
-        watchers.push(fs.watch(headPath, notify));
-      }
-
-      const refsDir = path.join(gitDir, 'refs');
-      if (fs.existsSync(refsDir)) {
-        watchers.push(fs.watch(refsDir, { recursive: true }, notify));
-      }
-    } catch {
-      // Silently ignore watching errors on non-supported environments
-    }
-
-    return () => {
-      clearTimeout(debounceTimer);
-      for (const w of watchers) {
-        try {
-          w.close();
-        } catch {}
-      }
-    };
-  }
-
-  /**
-   * Helper formatting relative timestamp.
-   * @private
-   */
-  _formatRelativeTime(unixTimestamp) {
-    const elapsedSeconds = Math.max(0, Math.floor(Date.now() / 1000 - unixTimestamp));
-    if (elapsedSeconds < 60) return `${elapsedSeconds}s ago`;
-    const minutes = Math.floor(elapsedSeconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(hours / 24);
-    return `${days}d ago`;
-  }
-}
-
-
-
-
-
 
 
 
@@ -2508,6 +3798,7 @@ class ModHost {
    * @param {TelemetryService} [options.telemetryService]
    * @param {AgentSyncServer} [options.syncServer]
    * @param {GitService} [options.gitService]
+   * @param {VcsOrchestrator} [options.vcsOrchestrator]
    * @param {CdpPortResolver} [options.portResolver]
    */
   constructor(options = {}) {
@@ -2516,6 +3807,7 @@ class ModHost {
     this.telemetryService = options.telemetryService || new TelemetryService();
     this.syncServer = options.syncServer || new AgentSyncServer();
     this.gitService = options.gitService || new GitService();
+    this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ gitService: this.gitService });
     this.portResolver = options.portResolver || new CdpPortResolver();
   }
 
@@ -2544,23 +3836,54 @@ class ModHost {
    * @returns {Promise<string>}
    */
   async resolveRepoPath(cdpClient, explicitTranscriptPath) {
-    // 1. Try resolving via live CDP renderer tab query parameter or open file
+    // 1. Try resolving via live CDP renderer active tab, editor resource, or query parameter
     if (cdpClient) {
       try {
         const res = await cdpClient.evaluate(`
           (() => {
+            // 1. Check active editor tab or resource in VS Code / Antigravity DOM
+            const activeTab = document.querySelector('.tab.active, [aria-selected="true"].tab, .tab-label[aria-selected="true"]');
+            if (activeTab) {
+              const resource = activeTab.getAttribute('data-resource-name') ||
+                               activeTab.getAttribute('title') ||
+                               activeTab.getAttribute('aria-label');
+              if (resource) return resource;
+            }
+            // 2. Query editor tab query parameter
             const search = window.location.search || '';
             const match = search.match(/tab=file__file%3A%2F%2F%2F([^&]+)/i);
             if (match && match[1]) {
               return decodeURIComponent(match[1]);
             }
+            // 3. Document title fallback
+            if (document.title) {
+              return document.title;
+            }
             return null;
           })()
         `);
-        if (res && res.value) {
-          let currentDir = path.dirname(res.value);
+        if (res && res.value && typeof res.value === 'string') {
+          // Normalize clean path candidate
+          let candidate = res.value.trim();
+          if (candidate.startsWith('file:///')) {
+            candidate = decodeURIComponent(candidate.replace('file:///', ''));
+          }
+          if (candidate.includes(' — ')) {
+            const parts = candidate.split(' — ');
+            candidate = parts[parts.length - 1].trim();
+          } else if (candidate.includes(' - ')) {
+            const parts = candidate.split(' - ');
+            candidate = parts[0].trim();
+          }
+
+          let currentDir = fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()
+            ? candidate
+            : path.dirname(candidate);
+
           while (currentDir && currentDir !== path.dirname(currentDir)) {
             if (fs.existsSync(path.join(currentDir, '.git'))) {
+              if (this.syncServer) this.syncServer.repoPath = currentDir;
+              if (this.vcsOrchestrator) this.vcsOrchestrator.repoPath = currentDir;
               return currentDir;
             }
             currentDir = path.dirname(currentDir);
@@ -2618,7 +3941,30 @@ class ModHost {
     const transcriptArgIdx = process.argv.indexOf('--transcript');
     if (transcriptArgIdx !== -1 && process.argv[transcriptArgIdx + 1]) {
       explicitPath = process.argv[transcriptArgIdx + 1];
-      primaryMetric = this.telemetryService.parseTranscriptFile(explicitPath);
+      const uuidMatch = explicitPath.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/);
+      const convId = uuidMatch ? uuidMatch[0] : null;
+      if (convId && allMetrics[convId]) {
+        primaryMetric = allMetrics[convId];
+      } else {
+        let targetTranscriptPath = explicitPath;
+        if (explicitPath.endsWith('transcript_full.jsonl')) {
+          const compactCandidate = path.join(path.dirname(explicitPath), 'transcript.jsonl');
+          if (fs.existsSync(compactCandidate)) {
+            targetTranscriptPath = compactCandidate;
+          }
+        }
+        const parsed = this.telemetryService.parseTranscriptFile(targetTranscriptPath);
+        parsed.modelQuota = this.telemetryService.resolveModelQuota(
+          parsed.detectedModel,
+          parsed.stepEntries,
+          parsed.chatModels
+        );
+        delete parsed.stepEntries;
+        primaryMetric = parsed;
+        if (convId) {
+          allMetrics[convId] = primaryMetric;
+        }
+      }
     }
 
     if (!primaryMetric) {
@@ -2635,38 +3981,59 @@ class ModHost {
 
     const repoPath = await this.resolveRepoPath(cdpClient, explicitPath);
 
-    let gitLog = [];
-    let gitStatus = { branch: '', isClean: true, ahead: 0, behind: 0 };
-    let github = { isGitHub: false };
+    let vcsOverview = {};
     try {
-      gitLog = this.gitService.getGitLog({ repoPath, limit: 40 });
-      gitStatus = this.gitService.getGitStatus({ repoPath });
-      github = this.gitService.getGitHubMetadata({ repoPath });
-    } catch (err) {}
+      vcsOverview = this.vcsOrchestrator.getRepositoryOverview({ repoPath });
+    } catch (err) {
+      try {
+        const gitLog = this.gitService.getGitLog({ repoPath, limit: 40 });
+        const gitStatus = this.gitService.getGitStatus({ repoPath });
+        const github = this.gitService.getGitHubMetadata({ repoPath });
+        const branches = this.gitService.getBranches({ repoPath });
+        vcsOverview = {
+          commits: gitLog,
+          gitLog,
+          status: gitStatus,
+          branches,
+          github,
+          activeRepo: github.fullName || path.basename(repoPath)
+        };
+      } catch {}
+    }
+
+    const activeAgents = this.syncServer.readActiveAgents();
 
     const hostContext = {
       telemetry: primaryMetric,
       allMetrics,
-      gitLog,
-      gitStatus,
-      github,
-      commits: gitLog,
-      status: gitStatus,
-      activeRepo: github.fullName || path.basename(repoPath),
+      activeAgents,
+      ...vcsOverview,
       timestamp: Date.now()
     };
 
     const payload = this.compilePayload(hostContext);
     const evalRes = await cdpClient.evaluate(payload);
 
-    // Sync selected agents from renderer localStorage to disk
+    // Sync selected agents from renderer localStorage to disk while preserving server effectiveMode
     try {
       const mapRes = await cdpClient.evaluate("localStorage.getItem('__antigravity_selected_agents_map')");
       if (mapRes && mapRes.value) {
         const parsed = JSON.parse(mapRes.value);
         if (parsed && typeof parsed === 'object') {
           const current = this.syncServer.readActiveAgents();
-          const merged = { ...current, ...parsed };
+          const merged = { ...current };
+          for (const [k, v] of Object.entries(parsed)) {
+            if (v && typeof v === 'object') {
+              const existing = current[k] || {};
+              merged[k] = {
+                ...existing,
+                ...v,
+                effectiveMode: (existing.id === v.id && existing.effectiveMode)
+                  ? existing.effectiveMode
+                  : (v.effectiveMode || (v.id === 'auto' ? 'PLAN' : undefined))
+              };
+            }
+          }
           this.syncServer.writeActiveAgents(merged);
         }
       }
@@ -2741,10 +4108,30 @@ function renderGaugeSvg(pct = 0, size = 18) {
 }
 
 
+function renderSvgIcon(name, size = 12, color = 'currentColor') {
+  switch (name) {
+    case 'zap':
+      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="${color}" fill-opacity="0.2"/></svg>`;
+    case 'clock':
+      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
+    case 'calendar':
+      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`;
+    case 'bot':
+      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16" stroke-linecap="round"/><line x1="16" y1="16" x2="16" y2="16" stroke-linecap="round"/></svg>`;
+    case 'scissors':
+      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>`;
+    default:
+      return '';
+  }
+}
+
 /**
  * Builds the HTML for the rich context breakdown popover.
  */
 function renderPopoverHtml(metric) {
+  const icon = typeof renderSvgIcon === 'function'
+    ? renderSvgIcon
+    : (typeof window !== 'undefined' && typeof window.__renderSvgIcon === 'function' ? window.__renderSvgIcon : () => '');
   const FONT_SANS = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
   const FONT_MONO = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
 
@@ -2782,22 +4169,181 @@ function renderPopoverHtml(metric) {
     statusColor = '#eab308';
   }
 
-  const renderRow = (icon, label, data, barColor) => `
-    <div style="margin-bottom: 7px;">
-      <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; color: #d4d4d8;">
-        <span style="display: flex; align-items: center; gap: 5px;">
-          <span>${icon}</span>
-          <span style="font-weight: 500;">${label}</span>
-        </span>
-        <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10.5px;">
-          ${data.tokens.toLocaleString()} tok <span style="color: ${barColor}; font-weight: 600;">(${data.pct}%)</span>
-        </span>
-      </div>
-      <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
-        <div style="width: ${Math.min(data.pct, 100)}%; height: 100%; background: ${barColor}; border-radius: 9999px;"></div>
-      </div>
+  const cleanModelName = (raw) => String(raw || '')
+    .replace(/\\n/g, ' ')
+    .split(/\r?\n/)[0]
+    .replace(/\.\s*No need to comment[\s\S]*$/i, '')
+    .replace(/\.\s*If reporting what model[\s\S]*$/i, '')
+    .replace(/[`'"]/g, '')
+    .replace(/\.\s*$/, '')
+    .trim();
+
+  const formatCompactTokens = (t) => {
+    const num = Number(t) || 0;
+    if (num >= 1_000_000) return (num / 1_000_000).toFixed(2) + 'M';
+    if (num >= 1_000) return (num / 1_000).toFixed(1) + 'k';
+    return String(num);
+  };
+
+  const renderCompactSource = (label, data, dotColor) => `
+    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 10px; padding: 2px 5px; background: rgba(255, 255, 255, 0.025); border-radius: 5px; color: #d4d4d8; white-space: nowrap;">
+      <span style="display: flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis;">
+        <span style="width: 6px; height: 6px; border-radius: 9999px; background: ${dotColor}; flex-shrink: 0;"></span>
+        <span style="font-weight: 500; color: #a1a1aa;">${label}</span>
+      </span>
+      <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #e4e4e7; font-size: 9.5px; margin-left: 4px;">
+        ${formatCompactTokens(data.tokens)} <span style="color: ${dotColor}; font-weight: 600;">(${data.pct}%)</span>
+      </span>
     </div>
   `;
+
+  const quota = m.modelQuota || null;
+  const chatModels = Array.isArray(m.chatModels) ? m.chatModels : [];
+  const compactions = Array.isArray(m.compactions) ? m.compactions : [];
+
+  let compactionsHtml = '';
+  if (compactions.length > 0) {
+    const recentCompactions = compactions.slice(-4);
+    const compactionRowsHtml = recentCompactions.map((c) => `
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 10px; padding: 3px 0; border-top: 1px dashed rgba(255, 255, 255, 0.06); color: #d4d4d8; white-space: nowrap;">
+        <span style="display: flex; align-items: center; gap: 4px; font-weight: 500; color: #e4e4e7;">
+          ${icon('scissors', 11, '#22c55e')} Turno #${c.step}
+        </span>
+        <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
+          ${c.displayFrom} → <strong style="color: #22c55e;">${c.displayTo}</strong>
+        </span>
+      </div>
+    `).join('');
+
+    compactionsHtml = `
+      <div style="margin-bottom: 10px; padding: 8px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
+        <div style="font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 3px;">
+          Historial de Compactación (/compact)
+        </div>
+        ${compactionRowsHtml}
+      </div>
+    `;
+  }
+
+  const getRemainingColor = (remainingPct) => {
+    if (remainingPct <= 15) return '#ef4444';
+    if (remainingPct <= 40) return '#f97316';
+    if (remainingPct <= 75) return '#eab308';
+    return '#22c55e';
+  };
+
+  let chatModelsLedgerHtml = '';
+  if (chatModels.length > 0) {
+    const modelRowsHtml = chatModels.map((cm) => {
+      const safeName = cleanModelName(cm.modelName) || 'Gemini';
+      const quotaShareText = cm.hasDualLimit
+        ? `5h:${cm.chatRollingPct}% · 7d:${cm.chatWeeklyPct}%`
+        : `7d:${cm.chatWeeklyPct}%`;
+      return `
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 10px; padding: 3px 0; border-top: 1px dashed rgba(255, 255, 255, 0.06); color: #d4d4d8; white-space: nowrap;">
+          <span style="display: flex; align-items: center; gap: 4px; font-weight: 500; color: #e4e4e7; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${safeName}">
+            ${icon('bot', 12, '#38bdf8')} ${safeName}
+          </span>
+          <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
+            ${cm.displayTokens} <span style="color: #38bdf8; font-weight: 600;">(${quotaShareText})</span>
+          </span>
+        </div>
+      `;
+    }).join('');
+
+    chatModelsLedgerHtml = `
+      <div style="margin-top: 7px; padding-top: 5px; border-top: 1px solid rgba(255, 255, 255, 0.08);">
+        <div style="font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 3px;">
+          Consumo por Modelo en este Chat
+        </div>
+        ${modelRowsHtml}
+      </div>
+    `;
+  }
+
+  let modelQuotaHtml = '';
+  if (quota) {
+    const safeQuotaModel = cleanModelName(quota.modelName) || (quota.hasDualLimit ? 'Gemini' : 'Gemini 4 Argon');
+    if (quota.hasDualLimit) {
+      const rollingRem = quota.rollingRemaining !== undefined ? quota.rollingRemaining : Math.max(0, 100 - (quota.rollingUsed || 0));
+      const weeklyRem = quota.weeklyRemaining !== undefined ? quota.weeklyRemaining : Math.max(0, 100 - (quota.weeklyUsed || 0));
+      const rollingColor = getRemainingColor(rollingRem);
+      const weeklyColor = getRemainingColor(weeklyRem);
+
+      modelQuotaHtml = `
+        <div style="margin-bottom: 10px; padding: 8px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 6px;">
+            <span style="font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #a1a1aa; font-weight: 600; flex-shrink: 0;">
+              Cuota de Cuenta
+            </span>
+            <span style="font-size: 9.5px; color: #e4e4e7; background: rgba(255, 255, 255, 0.07); padding: 1px 6px; border-radius: 9999px; max-width: 155px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${safeQuotaModel}">
+              ${safeQuotaModel}
+            </span>
+          </div>
+          <div style="margin-bottom: 5px;">
+            <div style="display: flex; justify-content: space-between; font-size: 10.5px; margin-bottom: 2px; color: #d4d4d8; white-space: nowrap;">
+              <span style="display: flex; align-items: center; gap: 5px;">
+                ${icon('clock', 12, '#a1a1aa')}
+                <span style="font-weight: 500;">${quota.rollingLabel || 'Cuota 5h Restante'}</span>
+              </span>
+              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10px;">
+                <strong style="color: ${rollingColor};">${rollingRem}%</strong> <span style="color: #71717a; font-size: 9px;">(reset: ${quota.rollingReset || '5h'})</span>
+              </span>
+            </div>
+            <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
+              <div style="width: ${Math.min(rollingRem, 100)}%; height: 100%; background: ${rollingColor}; border-radius: 9999px;"></div>
+            </div>
+          </div>
+          <div>
+            <div style="display: flex; justify-content: space-between; font-size: 10.5px; margin-bottom: 2px; color: #d4d4d8; white-space: nowrap;">
+              <span style="display: flex; align-items: center; gap: 5px;">
+                ${icon('calendar', 12, '#a1a1aa')}
+                <span style="font-weight: 500;">${quota.weeklyLabel || 'Cuota Semanal Restante'}</span>
+              </span>
+              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10px;">
+                <strong style="color: ${weeklyColor};">${weeklyRem}%</strong> <span style="color: #71717a; font-size: 9px;">(reset: ${quota.weeklyReset || '7d'})</span>
+              </span>
+            </div>
+            <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
+              <div style="width: ${Math.min(weeklyRem, 100)}%; height: 100%; background: ${weeklyColor}; border-radius: 9999px;"></div>
+            </div>
+          </div>
+          ${chatModelsLedgerHtml}
+        </div>
+      `;
+    } else {
+      const singleRem = quota.weeklyRemaining !== undefined ? quota.weeklyRemaining : (quota.remainingPct !== undefined ? quota.remainingPct : (quota.usagePct || 0));
+      const singleColor = getRemainingColor(singleRem);
+
+      modelQuotaHtml = `
+        <div style="margin-bottom: 10px; padding: 8px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 5px;">
+            <span style="font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #a1a1aa; font-weight: 600; flex-shrink: 0;">
+              Cuota de Cuenta
+            </span>
+            <span style="font-size: 9.5px; color: #e4e4e7; background: rgba(255, 255, 255, 0.07); padding: 1px 6px; border-radius: 9999px; max-width: 155px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${safeQuotaModel}">
+              ${safeQuotaModel}
+            </span>
+          </div>
+          <div>
+            <div style="display: flex; justify-content: space-between; font-size: 10.5px; margin-bottom: 2px; color: #d4d4d8; white-space: nowrap;">
+              <span style="display: flex; align-items: center; gap: 5px;">
+                ${icon('calendar', 12, '#a1a1aa')}
+                <span style="font-weight: 500;">${quota.singleLabel || 'Cuota Semanal Restante'}</span>
+              </span>
+              <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 10px;">
+                <strong style="color: ${singleColor};">${singleRem}%</strong> <span style="color: #71717a; font-size: 9px;">(reset: ${quota.weeklyReset || quota.resetStr || '7d'})</span>
+              </span>
+            </div>
+            <div style="height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden;">
+              <div style="width: ${Math.min(singleRem, 100)}%; height: 100%; background: ${singleColor}; border-radius: 9999px;"></div>
+            </div>
+          </div>
+          ${chatModelsLedgerHtml}
+        </div>
+      `;
+    }
+  }
 
   return `
     <div class="antigravity-popover-content" style="
@@ -2817,7 +4363,7 @@ function renderPopoverHtml(metric) {
       <!-- Header -->
       <div style="display: flex; align-items: center; justify-content: space-between; padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.09);">
         <div style="display: flex; align-items: center; gap: 7px;">
-          <span style="font-size: 14px;">⚡</span>
+          ${icon('zap', 14, '#38bdf8')}
           <span style="font-weight: 600; font-size: 12.5px; letter-spacing: -0.01em; color: #ffffff;">Context Telemetry</span>
         </div>
         <span style="font-size: 10.5px; padding: 2px 7px; border-radius: 9999px; background: rgba(255, 255, 255, 0.08); color: #a1a1aa; font-family: ${FONT_MONO};">
@@ -2852,14 +4398,27 @@ function renderPopoverHtml(metric) {
         </div>
       </div>
 
-      <!-- Category Breakdown Rows -->
-      <div style="margin-bottom: 12px;">
-        <div style="font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 8px;">Breakdown by Source</div>
-        ${renderRow('👤', 'User Prompts', user, '#38bdf8')}
-        ${renderRow('🤖', 'Assistant Replies', model, '#a855f7')}
-        ${renderRow('🧠', 'Thinking (CoT)', thinking, '#ec4899')}
-        ${renderRow('⚙️', 'Local Tools', tools, '#f59e0b')}
-        ${renderRow('🌐', 'MCP Protocol', mcp, '#10b981')}
+      ${modelQuotaHtml}
+
+      ${compactionsHtml}
+
+      <!-- Compact Category Breakdown -->
+      <div style="margin-bottom: 10px;">
+        <div style="font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 5px;">Breakdown by Source</div>
+        <div style="display: flex; height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 9999px; overflow: hidden; margin-bottom: 6px;">
+          <div style="width: ${Math.min(user.pct, 100)}%; background: #38bdf8;"></div>
+          <div style="width: ${Math.min(model.pct, 100)}%; background: #a855f7;"></div>
+          <div style="width: ${Math.min(thinking.pct, 100)}%; background: #ec4899;"></div>
+          <div style="width: ${Math.min(tools.pct, 100)}%; background: #f59e0b;"></div>
+          <div style="width: ${Math.min(mcp.pct, 100)}%; background: #10b981;"></div>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px 6px;">
+          ${renderCompactSource('Prompts', user, '#38bdf8')}
+          ${renderCompactSource('Replies', model, '#a855f7')}
+          ${renderCompactSource('Thinking', thinking, '#ec4899')}
+          ${renderCompactSource('Tools', tools, '#f59e0b')}
+          ${renderCompactSource('MCP', mcp, '#10b981')}
+        </div>
       </div>
 
       <!-- Footer Info -->
@@ -3637,7 +5196,7 @@ class AgentSelectorMod extends AntigravityMod {
     });
 
     this.discoveryService = options.discoveryService || new AgentDiscoveryService();
-    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY AGENT SELECTOR MOD - STYLES\r\n   Card Architecture: Every text section enclosed in card components\r\n   ========================================================================= */\r\n\r\n.antigravity-agent-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 10px 0 7px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #f4f4f5;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.agent-badge-dot {\r\n  width: 6px;\r\n  height: 6px;\r\n  border-radius: 9999px;\r\n  flex-shrink: 0;\r\n  transition: all 0.3s ease;\r\n}\r\n\r\n.antigravity-agent-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-agent-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n.antigravity-agent-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n.agent-label {\r\n  font-weight: 500;\r\n  letter-spacing: -0.01em;\r\n  color: #e4e4e7;\r\n  white-space: nowrap;\r\n}\r\n\r\n.agent-caret {\r\n  font-size: 8px;\r\n  color: #a1a1aa;\r\n  margin-left: 1px;\r\n  transition: transform 0.2s ease;\r\n}\r\n\r\n.antigravity-agent-badge.open .agent-caret {\r\n  transform: rotate(180deg);\r\n}\r\n\r\n/* Responsive compact mode */\r\n.antigravity-agent-badge.compact {\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 7px !important;\r\n  gap: 5px !important;\r\n  border-radius: 9999px !important;\r\n  justify-content: center !important;\r\n}\r\n.antigravity-agent-badge.compact .agent-label,\r\n.antigravity-agent-badge.compact .agent-caret {\r\n  display: none !important;\r\n}\r\n\r\n@media (max-width: 960px) {\r\n  .agent-label,\r\n  .agent-caret {\r\n    display: none !important;\r\n  }\r\n  .antigravity-agent-badge {\r\n    height: 28px !important;\r\n    box-sizing: border-box !important;\r\n    padding: 0 7px !important;\r\n    gap: 5px !important;\r\n    border-radius: 9999px !important;\r\n    justify-content: center !important;\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   OSCILLATING AUTO BADGE (MINIMALIST PLAN / BUILD FLIPPER)\r\n   ========================================================================= */\r\n.antigravity-agent-badge.mode-auto {\r\n  animation: autoBadgeGlow 5s infinite cubic-bezier(0.4, 0, 0.2, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto .agent-badge-dot {\r\n  animation: autoDotColor 5s infinite cubic-bezier(0.4, 0, 0.2, 1);\r\n}\r\n\r\n.auto-oscillate-track {\r\n  display: inline-flex;\r\n  flex-direction: column;\r\n  height: 28px;\r\n  line-height: 28px;\r\n  overflow: hidden;\r\n  vertical-align: top;\r\n}\r\n\r\n.auto-oscillate-step {\r\n  height: 28px;\r\n  line-height: 28px;\r\n  display: block;\r\n  font-weight: 600;\r\n  letter-spacing: -0.01em;\r\n  white-space: nowrap;\r\n  animation: oscillatePlanBuild 5s infinite cubic-bezier(0.4, 0, 0.2, 1);\r\n}\r\n\r\n.auto-oscillate-step.plan {\r\n  color: #c084fc;\r\n}\r\n\r\n.auto-oscillate-step.build {\r\n  color: #fbbf24;\r\n}\r\n\r\n@keyframes oscillatePlanBuild {\r\n  0%, 42% {\r\n    transform: translateY(0);\r\n  }\r\n  48%, 92% {\r\n    transform: translateY(-28px);\r\n  }\r\n  98%, 100% {\r\n    transform: translateY(0);\r\n  }\r\n}\r\n\r\n@keyframes autoBadgeGlow {\r\n  0%, 42% {\r\n    border-color: rgba(168, 85, 247, 0.45);\r\n    box-shadow: 0 0 10px rgba(168, 85, 247, 0.25);\r\n  }\r\n  48%, 92% {\r\n    border-color: rgba(245, 158, 11, 0.45);\r\n    box-shadow: 0 0 10px rgba(245, 158, 11, 0.25);\r\n  }\r\n  98%, 100% {\r\n    border-color: rgba(168, 85, 247, 0.45);\r\n    box-shadow: 0 0 10px rgba(168, 85, 247, 0.25);\r\n  }\r\n}\r\n\r\n@keyframes autoDotColor {\r\n  0%, 42% {\r\n    background: #a855f7 !important;\r\n    box-shadow: 0 0 8px #a855f7 !important;\r\n  }\r\n  48%, 92% {\r\n    background: #f59e0b !important;\r\n    box-shadow: 0 0 8px #f59e0b !important;\r\n  }\r\n  98%, 100% {\r\n    background: #a855f7 !important;\r\n    box-shadow: 0 0 8px #a855f7 !important;\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   DROPDOWN PORTAL (FIXED TO VIEWPORT)\r\n   Card Architecture: Harmonized with Mods Manager design language\r\n   ========================================================================= */\r\n.antigravity-agent-dropdown-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  width: 380px !important;\r\n  animation: agentFadeIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n  filter: drop-shadow(0 24px 60px rgba(0, 0, 0, 0.85));\r\n}\r\n\r\n.antigravity-agent-dropdown-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-agent-dropdown-wrapper {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-agent-dropdown {\r\n  width: 380px !important;\r\n  background: #161822 !important;\r\n  background: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 14px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 14px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  pointer-events: auto !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* =========================================================================\r\n   CARD COMPONENT SYSTEM\r\n   ========================================================================= */\r\n.agent-card {\r\n  box-sizing: border-box !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n}\r\n\r\n/* 1. HEADER CARD */\r\n.agent-header-card {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 10px 12px !important;\r\n  margin-bottom: 2px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.agent-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.agent-header-icon {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(122, 162, 247, 0.15) !important;\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.25) !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-title-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.agent-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-main-title {\r\n  font-size: 13.5px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n  margin: 0 !important;\r\n}\r\n\r\n.agent-header-badge {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(122, 162, 247, 0.18) !important;\r\n  color: #7aa2f7 !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\r\n  letter-spacing: 0.3px !important;\r\n}\r\n\r\n.agent-subtitle {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n}\r\n\r\n.agent-close-btn {\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  cursor: pointer !important;\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 6px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  font-size: 12px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.agent-close-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.16) !important;\r\n}\r\n\r\n/* 2. PRIMARY SECTION: CARDS DIRECTAS CON PIN */\r\n.agent-primary-section,\r\n.agent-cards-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-card.primary-hero-card {\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 11px 13px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 12px !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-sizing: border-box !important;\r\n  cursor: pointer !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-card.primary-hero-card:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(122, 162, 247, 0.35) !important;\r\n  transform: translateY(-1px) !important;\r\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;\r\n}\r\n\r\n.agent-card.primary-hero-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 16px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 30%, transparent) !important;\r\n}\r\n\r\n.agent-card-info {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-icon-box {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n.agent-text-wrap {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-title {\r\n  font-size: 13px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.agent-tag {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  letter-spacing: 0.04em !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n/* =========================================================================\r\n   PIN TOGGLE BUTTON COMPONENT\r\n   ========================================================================= */\r\n.agent-pin-btn {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  color: rgba(255, 255, 255, 0.35) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  flex-shrink: 0 !important;\r\n  padding: 0 !important;\r\n}\r\n\r\n.agent-pin-btn:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #ffffff !important;\r\n  transform: scale(1.06) !important;\r\n}\r\n\r\n.agent-pin-btn.active {\r\n  background: rgba(122, 162, 247, 0.2) !important;\r\n  border-color: rgba(122, 162, 247, 0.6) !important;\r\n  color: #7aa2f7 !important;\r\n  box-shadow: 0 0 12px rgba(122, 162, 247, 0.35) !important;\r\n  transform: scale(1.02) !important;\r\n}\r\n\r\n.agent-pin-btn.active svg {\r\n  fill: currentColor !important;\r\n}\r\n\r\n.antigravity-agent-item.selected .agent-pin-btn.active {\r\n  background: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 22%, transparent) !important;\r\n  border-color: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 70%, transparent) !important;\r\n  color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 14px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 45%, transparent) !important;\r\n}\r\n\r\n/* 3. TOGGLE ACORDEÓN CARD */\r\n.agent-toggle-card {\r\n  padding: 0 !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 9px 12px !important;\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 9px !important;\r\n  color: rgba(255, 255, 255, 0.7) !important;\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn:hover {\r\n  background: rgba(255, 255, 255, 0.07) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.catalog-toggle-count {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #a1a1aa !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n/* 4. DRAWER CONTAINER CARD */\r\n.agent-catalog-drawer {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n.agent-catalog-drawer.collapsed {\r\n  display: none !important;\r\n}\r\n\r\n.agent-drawer-card {\r\n  padding: 10px !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  background: rgba(0, 0, 0, 0.35) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n}\r\n\r\n/* LEVEL TABS DENTRO DEL DRAWER */\r\n.agent-level-tabs {\r\n  display: flex !important;\r\n  gap: 4px !important;\r\n  padding: 3px !important;\r\n  background: rgba(0, 0, 0, 0.4) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 7px !important;\r\n}\r\n\r\n.agent-tab-btn {\r\n  flex: 1 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  gap: 6px !important;\r\n  height: 26px !important;\r\n  border: none !important;\r\n  background: transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  border-radius: 5px !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-tab-btn:hover {\r\n  color: #e4e4e7 !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.agent-tab-btn.active {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #ffffff !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.tab-icon {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n/* TAB PANELS */\r\n.agent-tab-content {\r\n  display: none !important;\r\n  max-height: 220px !important;\r\n  overflow-y: auto !important;\r\n  padding-right: 2px !important;\r\n}\r\n\r\n.agent-tab-content.active {\r\n  display: block !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar {\r\n  width: 4px !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar-thumb {\r\n  background: rgba(255, 255, 255, 0.15) !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n/* COMPACT GRID */\r\n.compact-grid {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.compact-agent-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n  padding: 8px 10px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.025) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.compact-agent-card:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  transform: translateY(-0.5px) !important;\r\n}\r\n\r\n.compact-agent-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 10px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 25%, transparent) !important;\r\n}\r\n\r\n.compact-icon-box {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n  border: 1px solid transparent !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.compact-details {\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 1px !important;\r\n}\r\n\r\n.compact-name-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n.compact-name {\r\n  font-size: 11.5px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-sub {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-pin-btn {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n}\r\n\r\n/* 5. FOOTER CARD */\r\n.agent-footer-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  padding: 8px 12px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 8px !important;\r\n}\r\n\r\n.agent-footer-icon {\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-footer-text {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.55) !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n@keyframes agentFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-6px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n";
+    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY AGENT SELECTOR MOD - STYLES\r\n   Card Architecture: Every text section enclosed in card components\r\n   ========================================================================= */\r\n\r\n.antigravity-agent-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 10px 0 7px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #f4f4f5;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.agent-badge-dot {\r\n  width: 6px;\r\n  height: 6px;\r\n  border-radius: 9999px;\r\n  flex-shrink: 0;\r\n  transition: all 0.3s ease;\r\n}\r\n\r\n.antigravity-agent-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-agent-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n.antigravity-agent-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n.agent-label {\r\n  font-weight: 500;\r\n  letter-spacing: -0.01em;\r\n  color: #e4e4e7;\r\n  white-space: nowrap;\r\n}\r\n\r\n.agent-caret {\r\n  font-size: 8px;\r\n  color: #a1a1aa;\r\n  margin-left: 1px;\r\n  transition: transform 0.2s ease;\r\n}\r\n\r\n.antigravity-agent-badge.open .agent-caret {\r\n  transform: rotate(180deg);\r\n}\r\n\r\n/* Responsive compact mode */\r\n.antigravity-agent-badge.compact {\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 7px !important;\r\n  gap: 5px !important;\r\n  border-radius: 9999px !important;\r\n  justify-content: center !important;\r\n}\r\n.antigravity-agent-badge.compact .agent-label,\r\n.antigravity-agent-badge.compact .agent-caret {\r\n  display: none !important;\r\n}\r\n\r\n@media (max-width: 960px) {\r\n  .agent-label,\r\n  .agent-caret {\r\n    display: none !important;\r\n  }\r\n  .antigravity-agent-badge {\r\n    height: 28px !important;\r\n    box-sizing: border-box !important;\r\n    padding: 0 7px !important;\r\n    gap: 5px !important;\r\n    border-radius: 9999px !important;\r\n    justify-content: center !important;\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   OSCILLATING AUTO BADGE (CONTEXT-DRIVEN PLAN / BUILD FLIPPER)\r\n   Transitions automatically only when context changes between PLAN and BUILD\r\n   ========================================================================= */\r\n.antigravity-agent-badge.mode-auto {\r\n  border-color: rgba(168, 85, 247, 0.45);\r\n  box-shadow: 0 0 10px rgba(168, 85, 247, 0.25);\r\n  transition: border-color 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto .agent-badge-dot {\r\n  background: #a855f7 !important;\r\n  box-shadow: 0 0 8px #a855f7 !important;\r\n  transition: background 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build {\r\n  border-color: rgba(245, 158, 11, 0.45);\r\n  box-shadow: 0 0 10px rgba(245, 158, 11, 0.25);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .agent-badge-dot {\r\n  background: #f59e0b !important;\r\n  box-shadow: 0 0 8px #f59e0b !important;\r\n}\r\n\r\n.auto-oscillate-track {\r\n  display: inline-flex;\r\n  flex-direction: column;\r\n  height: 28px;\r\n  line-height: 28px;\r\n  overflow: hidden;\r\n  vertical-align: top;\r\n}\r\n\r\n.auto-oscillate-step {\r\n  height: 28px;\r\n  line-height: 28px;\r\n  display: block;\r\n  font-weight: 600;\r\n  letter-spacing: -0.01em;\r\n  white-space: nowrap;\r\n  transform: translateY(0);\r\n  transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .auto-oscillate-step {\r\n  transform: translateY(-28px);\r\n}\r\n\r\n.auto-oscillate-step.plan {\r\n  color: #c084fc;\r\n}\r\n\r\n.auto-oscillate-step.build {\r\n  color: #fbbf24;\r\n}\r\n\r\n/* =========================================================================\r\n   DROPDOWN PORTAL (FIXED TO VIEWPORT)\r\n   Card Architecture: Harmonized with Mods Manager design language\r\n   ========================================================================= */\r\n.antigravity-agent-dropdown-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  width: 380px !important;\r\n  animation: agentFadeIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n  filter: drop-shadow(0 24px 60px rgba(0, 0, 0, 0.85));\r\n}\r\n\r\n.antigravity-agent-dropdown-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-agent-dropdown-wrapper {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-agent-dropdown {\r\n  width: 380px !important;\r\n  background: #161822 !important;\r\n  background: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 14px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 14px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  pointer-events: auto !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* =========================================================================\r\n   CARD COMPONENT SYSTEM\r\n   ========================================================================= */\r\n.agent-card {\r\n  box-sizing: border-box !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n}\r\n\r\n/* 1. HEADER CARD */\r\n.agent-header-card {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 10px 12px !important;\r\n  margin-bottom: 2px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.agent-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.agent-header-icon {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(122, 162, 247, 0.15) !important;\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.25) !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-title-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.agent-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-main-title {\r\n  font-size: 13.5px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n  margin: 0 !important;\r\n}\r\n\r\n.agent-header-badge {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(122, 162, 247, 0.18) !important;\r\n  color: #7aa2f7 !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\r\n  letter-spacing: 0.3px !important;\r\n}\r\n\r\n.agent-subtitle {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n}\r\n\r\n.agent-close-btn {\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  cursor: pointer !important;\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 6px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  font-size: 12px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.agent-close-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.16) !important;\r\n}\r\n\r\n/* 2. PRIMARY SECTION: CARDS DIRECTAS CON PIN */\r\n.agent-primary-section,\r\n.agent-cards-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-card.primary-hero-card {\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 11px 13px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 12px !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-sizing: border-box !important;\r\n  cursor: pointer !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-card.primary-hero-card:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(122, 162, 247, 0.35) !important;\r\n  transform: translateY(-1px) !important;\r\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;\r\n}\r\n\r\n.agent-card.primary-hero-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 16px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 30%, transparent) !important;\r\n}\r\n\r\n.agent-card-info {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-icon-box {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n.agent-text-wrap {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-title {\r\n  font-size: 13px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.agent-tag {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  letter-spacing: 0.04em !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n/* =========================================================================\r\n   PIN TOGGLE BUTTON COMPONENT\r\n   ========================================================================= */\r\n.agent-pin-btn {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  color: rgba(255, 255, 255, 0.35) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  flex-shrink: 0 !important;\r\n  padding: 0 !important;\r\n}\r\n\r\n.agent-pin-btn:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #ffffff !important;\r\n  transform: scale(1.06) !important;\r\n}\r\n\r\n.agent-pin-btn.active {\r\n  background: rgba(122, 162, 247, 0.2) !important;\r\n  border-color: rgba(122, 162, 247, 0.6) !important;\r\n  color: #7aa2f7 !important;\r\n  box-shadow: 0 0 12px rgba(122, 162, 247, 0.35) !important;\r\n  transform: scale(1.02) !important;\r\n}\r\n\r\n.agent-pin-btn.active svg {\r\n  fill: currentColor !important;\r\n}\r\n\r\n.antigravity-agent-item.selected .agent-pin-btn.active {\r\n  background: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 22%, transparent) !important;\r\n  border-color: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 70%, transparent) !important;\r\n  color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 14px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 45%, transparent) !important;\r\n}\r\n\r\n/* 3. TOGGLE ACORDEÓN CARD */\r\n.agent-toggle-card {\r\n  padding: 0 !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 9px 12px !important;\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 9px !important;\r\n  color: rgba(255, 255, 255, 0.7) !important;\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn:hover {\r\n  background: rgba(255, 255, 255, 0.07) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.catalog-toggle-count {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #a1a1aa !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n/* 4. DRAWER CONTAINER CARD */\r\n.agent-catalog-drawer {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n.agent-catalog-drawer.collapsed {\r\n  display: none !important;\r\n}\r\n\r\n.agent-drawer-card {\r\n  padding: 10px !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  background: rgba(0, 0, 0, 0.35) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n}\r\n\r\n/* LEVEL TABS DENTRO DEL DRAWER */\r\n.agent-level-tabs {\r\n  display: flex !important;\r\n  gap: 4px !important;\r\n  padding: 3px !important;\r\n  background: rgba(0, 0, 0, 0.4) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 7px !important;\r\n}\r\n\r\n.agent-tab-btn {\r\n  flex: 1 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  gap: 6px !important;\r\n  height: 26px !important;\r\n  border: none !important;\r\n  background: transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  border-radius: 5px !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-tab-btn:hover {\r\n  color: #e4e4e7 !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.agent-tab-btn.active {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #ffffff !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.tab-icon {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n/* TAB PANELS */\r\n.agent-tab-content {\r\n  display: none !important;\r\n  max-height: 220px !important;\r\n  overflow-y: auto !important;\r\n  padding-right: 2px !important;\r\n}\r\n\r\n.agent-tab-content.active {\r\n  display: block !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar {\r\n  width: 4px !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar-thumb {\r\n  background: rgba(255, 255, 255, 0.15) !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n/* COMPACT GRID */\r\n.compact-grid {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.compact-agent-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n  padding: 8px 10px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.025) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.compact-agent-card:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  transform: translateY(-0.5px) !important;\r\n}\r\n\r\n.compact-agent-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 10px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 25%, transparent) !important;\r\n}\r\n\r\n.compact-icon-box {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n  border: 1px solid transparent !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.compact-details {\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 1px !important;\r\n}\r\n\r\n.compact-name-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n.compact-name {\r\n  font-size: 11.5px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-sub {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-pin-btn {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n}\r\n\r\n/* 5. FOOTER CARD */\r\n.agent-footer-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  padding: 8px 12px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 8px !important;\r\n}\r\n\r\n.agent-footer-icon {\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-footer-text {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.55) !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n@keyframes agentFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-6px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n";
   }
 
   /**
@@ -3875,17 +5434,121 @@ class ModsManagerMod extends AntigravityMod {
 
 
 // ===================== Git Graph Mod =====================
+
 /**
- * Generates dynamic SVG topology graph paths and nodes for Git branches and commits.
+ * Generates HTML for the Pull Request and CI/CD status card.
+ * @param {Object | null} pr Active Pull Request or null
+ * @param {Object} [status={}] Local Git repository status
+ * @param {Object} [github={}] GitHub remote metadata
+ * @returns {string}
+ */
+function renderPrCiCardHtml(pr, status = {}, github = {}) {
+  if (!pr) {
+    const ahead = status.ahead || 0;
+    const behind = status.behind || 0;
+    const branchName = status.branch || 'main';
+    const syncText = ahead > 0 && behind > 0
+      ? `${ahead} ahead, ${behind} behind`
+      : ahead > 0
+        ? `${ahead} ahead`
+        : behind > 0
+          ? `${behind} behind`
+          : 'Sincronizado';
+
+    return `
+      <div class="git-pr-card git-pr-none">
+        <div class="git-pr-none-left">
+          <span class="git-pr-icon">ᛦ</span>
+          <span class="git-pr-none-text">Sin PR activo en esta rama (${escapeGitHtml(branchName)})</span>
+        </div>
+        <div class="git-pr-none-right">
+          <span class="git-pr-sync-badge" title="Commits respecto al upstream">${escapeGitHtml(syncText)}</span>
+          ${github.webUrl ? `<a href="${github.webUrl}/pull/new/${encodeURIComponent(branchName)}" target="_blank" rel="noopener" class="git-pr-create-link">+ Crear PR</a>` : ''}
+        </div>
+      </div>
+    `.trim();
+  }
+
+  const summary = pr.checksSummary || { total: 0, success: 0, failure: 0, pending: 0, status: 'PENDING' };
+  const statusCls = summary.status === 'SUCCESS'
+    ? 'ci-status-success'
+    : summary.status === 'FAILURE'
+      ? 'ci-status-failure'
+      : 'ci-status-pending';
+
+  const statusLabel = summary.status === 'SUCCESS'
+    ? `✔ CI Passing (${summary.success}/${summary.total})`
+    : summary.status === 'FAILURE'
+      ? `✖ CI Failed (${summary.failure}/${summary.total})`
+      : `⏳ CI In Progress (${summary.success}/${summary.total})`;
+
+  const checksListHtml = (pr.checks || []).map(c => {
+    const isSuccess = c.conclusion === 'SUCCESS';
+    const isFail = c.conclusion === 'FAILURE' || c.conclusion === 'TIMED_OUT';
+    const icon = isSuccess ? '✔' : isFail ? '✖' : '⏳';
+    const checkCls = isSuccess ? 'check-success' : isFail ? 'check-fail' : 'check-pending';
+
+    return `
+      <div class="git-ci-check-item ${checkCls}">
+        <span class="git-ci-check-icon">${icon}</span>
+        <div class="git-ci-check-info">
+          <span class="git-ci-check-name" title="${escapeGitHtml(c.name)}">${escapeGitHtml(c.name)}</span>
+          ${c.workflowName ? `<span class="git-ci-check-wf">${escapeGitHtml(c.workflowName)}</span>` : ''}
+        </div>
+        ${c.detailsUrl ? `<a href="${c.detailsUrl}" target="_blank" rel="noopener" class="git-ci-check-link">Logs ↗</a>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="git-pr-card has-pr" id="antigravity-git-pr-card">
+      <div class="git-pr-card-main">
+        <div class="git-pr-header-col">
+          <div class="git-pr-badge-row">
+            <span class="git-pr-state-badge state-${String(pr.state).toLowerCase()}">${escapeGitHtml(pr.state)}</span>
+            <a href="${pr.url}" target="_blank" rel="noopener" class="git-pr-num-link" title="Open Pull Request on GitHub">
+              #${pr.number}
+            </a>
+            <span class="git-pr-branch-flow">${escapeGitHtml(pr.headRef)} → ${escapeGitHtml(pr.baseRef)}</span>
+          </div>
+          <div class="git-pr-title" title="${escapeGitHtml(pr.title)}">${escapeGitHtml(pr.title)}</div>
+        </div>
+
+        <div class="git-pr-ci-badge-wrap">
+          <button class="git-ci-rollup-btn ${statusCls}" id="antigravity-git-ci-rollup-trigger" title="Ver checks de CI/CD">
+            <span>${statusLabel}</span>
+            <span class="git-ci-caret">▾</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Expandable CI Checks Accordion -->
+      <div class="git-ci-checks-accordion" id="antigravity-git-ci-accordion" style="display: none;">
+        <div class="git-ci-checks-header">
+          <span>Workflows &amp; Branch Checks</span>
+          <span class="git-ci-checks-count">${summary.success}/${summary.total} Completados</span>
+        </div>
+        <div class="git-ci-checks-list">
+          ${checksListHtml || '<div class="git-ci-empty">No hay checks reportados</div>'}
+        </div>
+      </div>
+    </div>
+  `.trim();
+}
+
+
+/**
+ * Generates dynamic SVG topology graph paths and nodes for Git branches and commits
+ * matching the compact VS Code Git Graph aesthetic.
  */
 
 const LANE_COLORS = [
-  '#38bdf8', // Cyan (Main)
+  '#38bdf8', // Sky Blue (Feature / Current branch)
+  '#f97316', // Orange (main / remote)
   '#a855f7', // Purple
   '#22c55e', // Emerald
-  '#f59e0b', // Amber
   '#ec4899', // Pink
-  '#06b6d4'  // Teal
+  '#06b6d4'  // Cyan
 ];
 
 /**
@@ -3901,10 +5564,11 @@ function getLaneColor(lane = 0) {
  * Renders topological SVG curves, lines, and nodes for an array of commits.
  * @param {Array<Object>} commits
  * @param {Object} [options]
- * @param {number} [options.rowHeight=44]
- * @param {number} [options.laneWidth=20]
- * @param {number} [options.startX=20]
- * @param {number} [options.startY=22]
+ * @param {number} [options.rowHeight=26] Base header row height
+ * @param {number} [options.fileRowHeight=22] Height per expanded file row
+ * @param {number} [options.laneWidth=14] Width per branch lane
+ * @param {number} [options.startX=14] Left margin for lane 0
+ * @param {number} [options.startY=13] Y-center of first row
  * @returns {string} SVG markup string
  */
 function renderGitGraphSvg(commits = [], options = {}) {
@@ -3912,10 +5576,11 @@ function renderGitGraphSvg(commits = [], options = {}) {
     return '';
   }
 
-  const rowHeight = options.rowHeight ?? 44;
-  const laneWidth = options.laneWidth ?? 20;
-  const startX = options.startX ?? 20;
-  const startY = options.startY ?? 22;
+  const rowHeight = options.rowHeight ?? 26;
+  const fileRowHeight = options.fileRowHeight ?? 22;
+  const laneWidth = options.laneWidth ?? 14;
+  const startX = options.startX ?? (options.laneWidth ? options.laneWidth : 14);
+  const startY = options.startY ?? 13;
 
   let maxLane = 0;
   for (const c of commits) {
@@ -3924,37 +5589,64 @@ function renderGitGraphSvg(commits = [], options = {}) {
     }
   }
 
-  const svgWidth = startX + (maxLane + 1) * laneWidth + 10;
-  const svgHeight = commits.length * rowHeight;
+  const svgWidth = Math.max(32, startX + (maxLane + 1) * laneWidth + 8);
+
+  // Compute Y-center coordinates for each commit taking expanded files into account
+  const commitCoords = [];
+  let currentY = 0;
+
+  for (let i = 0; i < commits.length; i++) {
+    const commit = commits[i];
+    const isExpanded = !!commit.expanded;
+    const fileCount = Array.isArray(commit.files) ? commit.files.length : 0;
+    const extraHeight = isExpanded ? fileCount * fileRowHeight : 0;
+
+    const cy = currentY + startY;
+    commitCoords.push({
+      cy,
+      lane: commit.lane ?? 0,
+      totalHeight: rowHeight + extraHeight
+    });
+
+    currentY += rowHeight + extraHeight;
+  }
+
+  const svgHeight = Math.max(currentY, commits.length * rowHeight);
 
   let pathsMarkup = '';
   let nodesMarkup = '';
 
   for (let i = 0; i < commits.length; i++) {
     const commit = commits[i];
-    const lane = commit.lane ?? 0;
+    const coord = commitCoords[i];
+    const lane = coord.lane;
     const cx = startX + lane * laneWidth;
-    const cy = startY + i * rowHeight;
+    const cy = coord.cy;
     const color = getLaneColor(lane);
 
-    // Draw connecting routes down to next rows
+    // Draw connecting routes down to next commit rows
     if (Array.isArray(commit.routes)) {
       for (const route of commit.routes) {
+        const nextIdx = i + 1;
+        if (nextIdx >= commits.length) continue;
+
+        const nextCoord = commitCoords[nextIdx];
         const fromX = startX + route.fromLane * laneWidth;
         const fromY = cy;
         const toX = startX + route.toLane * laneWidth;
-        const toY = cy + rowHeight;
+        const toY = nextCoord.cy;
         const routeColor = getLaneColor(Math.min(route.fromLane, route.toLane));
 
         if (route.fromLane === route.toLane) {
-          // Straight trunk line
+          // Straight vertical trunk line
           pathsMarkup += `
             <line x1="${fromX}" y1="${fromY}" x2="${toX}" y2="${toY}" stroke="${routeColor}" stroke-width="2" stroke-linecap="round"/>
           `;
         } else {
           // Curved Bezier branch or merge
-          const cpY1 = fromY + rowHeight * 0.5;
-          const cpY2 = toY - rowHeight * 0.5;
+          const deltaY = toY - fromY;
+          const cpY1 = fromY + deltaY * 0.45;
+          const cpY2 = toY - deltaY * 0.45;
           pathsMarkup += `
             <path d="M ${fromX} ${fromY} C ${fromX} ${cpY1}, ${toX} ${cpY2}, ${toX} ${toY}" fill="none" stroke="${routeColor}" stroke-width="2" stroke-linecap="round"/>
           `;
@@ -3963,25 +5655,32 @@ function renderGitGraphSvg(commits = [], options = {}) {
     }
 
     // Node Circle
-    const isHead = Array.isArray(commit.refs) && commit.refs.some(r => r.includes('HEAD'));
+    const isHead = (Array.isArray(commit.refs) && commit.refs.some(r => r.includes('HEAD'))) || i === 0;
     if (isHead) {
+      // Glowing halo ring around current/HEAD commit
       nodesMarkup += `
-        <circle cx="${cx}" cy="${cy}" r="7" fill="${color}" opacity="0.35"/>
+        <circle cx="${cx}" cy="${cy}" r="6.5" fill="none" stroke="${color}" stroke-width="1.8" class="git-node-halo"/>
+        <circle cx="${cx}" cy="${cy}" r="3" fill="${color}" class="git-node-head" data-hash="${commit.hash}"/>
+      `;
+    } else {
+      nodesMarkup += `
+        <circle cx="${cx}" cy="${cy}" r="3.5" fill="${color}" stroke="#181a1f" stroke-width="1.5" class="git-node" data-hash="${commit.hash}"/>
       `;
     }
-
-    nodesMarkup += `
-      <circle cx="${cx}" cy="${cy}" r="${isHead ? 5 : 4}" fill="${color}" stroke="#0f111a" stroke-width="2" class="git-node" data-hash="${commit.hash}"/>
-    `;
   }
 
   return `
-    <svg class="git-graph-svg" width="${svgWidth}" height="${svgHeight}" viewBox="0 0 ${svgWidth} ${svgHeight}">
-      <g class="git-routes">${pathsMarkup}</g>
-      <g class="git-nodes">${nodesMarkup}</g>
+    <svg class="git-graph-svg" width="${svgWidth}" height="${svgHeight}" viewBox="0 0 ${svgWidth} ${svgHeight}" style="min-width: ${svgWidth}px; height: ${svgHeight}px;" xmlns="http://www.w3.org/2000/svg">
+      <g class="git-graph-routes">
+        ${pathsMarkup}
+      </g>
+      <g class="git-graph-nodes">
+        ${nodesMarkup}
+      </g>
     </svg>
   `.trim();
 }
+
 
 
 
@@ -3992,7 +5691,7 @@ function renderGitGraphSvg(commits = [], options = {}) {
 function renderGitGraphTabButton() {
   return `
     <div class="antigravity-git-tab-wrapper">
-      <button class="antigravity-git-tab-btn" id="antigravity-git-tab-trigger" title="Git & GitHub Graph">
+      <button class="antigravity-git-tab-btn" id="antigravity-git-tab-trigger" title="Git &amp; GitHub Graph">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="6" y1="3" x2="6" y2="15"></line>
           <circle cx="6" cy="18" r="3"></circle>
@@ -4007,11 +5706,13 @@ function renderGitGraphTabButton() {
 }
 
 /**
- * Generates HTML for the full Git & GitHub DAG visualizer panel.
+ * Generates HTML for the compact VS Code-style Git Graph visualizer panel.
  * @param {Object} context
  * @param {Array<Object>} [context.commits=[]]
  * @param {Object} [context.status={}]
  * @param {Object} [context.github={}]
+ * @param {Object} [context.pullRequest=null]
+ * @param {Object} [context.branches={ local: [], remote: [] }]
  * @param {string} [context.activeRepo='']
  * @returns {string}
  */
@@ -4019,78 +5720,184 @@ function renderGitGraphPanelHtml(context = {}) {
   const commits = Array.isArray(context.commits) ? context.commits : [];
   const status = context.status || { branch: 'main', isClean: true, ahead: 0, behind: 0 };
   const github = context.github || { isGitHub: false };
+  const pullRequest = context.pullRequest || null;
+  const branches = context.branches || { local: [], remote: [] };
+  const localBranches = Array.isArray(branches.local) ? branches.local : [];
+  const remoteBranches = Array.isArray(branches.remote) ? branches.remote : [];
   const repoName = context.activeRepo || (github.fullName || 'workspace');
 
-  const svgGraph = renderGitGraphSvg(commits, { rowHeight: 44, laneWidth: 18, startX: 16 });
+  // Commits are COLLAPSED by default
+  commits.forEach((c) => {
+    if (c.expanded === undefined) {
+      c.expanded = false;
+    }
+  });
 
-  // Generate commit list rows
+  let syncBadgeHtml = '';
+  if (status.ahead > 0 || status.behind > 0) {
+    const parts = [];
+    if (status.ahead > 0) parts.push(`⇡${status.ahead}`);
+    if (status.behind > 0) parts.push(`⇣${status.behind}`);
+    syncBadgeHtml = `<span class="git-sync-badge ${status.ahead > 0 ? 'is-ahead' : ''} ${status.behind > 0 ? 'is-behind' : ''}" title="${status.ahead} por subir (ahead), ${status.behind} por bajar (behind)">${parts.join(' ')}</span>`;
+  } else if (status.upstream) {
+    syncBadgeHtml = `<span class="git-sync-badge is-synced" title="Sincronizado con ${escapeGitHtml(status.upstream)}">✓ Synced</span>`;
+  }
+
+  const svgGraph = renderGitGraphSvg(commits, { rowHeight: 26, fileRowHeight: 22, laneWidth: 14, startX: 14 });
+  const prCiHtml = renderPrCiCardHtml(pullRequest, status, github);
+
+  // Generate branches drawer list items
+  const localBranchesHtml = localBranches.map(b => {
+    const isCurrent = b.isCurrent || b.name === status.branch;
+    return `
+      <div class="git-branch-drawer-row ${isCurrent ? 'is-active-branch' : ''}" data-branch="${escapeGitHtml(b.name)}" data-type="local">
+        <span class="git-icon-dot">${isCurrent ? '●' : '○'}</span>
+        <span class="git-branch-drawer-name">${escapeGitHtml(b.name)}</span>
+        ${b.hash ? `<span class="git-branch-drawer-hash">${escapeGitHtml(b.hash)}</span>` : ''}
+        ${isCurrent ? '<span class="git-branch-current-badge">HEAD</span>' : ''}
+      </div>
+    `;
+  }).join('');
+
+  const remoteBranchesHtml = remoteBranches.map(b => {
+    return `
+      <div class="git-branch-drawer-row is-remote-branch" data-branch="${escapeGitHtml(b.name)}" data-type="remote">
+        <span class="git-icon-cloud">☁</span>
+        <span class="git-branch-drawer-name">${escapeGitHtml(b.shortName || b.name)}</span>
+        ${b.hash ? `<span class="git-branch-drawer-hash">${escapeGitHtml(b.hash)}</span>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  // Generate commit list items
   const commitRowsHtml = commits.map((c, idx) => {
     const isSelected = idx === 0;
-    const author = c.author || { name: 'Unknown', email: '', avatarUrl: '' };
-    const commitUrl = github.isGitHub && typeof github.getCommitUrl === 'function' ? github.getCommitUrl(c.hash) : '';
+    const isExpanded = !!c.expanded;
+    const files = Array.isArray(c.files) ? c.files : [];
+    const hasOrigin = (c.refs || []).some(r => r.includes('origin/'));
+    const commitType = hasOrigin ? 'remote' : 'local';
+    const isUnpushed = c.syncStatus === 'ahead' || !!c.isUnpushed;
+    const isUnpulled = c.syncStatus === 'behind' || !!c.isUnpulled;
+    let syncPillHtml = '';
+    if (isUnpushed) {
+      syncPillHtml = `<span class="git-pill-sync git-pill-unpushed" title="Commit local pendiente de push">⇡ Unpushed</span>`;
+    } else if (isUnpulled) {
+      syncPillHtml = `<span class="git-pill-sync git-pill-unpulled" title="Commit remoto pendiente de pull">⇣ Unpulled</span>`;
+    }
+
+    // Ref Badges (branch pills)
     const refsHtml = (c.refs || []).map(ref => {
       const isHead = ref.includes('HEAD');
+      const isOrigin = ref.includes('origin/');
       const isTag = ref.includes('tag:');
-      const cls = isHead ? 'git-ref-head' : isTag ? 'git-ref-tag' : 'git-ref-branch';
-      return `<span class="git-ref-badge ${cls}">${escapeGitHtml(ref)}</span>`;
+      const cleanRef = ref.replace('HEAD -> ', '').replace('tag: ', '');
+
+      if (isOrigin) {
+        return `<span class="git-pill-branch git-pill-origin" title="${escapeGitHtml(ref)}"><span class="git-icon-cloud">☁</span>${escapeGitHtml(cleanRef)}</span>`;
+      }
+      return `<span class="git-pill-branch ${isHead ? 'git-pill-head' : 'git-pill-local'}" title="${escapeGitHtml(ref)}"><span class="git-icon-dot">⦿</span>${escapeGitHtml(cleanRef)}</span>`;
     }).join('');
 
+    // Inline file diff list
+    const filesListHtml = files.map(f => {
+      const extCls = getExtClass(f.ext);
+      const statusCls = f.status === 'A' ? 'status-added' : f.status === 'D' ? 'status-deleted' : 'status-modified';
+      return `
+        <div class="git-file-row">
+          <span class="git-file-ext ${extCls}">${escapeGitHtml(f.ext)}</span>
+          <span class="git-file-name" title="${escapeGitHtml(f.path)}">${escapeGitHtml(f.fileName)}</span>
+          <span class="git-file-dir">${escapeGitHtml(f.dir)}</span>
+          <span class="git-file-status ${statusCls}">${escapeGitHtml(f.status)}</span>
+        </div>
+      `;
+    }).join('');
+
+    const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(c.hash) : '';
+    const author = c.author || { name: 'Unknown', email: '', avatarUrl: '' };
+
     return `
-      <div 
-        class="git-commit-row ${isSelected ? 'selected' : ''}" 
-        data-hash="${c.hash}" 
-        data-short-hash="${c.shortHash || c.hash.slice(0, 7)}"
-        data-author="${escapeGitHtml(author.name)}"
-        data-email="${escapeGitHtml(author.email || '')}"
-        data-avatar="${author.avatarUrl || ''}"
-        data-commit-url="${commitUrl}"
-        data-subject="${escapeGitHtml(c.subject || '')}"
-        data-index="${idx}" 
-        tabindex="0"
-      >
-        <div class="git-commit-col-info">
-          <div class="git-commit-top-row">
-            ${refsHtml}
-            <span class="git-commit-hash">${c.shortHash}</span>
-            <span class="git-commit-time">${c.relativeDate || ''}</span>
+      <div class="git-commit-item ${isExpanded ? 'is-expanded' : ''}" data-hash="${c.hash}" data-index="${idx}" data-commit-type="${commitType}">
+        <div class="git-commit-row ${isSelected ? 'selected' : ''}" 
+             data-hash="${c.hash}" 
+             data-index="${idx}" 
+             data-short-hash="${c.shortHash}" 
+             data-commit-url="${commitUrl}" 
+             data-email="${escapeGitHtml(author.email)}" 
+             data-author="${escapeGitHtml(author.name)}" 
+             data-avatar="${escapeGitHtml(author.avatarUrl)}" 
+             data-date="${escapeGitHtml(c.relativeDate || '')}" 
+             data-subject="${escapeGitHtml(c.subject)}" 
+             data-files-count="${files.length}" 
+             tabindex="0">
+          <div class="git-commit-main">
+            <span class="git-commit-chevron ${files.length > 0 ? 'has-files' : ''}">${files.length > 0 ? (isExpanded ? '▾' : '▸') : '•'}</span>
+            <span class="git-commit-subject" title="${escapeGitHtml(c.subject)}">${escapeGitHtml(c.subject)}</span>
+            <div class="git-commit-badges">
+              ${refsHtml}${syncPillHtml}
+              ${files.length > 0 ? `<button class="git-pill-files" title="Clic para expandir/colapsar ${files.length} archivos">📄${files.length}</button>` : ''}
+            </div>
           </div>
-          <div class="git-commit-subject" title="${escapeGitHtml(c.subject)}">${escapeGitHtml(c.subject)}</div>
-          <div class="git-commit-author-row">
-            <img class="git-author-avatar" src="${author.avatarUrl}" alt="${escapeGitHtml(author.name)}" loading="lazy"/>
-            <span class="git-author-name">${escapeGitHtml(author.name)}</span>
-          </div>
+        </div>
+        <div class="git-commit-files-container" style="display: ${isExpanded ? 'flex' : 'none'};">
+          ${filesListHtml}
         </div>
       </div>
     `;
   }).join('');
 
-  const headCommit = commits[0] || null;
-
   return `
     <div class="antigravity-git-panel" id="antigravity-git-panel-root">
-      <!-- Header Bar -->
+      <!-- VS Code Style Minimal Header -->
       <div class="git-panel-header">
         <div class="git-panel-title-wrap">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="git-header-icon">
-            <line x1="6" y1="3" x2="6" y2="15"></line>
-            <circle cx="6" cy="18" r="3"></circle>
-            <circle cx="6" cy="6" r="3"></circle>
-            <path d="M6 9a9 9 0 0 1 9 9"></path>
-            <circle cx="18" cy="18" r="3"></circle>
-          </svg>
-          <span class="git-repo-badge" title="Active Repository">${escapeGitHtml(repoName)}</span>
-          <span class="git-branch-badge">${escapeGitHtml(status.branch)}${status.isClean ? '' : '*'}</span>
+          <span class="git-header-caret">⌄</span>
+          <span class="git-header-title">Graph</span>
+          <span class="git-header-repo" title="Active Repository">${escapeGitHtml(repoName)}</span>
+          <span class="git-branch-pill">${escapeGitHtml(status.branch)}${status.isClean ? '' : '*'}</span>
+          ${syncBadgeHtml}
         </div>
         <div class="git-header-actions">
-          ${status.ahead > 0 ? `<span class="git-sync-badge ahead" title="Ahead of upstream">↑${status.ahead}</span>` : ''}
-          ${status.behind > 0 ? `<span class="git-sync-badge behind" title="Behind upstream">↓${status.behind}</span>` : ''}
-          ${github.isGitHub ? `<a href="${github.webUrl}" target="_blank" rel="noopener" class="git-github-link" title="Open on GitHub">GitHub ↗</a>` : ''}
-          <button class="git-refresh-btn" id="antigravity-git-refresh-btn" title="Refresh Git status">⟳</button>
-          <button class="git-close-btn" id="antigravity-git-close-btn" title="Close Git Graph">✕</button>
+          <button class="git-tool-btn" id="antigravity-git-toggle-all-btn" title="Expandir/Colapsar todos los archivos">⇕</button>
+          <button class="git-tool-btn" id="antigravity-git-refresh-btn" title="Refresh Git &amp; GitHub status">↻</button>
+          <button class="git-tool-btn git-tool-close" id="antigravity-git-close-btn" title="Close Git Graph">✕</button>
         </div>
       </div>
 
-      <!-- Graph & Commit Tree Viewport -->
+      <!-- Pull Request & CI/CD Status Card -->
+      ${prCiHtml}
+
+      <!-- Branches Filter & Drawer Trigger -->
+      <div class="git-branches-filter-bar" id="antigravity-git-branches-bar">
+        <div class="git-branches-pills">
+          <button class="git-filter-pill active" data-branch-filter="all" title="Ver todos los commits">
+            Todas (${commits.length})
+          </button>
+          <button class="git-filter-pill" data-branch-filter="local" title="Ver solo ramas locales">
+            <span class="git-icon-dot">⦿</span> Locales (${localBranches.length})
+          </button>
+          <button class="git-filter-pill" data-branch-filter="remote" title="Ver solo ramas remotas de GitHub">
+            <span class="git-icon-cloud">☁</span> GitHub (${remoteBranches.length})
+          </button>
+        </div>
+        <button class="git-branches-drawer-btn" id="antigravity-git-branches-drawer-btn" title="Desplegar lista de ramas">
+          <span>Ramas</span>
+          <span class="git-drawer-caret">▾</span>
+        </button>
+      </div>
+
+      <!-- Collapsible Branches Drawer -->
+      <div class="git-branches-drawer" id="antigravity-git-branches-drawer" style="display: none;">
+        <div class="git-branches-section-title">Ramas Locales (${localBranches.length})</div>
+        <div class="git-branches-list-wrap">
+          ${localBranchesHtml || '<div class="git-branch-empty">No se detectaron ramas locales</div>'}
+        </div>
+        <div class="git-branches-section-title">Ramas Remotas / GitHub (${remoteBranches.length})</div>
+        <div class="git-branches-list-wrap">
+          ${remoteBranchesHtml || '<div class="git-branch-empty">No se detectaron ramas remotas</div>'}
+        </div>
+      </div>
+
+      <!-- Graph & Commits Viewport -->
       <div class="git-graph-container">
         <div class="git-svg-column">
           ${svgGraph}
@@ -4100,10 +5907,8 @@ function renderGitGraphPanelHtml(context = {}) {
         </div>
       </div>
 
-      <!-- Bottom Selected Commit Inspector -->
-      <div class="git-commit-inspector" id="antigravity-git-inspector">
-        ${headCommit ? renderInspectorCard(headCommit, github) : '<div class="git-inspector-empty">No commit selected</div>'}
-      </div>
+      <!-- Redesigned High-Quality Commit Inspector Mount -->
+      <div class="git-inspector-mount" id="antigravity-git-inspector" style="display: none;"></div>
     </div>
   `.trim();
 }
@@ -4116,24 +5921,64 @@ function renderGitGraphPanelHtml(context = {}) {
  */
 function renderInspectorCard(commit, github = {}) {
   const author = commit.author || { name: 'Unknown', email: '', avatarUrl: '' };
-  const commitUrl = github.isGitHub && typeof github.getCommitUrl === 'function' ? github.getCommitUrl(commit.hash) : '';
+  const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(commit.hash) : '';
+  const initials = (author.name || 'U').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
+  const shortHash = commit.shortHash || (commit.hash ? commit.hash.slice(0, 7) : '');
+  const filesCount = Array.isArray(commit.files) ? commit.files.length : 0;
+  const relativeTime = commit.relativeDate || '';
+
+  let syncInspectorBadge = '';
+  if (commit.syncStatus === 'ahead' || commit.isUnpushed) {
+    syncInspectorBadge = '<span class="git-inspector-sync-badge is-unpushed" title="Commit local pendiente de push">⇡ Unpushed</span>';
+  } else if (commit.syncStatus === 'behind' || commit.isUnpulled) {
+    syncInspectorBadge = '<span class="git-inspector-sync-badge is-unpulled" title="Commit remoto pendiente de pull">⇣ Unpulled</span>';
+  }
 
   return `
-    <div class="git-inspector-header">
-      <div class="git-inspector-author">
-        <img class="git-inspector-avatar" src="${author.avatarUrl}" alt="${escapeGitHtml(author.name)}"/>
-        <div class="git-inspector-author-col">
-          <span class="git-inspector-author-name">${escapeGitHtml(author.name)}</span>
-          ${author.email ? `<span class="git-inspector-author-email">&lt;${escapeGitHtml(author.email)}&gt;</span>` : ''}
+    <div class="git-inspector-card">
+      <div class="git-inspector-top">
+        <div class="git-inspector-author-group">
+          <div class="git-avatar-frame">
+            ${author.avatarUrl ? `<img class="git-inspector-avatar" src="${author.avatarUrl}" alt="${escapeGitHtml(author.name)}" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex';"/>` : ''}
+            <div class="git-inspector-avatar-fallback" style="${author.avatarUrl ? 'display:none;' : 'display:flex;'}">${escapeGitHtml(initials)}</div>
+          </div>
+          <div class="git-inspector-author-text">
+            <div class="git-inspector-name-row">
+              <span class="git-inspector-author-name">${escapeGitHtml(author.name)}</span>
+              ${relativeTime ? `<span class="git-inspector-date">${escapeGitHtml(relativeTime)}</span>` : ''}
+            </div>
+            ${author.email ? `<span class="git-inspector-author-email">&lt;${escapeGitHtml(author.email)}&gt;</span>` : ''}
+          </div>
+        </div>
+
+        <div class="git-inspector-meta-group">
+          ${syncInspectorBadge}
+          <span class="git-inspector-hash-pill" title="Hash completo: ${escapeGitHtml(commit.hash)}">${escapeGitHtml(shortHash)}</span>
+          ${commitUrl ? `<a href="${commitUrl}" target="_blank" rel="noopener" class="git-inspector-btn-gh" title="Ver commit en GitHub">GitHub ↗</a>` : ''}
+          <button class="git-inspector-btn-close" id="antigravity-git-inspector-close-btn" title="Cerrar inspector">✕</button>
         </div>
       </div>
-      <div class="git-inspector-hash-wrap">
-        <span class="git-inspector-hash" title="${escapeGitHtml(commit.hash)}">${escapeGitHtml(commit.shortHash || commit.hash.slice(0, 7))}</span>
-        ${commitUrl ? `<a href="${commitUrl}" target="_blank" rel="noopener" class="git-inspector-gh-link">View Commit ↗</a>` : ''}
-      </div>
+
+      <div class="git-inspector-subject-line">${escapeGitHtml(commit.subject)}</div>
+
+      ${filesCount > 0 ? `
+        <div class="git-inspector-footer-stats">
+          <span class="git-inspector-files-badge">📄 ${filesCount} archivo${filesCount > 1 ? 's' : ''} modificado${filesCount > 1 ? 's' : ''}</span>
+        </div>
+      ` : ''}
     </div>
-    <div class="git-inspector-subject">${escapeGitHtml(commit.subject)}</div>
   `.trim();
+}
+
+function getExtClass(ext = '') {
+  const e = String(ext).toUpperCase();
+  if (e === 'JS' || e === 'MJS' || e === 'CJS') return 'ext-js';
+  if (e === 'TS' || e === 'TSX') return 'ext-ts';
+  if (e === 'JSON') return 'ext-json';
+  if (e === 'CSS' || e === 'SCSS') return 'ext-css';
+  if (e === 'MD') return 'ext-md';
+  if (e === 'HTML') return 'ext-html';
+  return 'ext-default';
 }
 
 function escapeGitHtml(str = '') {
@@ -4155,10 +6000,15 @@ function escapeGitHtml(str = '') {
 
 
 /**
- * Mod providing live topological Git branch & commit visualization in the Auxiliary Pane.
+ * Mod providing live topological Git branch & commit visualization
+ * alongside GitHub Pull Requests and CI/CD status in the Auxiliary Pane.
  */
 class GitGraphMod extends AntigravityMod {
-  constructor() {
+  /**
+   * @param {Object} [options]
+   * @param {Object} [options.initialContext] Pre-computed VCS overview
+   */
+  constructor(options = {}) {
     super({
       id: 'git-graph',
       name: 'Git & GitHub Topological Graph',
@@ -4167,7 +6017,8 @@ class GitGraphMod extends AntigravityMod {
       priority: 60
     });
 
-    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY GIT & GITHUB GRAPH MOD - STYLES\r\n   Native Auxiliary Pane Tab & Lazygit-style DAG visualizer\r\n   ========================================================================= */\r\n\r\n/* Tab Button in Auxiliary Pane Header */\r\n.antigravity-git-tab-wrapper {\r\n  display: inline-flex;\r\n  align-items: center;\r\n}\r\n\r\n.antigravity-git-tab-btn {\r\n  height: 28px !important;\r\n  padding: 0 8px !important;\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #94a3b8 !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.antigravity-git-tab-btn:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  color: #f8fafc !important;\r\n}\r\n\r\n.antigravity-git-tab-btn.active {\r\n  background: #1e2438 !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n/* Full Auxiliary Panel Body */\r\n.antigravity-git-panel {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  background: #0f111a !important;\r\n  color: #e2e8f0 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, monospace, sans-serif !important;\r\n  overflow: hidden !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* Header Bar */\r\n.git-panel-header {\r\n  height: 40px !important;\r\n  min-height: 40px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  padding: 0 12px !important;\r\n  background: #151824 !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-panel-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-header-icon {\r\n  color: #38bdf8 !important;\r\n}\r\n\r\n.git-repo-badge {\r\n  font-size: 12px !important;\r\n  font-weight: 700 !important;\r\n  color: #f1f5f9 !important;\r\n  letter-spacing: -0.01em !important;\r\n}\r\n\r\n.git-branch-badge {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: #18273d !important;\r\n  border: 1px solid rgba(14, 165, 233, 0.4) !important;\r\n  color: #38bdf8 !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-header-actions {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-sync-badge {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n.git-sync-badge.ahead {\r\n  background: #064e3b !important;\r\n  color: #34d399 !important;\r\n}\r\n\r\n.git-sync-badge.behind {\r\n  background: #7f1d1d !important;\r\n  color: #f87171 !important;\r\n}\r\n\r\n.git-github-link {\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  color: #94a3b8 !important;\r\n  text-decoration: none !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n.git-github-link:hover {\r\n  color: #f1f5f9 !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-refresh-btn {\r\n  background: transparent !important;\r\n  border: none !important;\r\n  color: #94a3b8 !important;\r\n  font-size: 14px !important;\r\n  cursor: pointer !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n.git-refresh-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n/* Graph & Commit Tree Split Container */\r\n.git-graph-container {\r\n  display: flex !important;\r\n  flex: 1 1 auto !important;\r\n  overflow-y: auto !important;\r\n  overflow-x: hidden !important;\r\n  position: relative !important;\r\n  background: #0d0f17 !important;\r\n}\r\n\r\n.git-svg-column {\r\n  flex: 0 0 auto !important;\r\n  position: sticky !important;\r\n  left: 0 !important;\r\n  z-index: 2 !important;\r\n}\r\n\r\n.git-commits-column {\r\n  flex: 1 1 auto !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n/* Commit Row: exactly 44px height to match SVG topology node alignment */\r\n.git-commit-row {\r\n  height: 44px !important;\r\n  min-height: 44px !important;\r\n  max-height: 44px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  padding: 0 8px 0 4px !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.03) !important;\r\n  cursor: pointer !important;\r\n  transition: background 0.1s ease !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.git-commit-row:hover {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.git-commit-row.selected {\r\n  background: #182238 !important;\r\n  border-left: 2px solid #38bdf8 !important;\r\n}\r\n\r\n.git-commit-col-info {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  width: 100% !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-commit-top-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-ref-badge {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 4px !important;\r\n  border-radius: 3px !important;\r\n  line-height: 1 !important;\r\n}\r\n\r\n.git-ref-head {\r\n  background: #0284c7 !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.git-ref-branch {\r\n  background: #1e293b !important;\r\n  border: 1px solid #38bdf8 !important;\r\n  color: #7dd3fc !important;\r\n}\r\n\r\n.git-ref-tag {\r\n  background: #064e3b !important;\r\n  border: 1px solid #34d399 !important;\r\n  color: #a7f3d0 !important;\r\n}\r\n\r\n.git-commit-hash {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n}\r\n\r\n.git-commit-time {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n  margin-left: auto !important;\r\n}\r\n\r\n.git-commit-subject {\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  color: #cbd5e1 !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.git-commit-author-row {\r\n  display: none !important; /* available in inspector */\r\n}\r\n\r\n/* Bottom Inspector */\r\n.git-commit-inspector {\r\n  flex: 0 0 auto !important;\r\n  height: 90px !important;\r\n  min-height: 90px !important;\r\n  background: #141724 !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  padding: 8px 12px !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  justify-content: space-between !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.git-inspector-header {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.git-inspector-author {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-inspector-avatar {\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 50% !important;\r\n  background: #1e293b !important;\r\n}\r\n\r\n.git-inspector-author-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n.git-inspector-author-name {\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  color: #f8fafc !important;\r\n}\r\n\r\n.git-inspector-author-email {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n}\r\n\r\n.git-inspector-hash-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-inspector-hash {\r\n  font-family: monospace !important;\r\n  font-size: 11px !important;\r\n  color: #38bdf8 !important;\r\n}\r\n\r\n.git-inspector-gh-link {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  color: #7dd3fc !important;\r\n  text-decoration: none !important;\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n.git-inspector-subject {\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #e2e8f0 !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.git-inspector-empty {\r\n  font-size: 11px !important;\r\n  color: #64748b !important;\r\n  text-align: center !important;\r\n  padding-top: 24px !important;\r\n}\r\n";
+    this.initialContext = options.initialContext || {};
+    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY GIT & GITHUB GRAPH MOD - VS CODE STYLE\r\n   Ultra-compact, lightweight DAG commit tree & inline file diff visualizer\r\n   ========================================================================= */\r\n\r\n/* Tab Button in Auxiliary Pane Header */\r\n.antigravity-git-tab-wrapper {\r\n  display: inline-flex;\r\n  align-items: center;\r\n}\r\n\r\n.antigravity-git-tab-btn {\r\n  height: 28px !important;\r\n  padding: 0 8px !important;\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #94a3b8 !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.antigravity-git-tab-btn:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  color: #f8fafc !important;\r\n}\r\n\r\n.antigravity-git-tab-btn.active {\r\n  background: #1e2438 !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n/* Full Auxiliary Panel Body */\r\n.antigravity-git-panel {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  background: #181a1f !important;\r\n  color: #e2e8f0 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, monospace, sans-serif !important;\r\n  overflow: hidden !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* VS Code Minimal Header Bar */\r\n.git-panel-header {\r\n  height: 32px !important;\r\n  min-height: 32px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  padding: 0 10px !important;\r\n  background: #1e222b !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.git-panel-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-header-caret {\r\n  font-size: 12px !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n.git-header-title {\r\n  font-size: 12px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-header-repo {\r\n  font-size: 11px !important;\r\n  color: #64748b !important;\r\n  max-width: 140px !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-branch-pill {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-header-actions {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pill-auto {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 3px !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-tool-btn {\r\n  background: transparent !important;\r\n  border: none !important;\r\n  color: #94a3b8 !important;\r\n  font-size: 12px !important;\r\n  cursor: pointer !important;\r\n  padding: 2px 4px !important;\r\n  border-radius: 4px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n}\r\n\r\n.git-tool-btn:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-tool-close:hover {\r\n  background: rgba(239, 68, 68, 0.2) !important;\r\n  color: #ef4444 !important;\r\n}\r\n\r\n/* Graph & Commits Viewport */\r\n.git-graph-container {\r\n  display: flex !important;\r\n  flex: 1 1 0% !important;\r\n  overflow-y: auto !important;\r\n  overflow-x: hidden !important;\r\n  position: relative !important;\r\n  scrollbar-width: thin !important;\r\n  scrollbar-color: rgba(255, 255, 255, 0.15) transparent !important;\r\n}\r\n\r\n.git-graph-container::-webkit-scrollbar {\r\n  width: 6px !important;\r\n}\r\n\r\n.git-graph-container::-webkit-scrollbar-thumb {\r\n  background: rgba(255, 255, 255, 0.15) !important;\r\n  border-radius: 3px !important;\r\n}\r\n\r\n.git-svg-column {\r\n  flex-shrink: 0 !important;\r\n  position: relative !important;\r\n}\r\n\r\n.git-graph-svg {\r\n  display: block !important;\r\n}\r\n\r\n.git-commits-column {\r\n  flex: 1 1 0% !important;\r\n  min-width: 0 !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n/* Individual Commit Item */\r\n.git-commit-item {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  width: 100% !important;\r\n}\r\n\r\n.git-commit-row {\r\n  height: 26px !important;\r\n  min-height: 26px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  padding: 0 8px 0 4px !important;\r\n  cursor: pointer !important;\r\n  border-radius: 0 !important;\r\n  transition: background 0.1s ease !important;\r\n  user-select: none !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-commit-row:hover {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.git-commit-row.selected {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n}\r\n\r\n.git-commit-main {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  min-width: 0 !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-commit-subject {\r\n  font-size: 12px !important;\r\n  color: #e2e8f0 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-commit-badges {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n/* Branch & Ref Badges (VS Code Pill Style) */\r\n.git-pill-branch {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 10px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  white-space: nowrap !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-pill-local {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.git-pill-head {\r\n  background: rgba(56, 189, 248, 0.22) !important;\r\n  color: #7dd3fc !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.5) !important;\r\n  box-shadow: 0 0 6px rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-pill-origin {\r\n  background: rgba(249, 115, 22, 0.15) !important;\r\n  color: #fb923c !important;\r\n  border: 1px solid rgba(249, 115, 22, 0.35) !important;\r\n}\r\n\r\n.git-pill-files {\r\n  font-size: 9px !important;\r\n  color: #64748b !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  padding: 1px 4px !important;\r\n  border-radius: 3px !important;\r\n}\r\n\r\n.git-icon-cloud {\r\n  font-size: 10px !important;\r\n}\r\n\r\n.git-icon-dot {\r\n  font-size: 9px !important;\r\n}\r\n\r\n.git-commit-chevron {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n  width: 12px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-commit-chevron.has-files {\r\n  color: #94a3b8 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n/* Expandable Inline File Diff List */\r\n.git-commit-files-container {\r\n  display: none !important;\r\n  flex-direction: column !important;\r\n  background: rgba(0, 0, 0, 0.3) !important;\r\n  border-left: 2px solid rgba(56, 189, 248, 0.35) !important;\r\n  margin-left: 14px !important;\r\n  padding: 2px 0 !important;\r\n}\r\n\r\n.git-commit-item.is-expanded > .git-commit-files-container {\r\n  display: flex !important;\r\n}\r\n\r\n.git-file-row {\r\n  height: 22px !important;\r\n  min-height: 22px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  padding: 0 10px 0 8px !important;\r\n  font-size: 11px !important;\r\n  gap: 8px !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-file-row:hover {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.git-file-ext {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 4px !important;\r\n  border-radius: 3px !important;\r\n  font-family: monospace !important;\r\n  letter-spacing: -0.02em !important;\r\n}\r\n\r\n.ext-js {\r\n  background: rgba(234, 179, 8, 0.18) !important;\r\n  color: #facc15 !important;\r\n  border: 1px solid rgba(234, 179, 8, 0.35) !important;\r\n}\r\n\r\n.ext-ts {\r\n  background: rgba(59, 130, 246, 0.18) !important;\r\n  color: #60a5fa !important;\r\n  border: 1px solid rgba(59, 130, 246, 0.35) !important;\r\n}\r\n\r\n.ext-json {\r\n  background: rgba(34, 197, 94, 0.18) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(34, 197, 94, 0.35) !important;\r\n}\r\n\r\n.ext-css {\r\n  background: rgba(6, 182, 212, 0.18) !important;\r\n  color: #22d3ee !important;\r\n  border: 1px solid rgba(6, 182, 212, 0.35) !important;\r\n}\r\n\r\n.ext-md {\r\n  background: rgba(168, 85, 247, 0.18) !important;\r\n  color: #c084fc !important;\r\n  border: 1px solid rgba(168, 85, 247, 0.35) !important;\r\n}\r\n\r\n.ext-default {\r\n  background: rgba(148, 163, 184, 0.18) !important;\r\n  color: #cbd5e1 !important;\r\n  border: 1px solid rgba(148, 163, 184, 0.3) !important;\r\n}\r\n\r\n.git-file-name {\r\n  color: #e2e8f0 !important;\r\n  font-weight: 500 !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-file-dir {\r\n  color: #64748b !important;\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-file-status {\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.status-modified {\r\n  color: #eab308 !important;\r\n}\r\n\r\n.status-added {\r\n  color: #22c55e !important;\r\n}\r\n\r\n.status-deleted {\r\n  color: #ef4444 !important;\r\n}\r\n\r\n\r\n/* =========================================================================\r\n   PULL REQUEST & CI/CD STATUS CARD STYLES\r\n   ========================================================================= */\r\n\r\n.git-pr-card {\r\n  padding: 8px 12px !important;\r\n  background: #13161f !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n  font-size: 11px !important;\r\n}\r\n\r\n.git-pr-none {\r\n  display: flex !important;\r\n  flex-direction: row !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  color: #64748b !important;\r\n  background: #11141c !important;\r\n  padding: 6px 12px !important;\r\n}\r\n\r\n.git-pr-none-left {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pr-icon {\r\n  font-size: 13px !important;\r\n  color: #38bdf8 !important;\r\n}\r\n\r\n.git-pr-none-right {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-pr-sync-badge {\r\n  font-size: 10px !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n.git-pr-create-link {\r\n  font-size: 10px !important;\r\n  color: #38bdf8 !important;\r\n  text-decoration: none !important;\r\n  font-weight: 500 !important;\r\n}\r\n\r\n.git-pr-create-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-pr-card-main {\r\n  display: flex !important;\r\n  align-items: flex-start !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.git-pr-header-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 3px !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-pr-badge-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pr-state-badge {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  letter-spacing: 0.5px !important;\r\n}\r\n\r\n.state-open {\r\n  background: rgba(34, 197, 94, 0.2) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(34, 197, 94, 0.4) !important;\r\n}\r\n\r\n.state-merged {\r\n  background: rgba(168, 85, 247, 0.2) !important;\r\n  color: #c084fc !important;\r\n  border: 1px solid rgba(168, 85, 247, 0.4) !important;\r\n}\r\n\r\n.state-closed {\r\n  background: rgba(239, 68, 68, 0.2) !important;\r\n  color: #f87171 !important;\r\n  border: 1px solid rgba(239, 68, 68, 0.4) !important;\r\n}\r\n\r\n.git-pr-num-link {\r\n  font-weight: 700 !important;\r\n  color: #60a5fa !important;\r\n  text-decoration: none !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-pr-num-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-pr-branch-flow {\r\n  color: #94a3b8 !important;\r\n  font-size: 10px !important;\r\n  font-family: monospace !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-pr-title {\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n/* CI/CD Rollup Button */\r\n.git-pr-ci-badge-wrap {\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-ci-rollup-btn {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  padding: 3px 8px !important;\r\n  border-radius: 5px !important;\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  cursor: pointer !important;\r\n  border: 1px solid transparent !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.ci-status-success {\r\n  background: rgba(34, 197, 94, 0.15) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.3) !important;\r\n}\r\n\r\n.ci-status-success:hover {\r\n  background: rgba(34, 197, 94, 0.25) !important;\r\n}\r\n\r\n.ci-status-pending {\r\n  background: rgba(234, 179, 8, 0.15) !important;\r\n  color: #facc15 !important;\r\n  border-color: rgba(234, 179, 8, 0.3) !important;\r\n}\r\n\r\n.ci-status-pending:hover {\r\n  background: rgba(234, 179, 8, 0.25) !important;\r\n}\r\n\r\n.ci-status-failure {\r\n  background: rgba(239, 68, 68, 0.15) !important;\r\n  color: #f87171 !important;\r\n  border-color: rgba(239, 68, 68, 0.3) !important;\r\n}\r\n\r\n.ci-status-failure:hover {\r\n  background: rgba(239, 68, 68, 0.25) !important;\r\n}\r\n\r\n.git-ci-caret {\r\n  font-size: 10px !important;\r\n  opacity: 0.7 !important;\r\n}\r\n\r\n/* CI Checks Accordion */\r\n.git-ci-checks-accordion {\r\n  margin-top: 4px !important;\r\n  padding: 6px 8px !important;\r\n  border-radius: 6px !important;\r\n  background: #0d1017 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.05) !important;\r\n}\r\n\r\n.git-ci-checks-header {\r\n  display: flex !important;\r\n  justify-content: space-between !important;\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  color: #94a3b8 !important;\r\n  margin-bottom: 6px !important;\r\n  text-transform: uppercase !important;\r\n  letter-spacing: 0.5px !important;\r\n}\r\n\r\n.git-ci-checks-count {\r\n  font-family: monospace !important;\r\n  color: #4ade80 !important;\r\n}\r\n\r\n.git-ci-checks-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.git-ci-check-item {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  padding: 3px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  font-size: 11px !important;\r\n}\r\n\r\n.git-ci-check-icon {\r\n  font-size: 11px !important;\r\n  width: 14px !important;\r\n  text-align: center !important;\r\n}\r\n\r\n.check-success .git-ci-check-icon {\r\n  color: #22c55e !important;\r\n}\r\n\r\n.check-fail .git-ci-check-icon {\r\n  color: #ef4444 !important;\r\n}\r\n\r\n.check-pending .git-ci-check-icon {\r\n  color: #eab308 !important;\r\n}\r\n\r\n.git-ci-check-info {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-ci-check-name {\r\n  color: #e2e8f0 !important;\r\n  font-weight: 500 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-ci-check-wf {\r\n  color: #64748b !important;\r\n  font-size: 9px !important;\r\n}\r\n\r\n.git-ci-check-link {\r\n  font-size: 10px !important;\r\n  color: #38bdf8 !important;\r\n  text-decoration: none !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-ci-check-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-ci-empty {\r\n  color: #64748b !important;\r\n  font-size: 10px !important;\r\n  padding: 4px !important;\r\n}\r\n\r\n/* Branches Filter Toolbar */\r\n.git-branches-filter-bar {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  padding: 4px 10px !important;\r\n  background: #11141c !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  font-size: 11px !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.git-branches-pills {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.git-filter-pill {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  color: #94a3b8 !important;\r\n  border: 1px solid transparent !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.git-filter-pill:hover {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-filter-pill.active {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.git-branches-drawer-btn {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: transparent !important;\r\n  color: #64748b !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n}\r\n\r\n.git-branches-drawer-btn:hover {\r\n  color: #f1f5f9 !important;\r\n  border-color: rgba(255, 255, 255, 0.15) !important;\r\n}\r\n\r\n/* Branches Drawer Dropdown */\r\n.git-branches-drawer {\r\n  background: #0d1017 !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  max-height: 180px !important;\r\n  overflow-y: auto !important;\r\n  padding: 6px 10px !important;\r\n}\r\n\r\n.git-branches-section-title {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  letter-spacing: 0.5px !important;\r\n  color: #64748b !important;\r\n  margin: 4px 0 2px !important;\r\n}\r\n\r\n.git-branches-list-wrap {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  margin-bottom: 6px !important;\r\n}\r\n\r\n.git-branch-drawer-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  padding: 3px 6px !important;\r\n  border-radius: 4px !important;\r\n  font-size: 11px !important;\r\n  color: #cbd5e1 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-branch-drawer-row:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n}\r\n\r\n.git-branch-drawer-row.is-active-branch {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #38bdf8 !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.git-branch-drawer-name {\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-branch-drawer-hash {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n}\r\n\r\n.git-branch-current-badge {\r\n  font-size: 8px !important;\r\n  font-weight: 700 !important;\r\n  padding: 0 4px !important;\r\n  border-radius: 3px !important;\r\n  background: #38bdf8 !important;\r\n  color: #0f172a !important;\r\n}\r\n\r\n.git-branch-empty {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n  padding: 2px 4px !important;\r\n}\r\n\r\n/* Redesigned High-Quality Commit Inspector */\r\n.git-inspector-mount {\r\n  position: sticky !important;\r\n  bottom: 0 !important;\r\n  z-index: 40 !important;\r\n  background: #11141c !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4) !important;\r\n  padding: 8px 12px !important;\r\n}\r\n\r\n.git-inspector-card {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-inspector-top {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.git-inspector-author-group {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-avatar-frame {\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 50% !important;\r\n  overflow: hidden !important;\r\n  flex-shrink: 0 !important;\r\n  position: relative !important;\r\n}\r\n\r\n.git-inspector-avatar {\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  object-fit: cover !important;\r\n  border-radius: 50% !important;\r\n}\r\n\r\n.git-inspector-avatar-fallback {\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  border-radius: 50% !important;\r\n  background: linear-gradient(135deg, #0284c7, #6366f1) !important;\r\n  color: #ffffff !important;\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  text-transform: uppercase !important;\r\n}\r\n\r\n.git-inspector-author-text {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  min-width: 0 !important;\r\n  line-height: 1.2 !important;\r\n}\r\n\r\n.git-inspector-name-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-inspector-author-name {\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-inspector-date {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n}\r\n\r\n.git-inspector-author-email {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n  font-family: monospace !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-inspector-meta-group {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-inspector-hash-pill {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #93c5fd !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n}\r\n\r\n.git-inspector-btn-gh {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n  text-decoration: none !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.git-inspector-btn-gh:hover {\r\n  background: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-inspector-btn-close {\r\n  font-size: 12px !important;\r\n  padding: 2px 5px !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n  color: #64748b !important;\r\n  cursor: pointer !important;\r\n  border-radius: 4px !important;\r\n  line-height: 1 !important;\r\n}\r\n\r\n.git-inspector-btn-close:hover {\r\n  color: #f1f5f9 !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-inspector-subject-line {\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  color: #e2e8f0 !important;\r\n  padding: 4px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(0, 0, 0, 0.25) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.04) !important;\r\n  line-height: 1.35 !important;\r\n  word-break: break-word !important;\r\n}\r\n\r\n.git-inspector-footer-stats {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-inspector-files-badge {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n/* --- Sync & Ahead/Behind Indicators --- */\r\n.git-sync-badge {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 10px !important;\r\n  background: rgba(234, 179, 8, 0.15) !important;\r\n  color: #eab308 !important;\r\n  border: 1px solid rgba(234, 179, 8, 0.35) !important;\r\n  margin-left: 4px !important;\r\n  line-height: 1.2 !important;\r\n}\r\n\r\n.git-sync-badge.is-behind {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.git-sync-badge.is-synced {\r\n  background: rgba(34, 197, 94, 0.12) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.3) !important;\r\n}\r\n\r\n.git-pill-sync {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  letter-spacing: 0.3px !important;\r\n  margin-left: 4px !important;\r\n}\r\n\r\n.git-pill-unpushed {\r\n  background: rgba(245, 158, 11, 0.2) !important;\r\n  color: #fbbf24 !important;\r\n  border: 1px solid rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.git-pill-unpulled {\r\n  background: rgba(14, 165, 233, 0.2) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(14, 165, 233, 0.4) !important;\r\n}\r\n\r\n.git-inspector-sync-badge {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n.git-inspector-sync-badge.is-unpushed {\r\n  background: rgba(245, 158, 11, 0.2) !important;\r\n  color: #fbbf24 !important;\r\n  border: 1px solid rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.git-inspector-sync-badge.is-unpulled {\r\n  background: rgba(14, 165, 233, 0.2) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(14, 165, 233, 0.4) !important;\r\n}\r\n";
   }
 
   /**
@@ -4176,8 +6027,9 @@ class GitGraphMod extends AntigravityMod {
    * @returns {{ html: string, css: string }}
    */
   render(context = {}) {
+    const ctx = (context && Object.keys(context).length > 0) ? context : this.initialContext;
     const tabButtonHtml = renderGitGraphTabButton();
-    const panelHtml = renderGitGraphPanelHtml(context);
+    const panelHtml = renderGitGraphPanelHtml(ctx);
 
     const html = `
       ${tabButtonHtml}
@@ -4201,7 +6053,14 @@ async function main() {
     host.registerMod(new ContextTachometerMod());
     host.registerMod(new AgentSelectorMod());
     host.registerMod(new ModsManagerMod());
-    host.registerMod(new GitGraphMod());
+
+    let initialVcs = {};
+    try {
+      const vcs = new VcsOrchestrator();
+      initialVcs = vcs.getRepositoryOverview();
+    } catch {}
+
+    host.registerMod(new GitGraphMod({ initialContext: initialVcs }));
     await host.dispatch();
   } catch (err) {
     // Fail silently in background hook context

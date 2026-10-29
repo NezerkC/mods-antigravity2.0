@@ -85,8 +85,15 @@ export class SlotManager {
 
     return `
       (() => {
-        const anchors = Array.from(document.querySelectorAll('${slot.selector}'));
-        if (!anchors.length) return;
+        let anchors = Array.from(document.querySelectorAll('${slot.selector}'));
+        if (!anchors.length && '${slotId}' === 'aux-pane-tab') {
+          const auxBar = document.querySelector('[data-active-tab-id]') ||
+                         document.querySelector('.shrink-0.flex.items-center.gap-0\\\\.5.border-b') ||
+                         document.querySelector('div[class*="shrink-0"][class*="border-b"]');
+          if (auxBar) {
+            anchors = [auxBar.querySelector('.overflow-x-auto') || auxBar];
+          }
+        }
 
         // Clean up any misplaced legacy slot containers that were injected directly inside non-flex wrappers
         document.querySelectorAll('#${containerId}').forEach(el => {
@@ -94,6 +101,26 @@ export class SlotManager {
             el.remove();
           }
         });
+
+        // If containers already exist in the DOM, ensure mod nodes are refreshed immediately
+        document.querySelectorAll('#${containerId}').forEach(container => {
+          let modNode = container.querySelector('#${modWrapperId}');
+          if (!modNode) {
+            modNode = document.createElement('div');
+            modNode.id = '${modWrapperId}';
+            modNode.className = '${modWrapperId}';
+            modNode.style.display = 'inline-flex';
+            modNode.style.alignItems = 'center';
+            modNode.style.height = '28px';
+            container.appendChild(modNode);
+          }
+          modNode.setAttribute('data-version', '2');
+          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
+            modNode.innerHTML = ${JSON.stringify(htmlContent)};
+          }
+        });
+
+        if (!anchors.length) return;
 
         for (const anchor of anchors) {
           let parent;
@@ -161,17 +188,17 @@ export class SlotManager {
           }
 
           let modNode = container.querySelector('#${modWrapperId}');
-          if (!modNode || modNode.getAttribute('data-version') !== '2') {
-            if (!modNode) {
-              modNode = document.createElement('div');
-              modNode.id = '${modWrapperId}';
-              modNode.className = '${modWrapperId}';
-              modNode.style.display = 'inline-flex';
-              modNode.style.alignItems = 'center';
-              modNode.style.height = '28px';
-              container.appendChild(modNode);
-            }
-            modNode.setAttribute('data-version', '2');
+          if (!modNode) {
+            modNode = document.createElement('div');
+            modNode.id = '${modWrapperId}';
+            modNode.className = '${modWrapperId}';
+            modNode.style.display = 'inline-flex';
+            modNode.style.alignItems = 'center';
+            modNode.style.height = '28px';
+            container.appendChild(modNode);
+          }
+          modNode.setAttribute('data-version', '2');
+          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
             modNode.innerHTML = ${JSON.stringify(htmlContent)};
           }
         }

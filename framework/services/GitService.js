@@ -163,50 +163,96 @@ export class GitService {
     const limit = options.limit ?? 50;
 
     try {
-      // Format delimiter %x00 (null character):
-      // %H: commit hash
-      // %P: parent hashes
-      // %an: author name
-      // %ae: author email
-      // %at: author date UNIX timestamp
-      // %s: subject
-      // %D: ref names
-      const format = '%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%D';
-      const rawLog = execSync(`git log --format="${format}" -n ${limit}`, {
+      let aheadHashes = new Set();
+      let behindHashes = new Set();
+      try {
+        const aheadOut = execSync('git rev-list @{u}..HEAD', {
+          cwd: repoPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore']
+        }).trim();
+        if (aheadOut) {
+          aheadOut.split(/\s+/).filter(Boolean).forEach(h => aheadHashes.add(h));
+        }
+      } catch {}
+
+      try {
+        const behindOut = execSync('git rev-list HEAD..@{u}', {
+          cwd: repoPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore']
+        }).trim();
+        if (behindOut) {
+          behindOut.split(/\s+/).filter(Boolean).forEach(h => behindHashes.add(h));
+        }
+      } catch {}
+
+      const format = 'COMMIT:%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%D';
+      const rawLog = execSync(`git log --format="${format}" --name-status -n ${limit}`, {
         cwd: repoPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore']
       });
 
-      const lines = rawLog.split('\n').filter(Boolean);
-      const rawCommits = lines.map(line => {
-        const parts = line.split('\0');
-        const hash = parts[0] || '';
-        const parents = parts[1] ? parts[1].split(' ').filter(Boolean) : [];
-        const authorName = parts[2] || 'Unknown';
-        const authorEmail = parts[3] || '';
-        const timestamp = parseInt(parts[4], 10) || Math.floor(Date.now() / 1000);
-        const subject = parts[5] || '';
-        const refNamesStr = parts[6] || '';
-        const refs = refNamesStr
-          ? refNamesStr.split(',').map(r => r.trim()).filter(Boolean)
-          : [];
+      const rawCommits = [];
+      let currentCommit = null;
 
-        return {
-          hash,
-          shortHash: hash.slice(0, 7),
-          parents,
-          author: {
-            name: authorName,
-            email: authorEmail,
-            avatarUrl: this.computeAvatarUrl(authorEmail)
-          },
-          date: timestamp,
-          relativeDate: this._formatRelativeTime(timestamp),
-          subject,
-          refs
-        };
-      });
+      const lines = rawLog.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        if (trimmed.startsWith('COMMIT:')) {
+          const parts = trimmed.slice(7).split('\0');
+          const hash = parts[0] || '';
+          const parents = parts[1] ? parts[1].split(' ').filter(Boolean) : [];
+          const authorName = parts[2] || 'Unknown';
+          const authorEmail = parts[3] || '';
+          const timestamp = parseInt(parts[4], 10) || Math.floor(Date.now() / 1000);
+          const subject = parts[5] || '';
+          const refNamesStr = parts[6] || '';
+          const refs = refNamesStr
+            ? refNamesStr.split(',').map(r => r.trim()).filter(Boolean)
+            : [];
+
+          const syncStatus = aheadHashes.has(hash) ? 'ahead' : behindHashes.has(hash) ? 'behind' : 'synced';
+          currentCommit = {
+            hash,
+            shortHash: hash.slice(0, 7),
+            parents,
+            author: {
+              name: authorName,
+              email: authorEmail,
+              avatarUrl: this.computeAvatarUrl(authorEmail)
+            },
+            date: timestamp,
+            relativeDate: this._formatRelativeTime(timestamp),
+            subject,
+            refs,
+            syncStatus,
+            isUnpushed: syncStatus === 'ahead',
+            isUnpulled: syncStatus === 'behind',
+            files: []
+          };
+          rawCommits.push(currentCommit);
+        } else if (currentCommit) {
+          const parts = trimmed.split('\t');
+          if (parts.length >= 2) {
+            const status = parts[0].trim();
+            const filePath = parts[1].trim();
+            const fileName = path.basename(filePath);
+            const normDir = path.dirname(filePath).replace(/\//g, '\\');
+            const ext = path.extname(fileName).replace('.', '').toUpperCase() || 'FILE';
+            currentCommit.files.push({
+              status,
+              path: filePath,
+              fileName,
+              dir: normDir === '.' ? '' : normDir,
+              ext
+            });
+          }
+        }
+      }
 
       return this.computeTopology(rawCommits);
     } catch (err) {
@@ -248,6 +294,15 @@ export class GitService {
 
       let ahead = 0;
       let behind = 0;
+      let upstream = null;
+      try {
+        upstream = execSync('git rev-parse --abbrev-ref @{u}', {
+          cwd: repoPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore']
+        }).trim();
+      } catch {}
+
       try {
         const revCounts = execSync('git rev-list --left-right --count HEAD...@{u}', {
           cwd: repoPath,
@@ -266,6 +321,7 @@ export class GitService {
       return {
         isRepo: true,
         branch,
+        upstream: upstream || null,
         isClean: changedFiles.length === 0,
         changedFiles,
         ahead,
@@ -275,6 +331,7 @@ export class GitService {
       return {
         isRepo: false,
         branch: '',
+        upstream: null,
         isClean: true,
         changedFiles: [],
         ahead: 0,
@@ -330,6 +387,77 @@ export class GitService {
         } catch {}
       }
     };
+  }
+
+  /**
+   * Retrieves all local and remote branches categorized.
+   * @param {Object} [options]
+   * @param {string} [options.repoPath]
+   * @returns {{ local: Array<{ name: string, isCurrent: boolean, hash: string }>, remote: Array<{ name: string, shortName: string, hash: string }> }}
+   */
+  getBranches(options = {}) {
+    const repoPath = options.repoPath || process.cwd();
+    try {
+      const raw = execSync('git branch -a --format="%(refname:short)%00%(objectname:short)%00%(HEAD)"', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+
+      const local = [];
+      const remote = [];
+
+      for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const parts = trimmed.split('\0');
+        const ref = parts[0] || '';
+        const hash = parts[1] || '';
+        const headMarker = parts[2] || '';
+        const isCurrent = headMarker === '*';
+
+        if (ref.startsWith('origin/') || ref.startsWith('remotes/origin/')) {
+          const cleanName = ref.replace(/^remotes\//, '');
+          if (!cleanName.includes('HEAD')) {
+            remote.push({
+              name: cleanName,
+              shortName: cleanName.replace(/^origin\//, ''),
+              hash: hash ? hash.slice(0, 7) : ''
+            });
+          }
+        } else {
+          local.push({
+            name: ref,
+            isCurrent,
+            hash: hash ? hash.slice(0, 7) : ''
+          });
+        }
+      }
+
+      return { local, remote };
+    } catch {
+      return { local: [], remote: [] };
+    }
+  }
+
+  /**
+   * Fetches latest changes from all configured remotes.
+   * @param {Object} [options]
+   * @param {string} [options.repoPath]
+   * @returns {boolean}
+   */
+  fetch(options = {}) {
+    const repoPath = options.repoPath || process.cwd();
+    try {
+      execSync('git fetch --all --prune', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'ignore', 'ignore']
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**

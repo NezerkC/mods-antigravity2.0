@@ -19,7 +19,7 @@ export class CdpPortResolver {
     this.host = options.host || '127.0.0.1';
     this.logDir = options.logDir || path.join(os.homedir(), 'AppData', 'Roaming', 'Antigravity', 'logs');
     this.defaultPort = options.defaultPort ?? 53908;
-    this.candidatePorts = options.candidatePorts || [53908, 9222, 9229, 53909, 53910];
+    this.candidatePorts = options.candidatePorts || [56547, 53908, 9222, 9229, 53909, 53910];
     this.probeTimeoutMs = options.probeTimeoutMs ?? 150;
   }
 

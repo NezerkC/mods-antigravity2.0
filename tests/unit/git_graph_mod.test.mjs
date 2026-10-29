@@ -118,3 +118,119 @@ test('GitGraphPanelHtml - includes data-commit-url and data-email attributes on 
   assert.ok(panelHtml.includes('data-email="alice@test.com"'));
   assert.ok(panelHtml.includes('data-author="Alice"'));
 });
+
+test('GitGraphPanelHtml - embeds PR and CI/CD card markup in panel template', () => {
+  const panelHtml = renderGitGraphPanelHtml({
+    commits: [],
+    pullRequest: {
+      number: 77,
+      title: 'feat: add vcs panel',
+      headRef: 'feat/vcs',
+      baseRef: 'main',
+      url: 'https://github.com/org/repo/pull/77',
+      state: 'OPEN',
+      author: 'Tester',
+      checks: [],
+      checksSummary: { total: 0, success: 0, failure: 0, pending: 0, status: 'PENDING' }
+    }
+  });
+
+  assert.ok(panelHtml.includes('#77'));
+  assert.ok(panelHtml.includes('feat: add vcs panel'));
+  assert.ok(panelHtml.includes('antigravity-git-pr-card'));
+});
+
+test('GitGraphMod - uses initialContext and includes PR card styles', () => {
+  const mod = new GitGraphMod({
+    initialContext: {
+      status: { branch: 'feat/test-initial', isClean: true },
+      commits: []
+    }
+  });
+  const rendered = mod.render();
+  assert.ok(rendered.html.includes('feat/test-initial'));
+  assert.ok(rendered.css.includes('.git-pr-card'));
+});
+
+
+
+test('GitGraphPanelHtml - renders branch filter pills and branches drawer', () => {
+  const panelHtml = renderGitGraphPanelHtml({
+    commits: [{ hash: 'c1', shortHash: 'c1', subject: 'initial', refs: [] }],
+    branches: {
+      local: [{ name: 'main', isCurrent: true, hash: 'c1' }],
+      remote: [{ name: 'origin/main', shortName: 'main', hash: 'c1' }]
+    }
+  });
+
+  assert.ok(panelHtml.includes('antigravity-git-branches-bar'));
+  assert.ok(panelHtml.includes('data-branch-filter="local"'));
+  assert.ok(panelHtml.includes('data-branch-filter="remote"'));
+  assert.ok(panelHtml.includes('Locales (1)'));
+  assert.ok(panelHtml.includes('GitHub (1)'));
+  assert.ok(panelHtml.includes('antigravity-git-branches-drawer'));
+  assert.ok(panelHtml.includes('is-active-branch'));
+  assert.ok(panelHtml.includes('is-remote-branch'));
+});
+
+test('GitGraphPanelHtml - renders commits collapsed by default with toggle all button', () => {
+  const panelHtml = renderGitGraphPanelHtml({
+    commits: [
+      {
+        hash: 'c1',
+        shortHash: 'c1',
+        subject: 'c1',
+        refs: [],
+        files: [{ status: 'M', path: 'index.js', fileName: 'index.js', dir: '', ext: 'JS' }]
+      }
+    ]
+  });
+
+  assert.ok(panelHtml.includes('id="antigravity-git-toggle-all-btn"'));
+  assert.ok(panelHtml.includes('style="display: none;"'));
+  assert.ok(panelHtml.includes('git-commit-chevron'));
+});
+
+test('GitGraphPanelHtml - renders sync badges and unpushed/unpulled indicators', () => {
+  const panelHtml = renderGitGraphPanelHtml({
+    status: { branch: 'feat/sync-test', ahead: 2, behind: 1, isClean: false },
+    commits: [
+      {
+        hash: 'c_ahead',
+        shortHash: 'cahead',
+        subject: 'local ahead commit',
+        refs: ['HEAD -> feat/sync-test'],
+        syncStatus: 'ahead',
+        isUnpushed: true,
+        files: []
+      },
+      {
+        hash: 'c_behind',
+        shortHash: 'cbehind',
+        subject: 'remote behind commit',
+        refs: ['origin/feat/sync-test'],
+        syncStatus: 'behind',
+        isUnpulled: true,
+        files: []
+      }
+    ]
+  });
+
+  assert.ok(panelHtml.includes('git-sync-badge'));
+  assert.ok(panelHtml.includes('⇡2'));
+  assert.ok(panelHtml.includes('⇣1'));
+  assert.ok(panelHtml.includes('git-pill-unpushed'));
+  assert.ok(panelHtml.includes('git-pill-unpulled'));
+
+  const aheadCommit = {
+    hash: 'c_ahead',
+    shortHash: 'cahead',
+    author: { name: 'Dev', email: 'dev@test.com' },
+    subject: 'local ahead commit',
+    syncStatus: 'ahead',
+    isUnpushed: true
+  };
+  const cardHtml = renderInspectorCard(aheadCommit);
+  assert.ok(cardHtml.includes('git-inspector-sync-badge'));
+  assert.ok(cardHtml.includes('is-unpushed'));
+});

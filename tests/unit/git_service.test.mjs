@@ -89,7 +89,11 @@ test('GitService - getGitLog reads live repository commits', () => {
   assert.ok(head.author.name);
   assert.ok(head.author.avatarUrl);
   assert.ok(head.subject);
+  assert.ok(Array.isArray(head.files));
   assert.ok(typeof head.lane === 'number');
+  assert.ok(typeof head.syncStatus === 'string');
+  assert.ok(typeof head.isUnpushed === 'boolean');
+  assert.ok(typeof head.isUnpulled === 'boolean');
 });
 
 test('GitService - getGitStatus reads current repository status', () => {
@@ -99,6 +103,27 @@ test('GitService - getGitStatus reads current repository status', () => {
   const status = service.getGitStatus({ repoPath });
   assert.ok(status.isRepo);
   assert.ok(status.branch);
+  assert.ok('upstream' in status);
   assert.ok(typeof status.isClean === 'boolean');
   assert.ok(Array.isArray(status.changedFiles));
+});
+
+test('GitService - fetch executes git fetch without throwing', () => {
+  const service = new GitService();
+  const result = service.fetch();
+  assert.equal(typeof result, 'boolean');
+});
+
+
+
+test('GitService - getBranches categorizes local and remote branches', () => {
+  const service = new GitService();
+  const branches = service.getBranches({ repoPath: process.cwd() });
+  assert.ok(Array.isArray(branches.local));
+  assert.ok(Array.isArray(branches.remote));
+  assert.ok(branches.local.length > 0);
+  const current = branches.local.find(b => b.isCurrent);
+  assert.ok(current);
+  assert.equal(typeof current.name, 'string');
+  assert.ok(current.name.length > 0);
 });
