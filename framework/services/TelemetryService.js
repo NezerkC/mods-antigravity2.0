@@ -340,10 +340,23 @@ export class TelemetryService {
    * @param {Array<Object>} [chatModels]
    * @returns {Object}
    */
-  resolveModelQuota(detectedModel = '', stepEntries = [], chatModels = []) {
+  resolveModelQuota(detectedModel = '', stepEntries = [], chatModels = [], nativeQuotaGroups = null) {
     const activeModel = this.sanitizeModelName(detectedModel) || 'Gemini 3.8 Flash';
-    const { family, hasDualLimit, rollingCeiling, weeklyCeiling } = this.classifyModelFamily(activeModel);
     const now = Date.now();
+
+    if (Array.isArray(nativeQuotaGroups) && nativeQuotaGroups.length > 0) {
+      const nativeQuota = resolveNativeQuotaForModel(nativeQuotaGroups, activeModel, now);
+      if (nativeQuota) {
+        const activeChatModel = chatModels.find(m => m.modelName === activeModel)
+          || chatModels.find(m => m.family === nativeQuota.family);
+        nativeQuota.chatWeeklyPct = activeChatModel ? activeChatModel.chatWeeklyPct : 0;
+        nativeQuota.chatRollingPct = activeChatModel ? activeChatModel.chatRollingPct : 0;
+        nativeQuota.chatUsedPct = activeChatModel ? activeChatModel.chatWeeklyPct : 0;
+        return nativeQuota;
+      }
+    }
+
+    const { family, hasDualLimit, rollingCeiling, weeklyCeiling } = this.classifyModelFamily(activeModel);
     const fiveHoursMs = 5 * 60 * 60 * 1000;
     const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
 
@@ -514,4 +527,134 @@ export class TelemetryService {
     }
     return metrics;
   }
+}
+
+/**
+ * Formats an ISO reset timestamp or remaining milliseconds into a human-readable countdown string.
+ * @param {string|number|Date} [resetTimeIso]
+ * @param {number} [now=Date.now()]
+ * @returns {string}
+ */
+export function formatResetTime(resetTimeIso, now = Date.now()) {
+  if (!resetTimeIso) return '7d';
+  const resetMs = typeof resetTimeIso === 'number'
+    ? resetTimeIso
+    : new Date(resetTimeIso).getTime();
+  if (isNaN(resetMs)) return '7d';
+
+  const diffMs = resetMs - now;
+  if (diffMs <= 0) return '<1m';
+
+  const totalMins = Math.floor(diffMs / (60 * 1000));
+  const days = Math.floor(totalMins / 1440);
+  const hours = Math.floor((totalMins % 1440) / 60);
+  const mins = totalMins % 60;
+
+  if (days > 0) {
+    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  }
+  if (hours > 0) {
+    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+  }
+  if (mins > 0) {
+    return `${mins}m`;
+  }
+  return '<1m';
+}
+
+/**
+ * Resolves accurate native quota metrics for a target model from RetrieveUserQuotaSummary groups.
+ * @param {Array<Object>} groups
+ * @param {string} [activeModelName='']
+ * @param {number} [now=Date.now()]
+ * @returns {Object|null}
+ */
+export function resolveNativeQuotaForModel(groups, activeModelName = '', now = Date.now()) {
+  if (!Array.isArray(groups) || groups.length === 0) return null;
+
+  const getResetTime = (time, fallback) => {
+    if (!time) return fallback;
+    if (typeof formatResetTime === 'function') return formatResetTime(time, now);
+    if (typeof window !== 'undefined' && typeof window.__formatResetTime === 'function') {
+      return window.__formatResetTime(time, now);
+    }
+    return fallback;
+  };
+
+  const modelLower = (activeModelName || '').toLowerCase();
+  const isArgon = /argon/i.test(modelLower);
+  const isClaudeOrGpt = /claude|gpt|opus|sonnet/i.test(modelLower);
+
+  let targetGroup = null;
+  if (isArgon) {
+    targetGroup = groups.find(g => /argon/i.test(g.displayName || '') || /argon/i.test(g.description || ''));
+  } else if (isClaudeOrGpt) {
+    targetGroup = groups.find(g => /claude|gpt/i.test(g.displayName || '') || /claude|gpt/i.test(g.description || ''));
+  } else {
+    targetGroup = groups.find(g => /gemini/i.test(g.displayName || '') && !/argon/i.test(g.displayName || ''));
+  }
+
+  if (!targetGroup && groups.length > 0) {
+    targetGroup = groups[0];
+  }
+  if (!targetGroup || !Array.isArray(targetGroup.buckets)) return null;
+
+  const buckets = targetGroup.buckets;
+  const weeklyBucket = buckets.find(b => b.window === 'weekly' || /weekly/i.test(b.displayName || '') || /weekly/i.test(b.bucketId || ''));
+  const rollingBucket = buckets.find(b => b.window === '5h' || /5h|five hour/i.test(b.displayName || '') || /5h/i.test(b.bucketId || ''));
+
+  if (isArgon) {
+    const weeklyFraction = (weeklyBucket && typeof weeklyBucket.remainingFraction === 'number')
+      ? weeklyBucket.remainingFraction
+      : 1;
+    const weeklyRemaining = Math.max(0, Math.min(100, Math.round(weeklyFraction * 100)));
+    const weeklyUsed = Math.max(0, 100 - weeklyRemaining);
+    const weeklyReset = getResetTime(weeklyBucket?.resetTime, '7d');
+
+    return {
+      hasDualLimit: false,
+      family: 'argon',
+      modelName: activeModelName || 'Gemini 4 Argon',
+      singleLabel: 'Cuota Semanal Restante',
+      remainingPct: weeklyRemaining,
+      usedPct: weeklyUsed,
+      weeklyRemaining,
+      weeklyUsed,
+      weeklyReset,
+      resetStr: weeklyReset,
+      usagePct: weeklyRemaining,
+      isNative: true
+    };
+  }
+
+  const weeklyFraction = (weeklyBucket && typeof weeklyBucket.remainingFraction === 'number')
+    ? weeklyBucket.remainingFraction
+    : 1;
+  const rollingFraction = (rollingBucket && typeof rollingBucket.remainingFraction === 'number')
+    ? rollingBucket.remainingFraction
+    : 1;
+
+  const weeklyRemaining = Math.max(0, Math.min(100, Math.round(weeklyFraction * 100)));
+  const weeklyUsed = Math.max(0, 100 - weeklyRemaining);
+  const weeklyReset = getResetTime(weeklyBucket?.resetTime, '7d');
+
+  const rollingRemaining = Math.max(0, Math.min(100, Math.round(rollingFraction * 100)));
+  const rollingUsed = Math.max(0, 100 - rollingRemaining);
+  const rollingReset = getResetTime(rollingBucket?.resetTime, '5h');
+
+  return {
+    hasDualLimit: true,
+    family: isClaudeOrGpt ? 'claude' : 'gemini',
+    modelName: activeModelName || (isClaudeOrGpt ? 'Claude' : 'Gemini'),
+    rollingLabel: 'Cuota 5h Restante',
+    rollingRemaining,
+    rollingUsed,
+    rollingReset,
+    weeklyLabel: 'Cuota Semanal Restante',
+    weeklyRemaining,
+    weeklyUsed,
+    weeklyReset,
+    usagePct: rollingRemaining,
+    isNative: true
+  };
 }

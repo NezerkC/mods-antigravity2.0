@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { TelemetryService } from '../../framework/services/TelemetryService.js';
+import { TelemetryService, formatResetTime, resolveNativeQuotaForModel } from '../../framework/services/TelemetryService.js';
 import { renderPopoverHtml } from '../../mods/context-tachometer/components/PopoverHtml.js';
 
 test('TelemetryService - calculates empty metric snapshot', () => {
@@ -255,5 +255,108 @@ test('TelemetryService - records CHECKPOINT compactions, resets active context w
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+test('TelemetryService - formatResetTime calculates human-readable countdowns correctly', () => {
+  const now = 1700000000000;
+  assert.equal(formatResetTime(now + 165600000, now), '1d 22h');
+  assert.equal(formatResetTime(now + 15480000, now), '4h 18m');
+  assert.equal(formatResetTime(now + 2700000, now), '45m');
+  assert.equal(formatResetTime(now - 5000, now), '<1m');
+  assert.equal(formatResetTime(null, now), '7d');
+});
+
+test('TelemetryService - resolveNativeQuotaForModel maps RPC groups to accurate model quotas', () => {
+  const mockGroups = [
+    {
+      displayName: 'Gemini Models',
+      buckets: [
+        {
+          bucketId: 'gemini-weekly',
+          displayName: 'Weekly Limit Remaining',
+          window: 'weekly',
+          remainingFraction: 0.4916,
+          resetTime: '2026-10-31T01:56:26Z'
+        },
+        {
+          bucketId: 'gemini-5h',
+          displayName: 'Five Hour Limit Remaining',
+          window: '5h',
+          remainingFraction: 0.924,
+          resetTime: '2026-10-29T07:49:28Z'
+        }
+      ]
+    },
+    {
+      displayName: 'Claude and GPT models',
+      buckets: [
+        {
+          bucketId: '3p-weekly',
+          displayName: 'Weekly Limit Remaining',
+          window: 'weekly',
+          remainingFraction: 1,
+          resetTime: '2026-11-04T20:16:17Z'
+        },
+        {
+          bucketId: '3p-5h',
+          displayName: 'Five Hour Limit Remaining',
+          window: '5h',
+          remainingFraction: 1,
+          resetTime: '2026-10-29T08:30:38Z'
+        }
+      ]
+    },
+    {
+      displayName: 'Gemini 4 Argon',
+      buckets: [
+        {
+          bucketId: 'gemini-argon-wtu-weekly',
+          displayName: 'Gemini 4 Argon Weekly Limit',
+          window: 'weekly',
+          remainingFraction: 0.208,
+          resetTime: '2026-10-31T05:10:34Z'
+        }
+      ]
+    }
+  ];
+
+  // Test Gemini Flash
+  const flashQuota = resolveNativeQuotaForModel(mockGroups, 'Gemini 3.8 Flash (High)');
+  assert.ok(flashQuota);
+  assert.equal(flashQuota.hasDualLimit, true);
+  assert.equal(flashQuota.weeklyRemaining, 49);
+  assert.equal(flashQuota.weeklyUsed, 51);
+  assert.equal(flashQuota.rollingRemaining, 92);
+  assert.equal(flashQuota.rollingUsed, 8);
+  assert.ok(flashQuota.weeklyReset);
+
+  // Test Gemini 4 Argon
+  const argonQuota = resolveNativeQuotaForModel(mockGroups, 'Gemini 4 Argon (Medium)');
+  assert.ok(argonQuota);
+  assert.equal(argonQuota.hasDualLimit, false);
+  assert.equal(argonQuota.weeklyRemaining, 21);
+  assert.equal(argonQuota.weeklyUsed, 79);
+  assert.equal(argonQuota.singleLabel, 'Cuota Semanal Restante');
+
+  // Test Claude Sonnet
+  const claudeQuota = resolveNativeQuotaForModel(mockGroups, 'Claude Sonnet 5.5 (Medium)');
+  assert.ok(claudeQuota);
+  assert.equal(claudeQuota.hasDualLimit, true);
+  assert.equal(claudeQuota.weeklyRemaining, 100);
+  assert.equal(claudeQuota.weeklyUsed, 0);
+
+  // Integration with resolveModelQuota
+  const service = new TelemetryService();
+  const serviceQuota = service.resolveModelQuota('Gemini 3.8 Flash (High)', [], [], mockGroups);
+  assert.ok(serviceQuota);
+  assert.equal(serviceQuota.weeklyRemaining, 49);
+  assert.equal(serviceQuota.isNative, true);
+
+  // HTML rendering test
+  const html = renderPopoverHtml({ modelQuota: serviceQuota, displayTokens: '10.5k', pct: '1.0' });
+  assert.ok(html.includes('Cuota Semanal Restante'));
+  assert.ok(html.includes('49%'));
+  assert.ok(html.includes('Cuota 5h Restante'));
+  assert.ok(html.includes('92%'));
 });
 

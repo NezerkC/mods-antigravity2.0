@@ -2,6 +2,7 @@ import { SlotManager } from './SlotManager.js';
 import { StyleIsolator } from '../sdk/StyleIsolator.js';
 import { renderPopoverHtml, renderSvgIcon } from '../../mods/context-tachometer/components/PopoverHtml.js';
 import { renderModsManagerPanelHtml } from '../../mods/mods-manager/components/ModsManagerHtml.js';
+import { formatResetTime, resolveNativeQuotaForModel } from '../services/TelemetryService.js';
 
 /**
  * Discovers, registers, and compiles UI mods into coordinated injection scripts.
@@ -441,6 +442,8 @@ export class ModLoader {
 
         const renderSvgIcon = ${renderSvgIcon.toString()};
         window.__renderSvgIcon = renderSvgIcon;
+        window.__formatResetTime = ${formatResetTime.toString()};
+        window.__resolveNativeQuotaForModel = ${resolveNativeQuotaForModel.toString()};
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
         window.__renderModsManagerPanelHtml = ${renderModsManagerPanelHtml.toString()};
 
@@ -875,8 +878,33 @@ export class ModLoader {
             const all = window.__antigravityAllMetrics || {};
             const m = (activeId && all[activeId]) ? all[activeId] : window.__antigravityLatestMetric;
 
+            const nativeGroups = window.__antigravityNativeQuotaSummary || (() => {
+              try {
+                const raw = localStorage.getItem('__antigravity_native_quota_summary');
+                return raw ? JSON.parse(raw).groups : null;
+              } catch (e) { return null; }
+            })();
+
+            if (nativeGroups && m && typeof window.__resolveNativeQuotaForModel === 'function') {
+              const triggerBtn = document.querySelector('button[data-testid="model-selector-trigger"]');
+              const activeModelName = (triggerBtn ? triggerBtn.innerText.trim() : '') || m.detectedModel || m.modelQuota?.modelName || 'Gemini 3.8 Flash';
+              const nativeQuota = window.__resolveNativeQuotaForModel(nativeGroups, activeModelName);
+              if (nativeQuota) {
+                if (m.modelQuota) {
+                  nativeQuota.chatWeeklyPct = m.modelQuota.chatWeeklyPct;
+                  nativeQuota.chatRollingPct = m.modelQuota.chatRollingPct;
+                  nativeQuota.chatUsedPct = m.modelQuota.chatUsedPct;
+                }
+                m.modelQuota = nativeQuota;
+              }
+            }
+
             if (m && window.__renderTachometerPopoverHtml) {
               portal.innerHTML = window.__renderTachometerPopoverHtml(m);
+            }
+
+            if (typeof window.__fetchNativeUserQuotaSummary === 'function') {
+              window.__fetchNativeUserQuotaSummary();
             }
 
             const rect = badge.getBoundingClientRect();
@@ -936,54 +964,75 @@ export class ModLoader {
           });
         };
 
-        window.__scrapeNativeModelQuota = function() {
+        window.__fetchNativeUserQuotaSummary = async function() {
           try {
-            if (!document.body) return null;
-            const bodyText = document.body.innerText || '';
-            const labels = [
-              'Five Hour Limit Remaining',
-              'Weekly Limit Remaining',
-              'Gemini 4 Argon Weekly Limit'
-            ];
-            const hasAny = labels.some(l => bodyText.includes(l));
-            if (!hasAny) return null;
-
-            const scraped = { updatedAt: Date.now(), items: {} };
-            const allElements = document.body.querySelectorAll('div, span, p, li, section');
-            for (const label of labels) {
-              for (const el of allElements) {
-                if (el.children.length === 0 && el.textContent && el.textContent.includes(label)) {
-                  const container = el.parentElement?.parentElement || el.parentElement || el;
-                  const text = container.textContent || '';
-                  const pctMatch = text.match(/\\b(\\d{1,3})%/);
-                  const resetMatch = text.match(/(?:resets?\\s+in|reset:?|in)\\s*([0-9dhms\\s]+)/i);
-                  if (pctMatch) {
-                    scraped.items[label] = {
-                      remainingPct: parseInt(pctMatch[1], 10),
-                      resetText: resetMatch ? resetMatch[1].trim() : null
-                    };
-                    break;
-                  }
-                }
+            const csrf = window.__APP_CONFIG__?.csrfToken;
+            if (!csrf) return null;
+            const res = await fetch('/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Connect-Protocol-Version': '1',
+                'x-codeium-csrf-token': csrf
+              },
+              body: '{}'
+            });
+            if (!res.ok) return null;
+            const data = await res.json();
+            const groups = data?.response?.groups || null;
+            if (groups && Array.isArray(groups)) {
+              window.__antigravityNativeQuotaSummary = groups;
+              try {
+                localStorage.setItem('__antigravity_native_quota_summary', JSON.stringify({
+                  updatedAt: Date.now(),
+                  groups
+                }));
+              } catch (e) {}
+              if (typeof window.__updateAntigravityTelemetry === 'function') {
+                window.__updateAntigravityTelemetry();
               }
-            }
-            if (Object.keys(scraped.items).length > 0) {
-              localStorage.setItem('__antigravity_native_quota_cache', JSON.stringify(scraped));
-              return scraped;
+              return groups;
             }
           } catch (e) {}
           return null;
+        };
+
+        window.__scrapeNativeModelQuota = function() {
+          if (typeof window.__fetchNativeUserQuotaSummary === 'function') {
+            window.__fetchNativeUserQuotaSummary();
+          }
         };
 
         window.__updateAntigravityTelemetry = function(fallbackMetric) {
           const all = window.__antigravityAllMetrics || {};
           const latest = fallbackMetric || window.__antigravityLatestMetric;
 
+          const nativeGroups = window.__antigravityNativeQuotaSummary || (() => {
+            try {
+              const raw = localStorage.getItem('__antigravity_native_quota_summary');
+              return raw ? JSON.parse(raw).groups : null;
+            } catch (e) { return null; }
+          })();
+
           document.querySelectorAll('.antigravity-tachometer-badge').forEach(badge => {
             const activeId = window.__resolveCascadeId(badge);
 
             const m = (activeId && all[activeId]) ? all[activeId] : (latest || window.__antigravityLatestMetric);
             if (!m) return;
+
+            if (nativeGroups && typeof window.__resolveNativeQuotaForModel === 'function') {
+              const triggerBtn = document.querySelector('button[data-testid="model-selector-trigger"]');
+              const activeModelName = (triggerBtn ? triggerBtn.innerText.trim() : '') || m.detectedModel || m.modelQuota?.modelName || 'Gemini 3.8 Flash';
+              const nativeQuota = window.__resolveNativeQuotaForModel(nativeGroups, activeModelName);
+              if (nativeQuota) {
+                if (m.modelQuota) {
+                  nativeQuota.chatWeeklyPct = m.modelQuota.chatWeeklyPct;
+                  nativeQuota.chatRollingPct = m.modelQuota.chatRollingPct;
+                  nativeQuota.chatUsedPct = m.modelQuota.chatUsedPct;
+                }
+                m.modelQuota = nativeQuota;
+              }
+            }
 
             const pctNum = parseFloat(m.pct) || 0;
             let statusColor = '#22c55e';
@@ -1270,6 +1319,9 @@ export class ModLoader {
 
         window.__antigravityMountAll = mountAllMods;
         mountAllMods();
+        if (typeof window.__fetchNativeUserQuotaSummary === 'function') {
+          window.__fetchNativeUserQuotaSummary();
+        }
 
         // 4. Observe DOM mutations with smart slot check to avoid DOM thrashing
         if (window.__antigravityModObserver) {
