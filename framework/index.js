@@ -13,4 +13,4 @@ export { GitService } from './services/GitService.js';
 export { AgentSyncServer } from './services/AgentSyncServer.js';
 export { GitHubCliService } from './services/GitHubCliService.js';
 export { VcsOrchestrator } from './services/VcsOrchestrator.js';
-
+export { TailscaleDiscoveryService } from './services/TailscaleDiscoveryService.js';
