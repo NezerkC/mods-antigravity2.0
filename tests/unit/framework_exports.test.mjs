@@ -9,6 +9,7 @@ test('framework/index.js - exports GitService and AgentSyncServer alongside core
   assert.ok(framework.GitHubCliService, 'GitHubCliService must be exported');
   assert.ok(framework.VcsOrchestrator, 'VcsOrchestrator must be exported');
   assert.ok(framework.TailscaleDiscoveryService, 'TailscaleDiscoveryService must be exported');
+  assert.ok(framework.RemoteHostServer, 'RemoteHostServer must be exported');
   assert.ok(framework.ModDaemon, 'ModDaemon must be exported');
   assert.ok(framework.createDefaultHost, 'createDefaultHost must be exported');
   assert.ok(framework.ModHost, 'ModHost must be exported');
