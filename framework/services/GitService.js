@@ -82,68 +82,236 @@ export class GitService {
    * @param {Array<Object>} commits
    * @returns {Array<Object>}
    */
-  computeTopology(commits) {
+  /**
+   * Computes topological lanes and Bezier branch route connections for commits.
+   * Guarantees:
+   * 1. The trunk (main/master) is anchored to Lane 0.
+   * 2. Continuous pass-through routes are emitted on EVERY row for all active lanes,
+   *    ensuring the blue main line and feature branch lines never break into floating islands.
+   * 3. Smooth Bezier curves connect branches to/from main.
+   * 4. Each commit is marked with pushed: boolean (false if unpushed local commit).
+   * @param {Array<Object>} commits
+   * @param {Object} [options]
+   * @param {string} [options.repoPath]
+   * @returns {Array<Object>}
+   */
+  computeTopology(commits, options = {}) {
     if (!Array.isArray(commits) || commits.length === 0) {
       return [];
     }
 
-    /** @type {Array<string | null>} active lanes containing expected commit hashes */
+    const repoPath = options.repoPath || process.cwd();
+
+    // Determine set of commit hashes on trunk (main/master/origin/main)
+    const trunkHashes = new Set();
+    const remoteHashes = new Set();
+    try {
+      const trunkLog = execSync('git rev-list origin/main || git rev-list main', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+      for (const h of trunkLog.split('\n')) {
+        const tr = h.trim();
+        if (tr) trunkHashes.add(tr);
+      }
+    } catch {
+      // fallback: commit at the very end or with 'main' ref
+    }
+
+    try {
+      const remLog = execSync('git rev-list --remotes', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+      for (const h of remLog.split('\n')) {
+        const tr = h.trim();
+        if (tr) remoteHashes.add(tr);
+      }
+    } catch {
+      // fallback
+    }
+
+    // Pass 1: Assign lanes deterministically
+    // Lane 0 is strictly reserved for trunk commits (or current branch base if trunk is empty)
     const activeLanes = [];
+    const commitLanes = new Array(commits.length);
+
+    for (let i = 0; i < commits.length; i++) {
+      const commit = commits[i];
+      const { hash, parents = [] } = commit;
+      const hasKnownTrunk = commits.some(c => trunkHashes.has(c.hash));
+      const isTrunkCommit = hasKnownTrunk ? trunkHashes.has(hash) : (i === 0 || activeLanes[0] === hash);
+
+      const matchingLanes = [];
+      for (let k = 0; k < activeLanes.length; k++) {
+        if (activeLanes[k] === hash) {
+          matchingLanes.push(k);
+        }
+      }
+
+      let cLane;
+      if (isTrunkCommit) {
+        cLane = 0;
+        // Free other lanes that converged into trunk
+        for (const m of matchingLanes) {
+          if (m !== 0) activeLanes[m] = null;
+        }
+      } else if (matchingLanes.length > 0) {
+        cLane = matchingLanes[0] === 0 ? (activeLanes.indexOf(null, 1) !== -1 ? activeLanes.indexOf(null, 1) : Math.max(1, activeLanes.length)) : matchingLanes[0];
+        for (let m = 1; m < matchingLanes.length; m++) {
+          activeLanes[matchingLanes[m]] = null;
+        }
+      } else {
+        // Find first empty slot >= 1 (Lane 0 is reserved for trunk)
+        let slot = -1;
+        for (let k = 1; k < activeLanes.length; k++) {
+          if (activeLanes[k] === null) {
+            slot = k;
+            break;
+          }
+        }
+        if (slot === -1) {
+          slot = Math.max(1, activeLanes.length);
+        }
+        cLane = slot;
+      }
+
+      commitLanes[i] = cLane;
+
+      while (activeLanes.length <= cLane) {
+        activeLanes.push(null);
+      }
+
+      // Update activeLanes with parents
+      if (parents.length === 0) {
+        activeLanes[cLane] = null;
+      } else {
+        const primaryParent = parents[0];
+        activeLanes[cLane] = primaryParent;
+
+        for (let p = 1; p < parents.length; p++) {
+          const mergeParent = parents[p];
+          let pLane = activeLanes.indexOf(mergeParent);
+          if (pLane === -1) {
+            pLane = activeLanes.indexOf(null, 1);
+            if (pLane === -1) {
+              pLane = Math.max(1, activeLanes.length);
+            }
+            activeLanes[pLane] = mergeParent;
+          }
+        }
+      }
+
+      while (activeLanes.length > 0 && activeLanes[activeLanes.length - 1] === null) {
+        activeLanes.pop();
+      }
+    }
+
+    // Pass 2: Re-simulate and generate CONTINUOUS pass-through routes on every row
+    activeLanes.length = 0;
     const enriched = [];
 
     for (let i = 0; i < commits.length; i++) {
       const commit = commits[i];
       const { hash, parents = [] } = commit;
+      const cLane = commitLanes[i];
 
-      // 1. Find or allocate lane for this commit
-      let laneIndex = activeLanes.indexOf(hash);
-      if (laneIndex === -1) {
-        // Allocate in the first empty slot or append
-        laneIndex = activeLanes.indexOf(null);
-        if (laneIndex === -1) {
-          laneIndex = activeLanes.length;
-          activeLanes.push(hash);
-        } else {
-          activeLanes[laneIndex] = hash;
+      while (activeLanes.length <= cLane) {
+        activeLanes.push(null);
+      }
+
+      // Free converging lanes that met at this commit
+      for (let k = 0; k < activeLanes.length; k++) {
+        if (activeLanes[k] === hash && k !== cLane) {
+          activeLanes[k] = null;
         }
       }
 
-      const routes = [];
-
+      // Identify newly branched fork lanes
+      const newForkLanes = [];
       if (parents.length === 0) {
-        // Root commit: free up lane
-        activeLanes[laneIndex] = null;
+        activeLanes[cLane] = null;
       } else {
-        // First parent continues on this lane
-        const primaryParent = parents[0];
-        activeLanes[laneIndex] = primaryParent;
-        routes.push({ fromLane: laneIndex, toLane: laneIndex, type: 'straight' });
-
-        // Additional parents (merges)
+        activeLanes[cLane] = parents[0];
         for (let p = 1; p < parents.length; p++) {
           const mergeParent = parents[p];
-          let parentLane = activeLanes.indexOf(mergeParent);
-          if (parentLane === -1) {
-            parentLane = activeLanes.indexOf(null);
-            if (parentLane === -1) {
-              parentLane = activeLanes.length;
-              activeLanes.push(mergeParent);
-            } else {
-              activeLanes[parentLane] = mergeParent;
+          let pLane = activeLanes.indexOf(mergeParent);
+          if (pLane === -1) {
+            pLane = activeLanes.indexOf(null, 1);
+            if (pLane === -1) {
+              pLane = Math.max(1, activeLanes.length);
             }
+            activeLanes[pLane] = mergeParent;
+            newForkLanes.push(pLane);
           }
-          routes.push({ fromLane: laneIndex, toLane: parentLane, type: 'merge' });
         }
       }
 
-      // Clean trailing nulls
       while (activeLanes.length > 0 && activeLanes[activeLanes.length - 1] === null) {
         activeLanes.pop();
       }
 
+      const routes = [];
+      const nextIdx = i + 1;
+
+      if (nextIdx < commits.length) {
+        const nextCommit = commits[nextIdx];
+        const nextLane = commitLanes[nextIdx];
+
+        // Ensure ALL active lanes have connecting routes to the next row (Pass-through!)
+        for (let lane = 0; lane < activeLanes.length; lane++) {
+          const waitingFor = activeLanes[lane];
+          if (!waitingFor) continue;
+
+          if (newForkLanes.includes(lane)) continue;
+
+          if (waitingFor === nextCommit.hash) {
+            if (lane === nextLane) {
+              routes.push({
+                fromLane: lane,
+                toLane: nextLane,
+                type: 'straight',
+                colorLane: lane
+              });
+            } else {
+              routes.push({
+                fromLane: lane,
+                toLane: nextLane,
+                type: 'merge',
+                colorLane: lane
+              });
+            }
+          } else {
+            // Unbroken pass-through vertical trunk or branch line
+            routes.push({
+              fromLane: lane,
+              toLane: lane,
+              type: 'straight',
+              colorLane: lane
+            });
+          }
+        }
+
+        // Curved fork routes
+        for (const fLane of newForkLanes) {
+          routes.push({
+            fromLane: cLane,
+            toLane: fLane,
+            type: 'fork',
+            colorLane: fLane
+          });
+        }
+      }
+
+      const isPushed = remoteHashes.size === 0 ? true : remoteHashes.has(hash);
+
       enriched.push({
         ...commit,
-        lane: laneIndex,
+        lane: cLane,
+        pushed: isPushed,
+        isTrunk: trunkHashes.has(hash),
         routes
       });
     }
@@ -152,13 +320,129 @@ export class GitService {
   }
 
   /**
-   * Retrieves Git commit history and topological DAG graph.
+   * Retrieves enriched branch descriptors grouped by similarity cluster,
+   * tracking ahead (push), behind (pull), isMerged, and dirty files.
    * @param {Object} [options]
    * @param {string} [options.repoPath]
-   * @param {number} [options.limit=50]
-   * @returns {Array<Object>}
+   * @returns {Object}
    */
-  getGitLog(options = {}) {
+  getBranches(options = {}) {
+    const repoPath = options.repoPath || process.cwd();
+    try {
+      // 1. Get raw branch list with tracking status
+      const raw = execSync('git branch -a --format="%(refname:short)%00%(objectname:short)%00%(HEAD)%00%(upstream:short)%00%(upstream:track)"', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+
+      // 2. Get merged branches in main
+      let mergedInMain = new Set();
+      try {
+        const mergedRaw = execSync('git branch --merged main', {
+          cwd: repoPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore']
+        });
+        mergedRaw.split('\n').forEach(b => {
+          const name = b.replace(/^[*\s]+/, '').trim();
+          if (name) mergedInMain.add(name);
+        });
+      } catch {
+        // fallback
+      }
+
+      // 3. Count dirty files
+      let dirtyFiles = 0;
+      try {
+        const statusRaw = execSync('git status --porcelain', {
+          cwd: repoPath,
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore']
+        });
+        dirtyFiles = statusRaw.split('\n').filter(l => l.trim().length > 0).length;
+      } catch {
+        dirtyFiles = 0;
+      }
+
+      const local = [];
+      const remote = [];
+      const clusters = {};
+
+      for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const parts = trimmed.split('\0');
+        const ref = parts[0] || '';
+        const hash = parts[1] || '';
+        const headMarker = parts[2] || '';
+        const upstream = parts[3] || null;
+        const track = parts[4] || '';
+        const isCurrent = headMarker === '*';
+
+        if (ref.startsWith('origin/') || ref.startsWith('remotes/origin/')) {
+          const cleanName = ref.replace(/^remotes\//, '');
+          if (!cleanName.includes('HEAD')) {
+            remote.push({
+              name: cleanName,
+              shortName: cleanName.replace(/^origin\//, ''),
+              hash: hash ? hash.slice(0, 7) : ''
+            });
+          }
+        } else {
+          // Parse ahead / behind from track string (e.g. "[ahead 1, behind 2]" or "[ahead 3]")
+          let ahead = 0;
+          let behind = 0;
+          const aheadMatch = track.match(/ahead\s+(\d+)/);
+          if (aheadMatch) ahead = parseInt(aheadMatch[1], 10);
+          const behindMatch = track.match(/behind\s+(\d+)/);
+          if (behindMatch) behind = parseInt(behindMatch[1], 10);
+
+          // Infer cluster by prefix (e.g. feat/mods-vcs -> 'vcs', feat/framework- -> 'framework')
+          let cluster = 'features';
+          if (ref === 'main' || ref === 'master') {
+            cluster = 'trunk';
+          } else if (ref.includes('vcs') || ref.includes('git-graph')) {
+            cluster = 'vcs';
+          } else if (ref.includes('framework') || ref.includes('daemon') || ref.includes('tray')) {
+            cluster = 'framework';
+          } else if (ref.includes('mods') || ref.includes('agent')) {
+            cluster = 'ui-mods';
+          } else if (ref.startsWith('fix/')) {
+            cluster = 'fixes';
+          } else if (ref.startsWith('chore/') || ref.startsWith('ci')) {
+            cluster = 'ci-governance';
+          } else if (ref.startsWith('docs/')) {
+            cluster = 'docs';
+          }
+
+          const branchObj = {
+            name: ref,
+            isCurrent,
+            isTrunk: ref === 'main' || ref === 'master',
+            cluster,
+            upstream,
+            ahead,
+            behind,
+            isMerged: mergedInMain.has(ref),
+            dirtyFiles: isCurrent ? dirtyFiles : 0,
+            hash: hash ? hash.slice(0, 7) : ''
+          };
+
+          local.push(branchObj);
+
+          if (!clusters[cluster]) {
+            clusters[cluster] = [];
+          }
+          clusters[cluster].push(branchObj);
+        }
+      }
+
+      return { local, remote, clusters, trunk: 'main' };
+    } catch {
+      return { local: [], remote: [], clusters: {}, trunk: 'main' };
+    }
+  }  getGitLog(options = {}) {
     const repoPath = options.repoPath || process.cwd();
     const limit = options.limit ?? 50;
 
@@ -356,57 +640,7 @@ export class GitService {
    * @param {string} [options.repoPath]
    * @returns {{ local: Array<{ name: string, isCurrent: boolean, hash: string }>, remote: Array<{ name: string, shortName: string, hash: string }> }}
    */
-  getBranches(options = {}) {
-    const repoPath = options.repoPath || process.cwd();
-    try {
-      const raw = execSync('git branch -a --format="%(refname:short)%00%(objectname:short)%00%(HEAD)"', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
-      });
 
-      const local = [];
-      const remote = [];
-
-      for (const line of raw.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        const parts = trimmed.split('\0');
-        const ref = parts[0] || '';
-        const hash = parts[1] || '';
-        const headMarker = parts[2] || '';
-        const isCurrent = headMarker === '*';
-
-        if (ref.startsWith('origin/') || ref.startsWith('remotes/origin/')) {
-          const cleanName = ref.replace(/^remotes\//, '');
-          if (!cleanName.includes('HEAD')) {
-            remote.push({
-              name: cleanName,
-              shortName: cleanName.replace(/^origin\//, ''),
-              hash: hash ? hash.slice(0, 7) : ''
-            });
-          }
-        } else {
-          local.push({
-            name: ref,
-            isCurrent,
-            hash: hash ? hash.slice(0, 7) : ''
-          });
-        }
-      }
-
-      return { local, remote };
-    } catch {
-      return { local: [], remote: [] };
-    }
-  }
-
-  /**
-   * Fetches latest changes from all configured remotes.
-   * @param {Object} [options]
-   * @param {string} [options.repoPath]
-   * @returns {boolean}
-   */
   fetch(options = {}) {
     const repoPath = options.repoPath || process.cwd();
     try {
