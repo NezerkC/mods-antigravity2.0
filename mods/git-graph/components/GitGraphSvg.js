@@ -50,7 +50,9 @@ export function renderGitGraphSvg(commits = [], options = {}) {
     }
   }
 
-  const svgWidth = Math.max(32, startX + (maxLane + 1) * laneWidth + 8);
+  const hasExpanded = commits.some(c => !!c.expanded && Array.isArray(c.files) && c.files.length > 0);
+  const extraPad = hasExpanded ? 20 : 8;
+  const svgWidth = Math.max(36, startX + (maxLane + 1) * laneWidth + extraPad);
 
   // Compute Y-center coordinates for each commit taking expanded files into account
   const commitCoords = [];
@@ -113,6 +115,48 @@ export function renderGitGraphSvg(commits = [], options = {}) {
           `;
         }
       }
+    }
+
+    // Render inline inspection capsule: --< * * * * >--
+    const isExpanded = !!commit.expanded;
+    const fileCount = Array.isArray(commit.files) ? commit.files.length : 0;
+    if (isExpanded && fileCount > 0) {
+      const subOffset = Math.max(12, laneWidth * 0.85);
+      const subX = cx + subOffset;
+      const openStartY = cy;
+      const openEndY = cy + 14;
+      const capsuleBottomY = cy + coord.totalHeight - 8;
+
+      // Opening bracket curve: --<
+      pathsMarkup += `
+        <path d="M ${cx} ${openStartY} C ${cx + 4} ${openStartY + 4}, ${subX - 2} ${openStartY + 8}, ${subX} ${openEndY}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" class="git-capsule-open"/>
+      `;
+
+      // Vertical spine connecting files
+      pathsMarkup += `
+        <line x1="${subX}" y1="${openEndY}" x2="${subX}" y2="${capsuleBottomY}" stroke="${color}" stroke-width="1.4" stroke-dasharray="2,2" class="git-capsule-spine"/>
+      `;
+
+      // File nodes (* * * *) with semantic status colors
+      for (let f = 0; f < fileCount; f++) {
+        const file = commit.files[f];
+        const fileStatus = (typeof file === 'object' && file.status) ? file.status.toUpperCase() : 'M';
+        const fileY = cy + rowHeight + f * fileRowHeight + (fileRowHeight / 2);
+
+        let fileColor = '#f59e0b'; // Amber (Modified)
+        if (fileStatus === 'A') fileColor = '#22c55e'; // Emerald (Added)
+        else if (fileStatus === 'D') fileColor = '#ef4444'; // Red (Deleted)
+        else if (fileStatus === 'R') fileColor = '#06b6d4'; // Cyan (Renamed)
+
+        nodesMarkup += `
+          <circle cx="${subX}" cy="${fileY}" r="2.8" fill="${fileColor}" stroke="#181a1f" stroke-width="1" class="git-file-node" data-file-index="${f}"/>
+        `;
+      }
+
+      // Closing bracket curve: >--
+      pathsMarkup += `
+        <path d="M ${subX} ${capsuleBottomY} C ${subX - 2} ${capsuleBottomY + 3}, ${cx + 4} ${cy + coord.totalHeight - 2}, ${cx} ${cy + coord.totalHeight}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" class="git-capsule-close"/>
+      `;
     }
 
     // Node Circle

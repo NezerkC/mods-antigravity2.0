@@ -105,8 +105,9 @@ export class GitService {
     // Determine set of commit hashes on trunk (main/master/origin/main)
     const trunkHashes = new Set();
     const remoteHashes = new Set();
+    const localHashes = new Set();
     try {
-      const trunkLog = execSync('git rev-list origin/main || git rev-list main', {
+      const trunkLog = execSync('git rev-list --first-parent origin/main || git rev-list --first-parent main || git rev-list origin/main || git rev-list main', {
         cwd: repoPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore']
@@ -117,6 +118,20 @@ export class GitService {
       }
     } catch {
       // fallback: commit at the very end or with 'main' ref
+    }
+
+    try {
+      const locLog = execSync('git rev-list --branches HEAD', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+      for (const h of locLog.split('\n')) {
+        const tr = h.trim();
+        if (tr) localHashes.add(tr);
+      }
+    } catch {
+      // fallback
     }
 
     try {
@@ -305,12 +320,34 @@ export class GitService {
         }
       }
 
-      const isPushed = remoteHashes.size === 0 ? true : remoteHashes.has(hash);
+      let isPushed = remoteHashes.size === 0 ? true : remoteHashes.has(hash);
+      let isPendingPull = false;
+      let syncState = 'synced';
+
+      if (remoteHashes.size > 0 && localHashes.size > 0) {
+        const inLocal = localHashes.has(hash);
+        const inRemote = remoteHashes.has(hash);
+        if (inLocal && !inRemote) {
+          syncState = 'local_pending_push';
+          isPushed = false;
+        } else if (!inLocal && inRemote) {
+          syncState = 'remote_pending_pull';
+          isPendingPull = true;
+          isPushed = true;
+        } else {
+          syncState = 'synced';
+          isPushed = true;
+        }
+      } else {
+        syncState = isPushed ? 'synced' : 'local_pending_push';
+      }
 
       enriched.push({
         ...commit,
         lane: cLane,
         pushed: isPushed,
+        pendingPull: isPendingPull,
+        syncState,
         isTrunk: trunkHashes.has(hash),
         routes
       });
