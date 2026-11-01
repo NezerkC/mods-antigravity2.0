@@ -575,28 +575,158 @@ export class ModLoader {
           }
         };
 
+
+        const __LANE_COLORS = ['#38bdf8', '#f97316', '#a855f7', '#22c55e', '#ec4899', '#06b6d4'];
+        function __getLaneColor(lane) {
+          return __LANE_COLORS[Math.abs(lane || 0) % __LANE_COLORS.length];
+        }
+
+        window.__antigravityRenderGitSvg = function(commits, options) {
+          if (!Array.isArray(commits) || commits.length === 0) return '';
+          options = options || {};
+          const rowHeight = options.rowHeight || 26;
+          const fileRowHeight = options.fileRowHeight || 22;
+          const laneWidth = options.laneWidth || 14;
+          const startX = options.startX || 14;
+          const startY = options.startY || 13;
+
+          let maxLane = 0;
+          for (let i = 0; i < commits.length; i++) {
+            if (typeof commits[i].lane === 'number' && commits[i].lane > maxLane) {
+              maxLane = commits[i].lane;
+            }
+          }
+
+          const hasExpanded = commits.some(c => !!c.expanded && Array.isArray(c.files) && c.files.length > 0);
+          const extraPad = hasExpanded ? 20 : 8;
+          const svgWidth = Math.max(36, startX + (maxLane + 1) * laneWidth + extraPad);
+
+          const commitCoords = [];
+          let currentY = 0;
+
+          for (let i = 0; i < commits.length; i++) {
+            const commit = commits[i];
+            const isExpanded = !!commit.expanded;
+            const fileCount = Array.isArray(commit.files) ? commit.files.length : 0;
+            const extraHeight = isExpanded ? fileCount * fileRowHeight : 0;
+            const cy = currentY + startY;
+            commitCoords.push({ cy, lane: commit.lane || 0, totalHeight: rowHeight + extraHeight });
+            currentY += rowHeight + extraHeight;
+          }
+
+          const svgHeight = Math.max(currentY, commits.length * rowHeight);
+          let pathsMarkup = '';
+          let nodesMarkup = '';
+
+          for (let i = 0; i < commits.length; i++) {
+            const commit = commits[i];
+            const coord = commitCoords[i];
+            const lane = coord.lane;
+            const cx = startX + lane * laneWidth;
+            const cy = coord.cy;
+            const color = __getLaneColor(lane);
+
+            if (Array.isArray(commit.routes)) {
+              for (let r = 0; r < commit.routes.length; r++) {
+                const route = commit.routes[r];
+                const nextIdx = i + 1;
+                if (nextIdx >= commits.length) continue;
+                const nextCoord = commitCoords[nextIdx];
+                const fromX = startX + route.fromLane * laneWidth;
+                const fromY = cy;
+                const toX = startX + route.toLane * laneWidth;
+                const toY = nextCoord.cy;
+                const routeColor = __getLaneColor(typeof route.colorLane === 'number' ? route.colorLane : Math.min(route.fromLane, route.toLane));
+
+                if (route.fromLane === route.toLane) {
+                  pathsMarkup += '<line x1="' + fromX + '" y1="' + fromY + '" x2="' + toX + '" y2="' + toY + '" stroke="' + routeColor + '" stroke-width="2" stroke-linecap="round"/>';
+                } else {
+                  const deltaY = toY - fromY;
+                  const cpY1 = fromY + deltaY * 0.45;
+                  const cpY2 = toY - deltaY * 0.45;
+                  pathsMarkup += '<path d="M ' + fromX + ' ' + fromY + ' C ' + fromX + ' ' + cpY1 + ', ' + toX + ' ' + cpY2 + ', ' + toX + ' ' + toY + '" fill="none" stroke="' + routeColor + '" stroke-width="2" stroke-linecap="round"/>';
+                }
+              }
+            }
+
+            const isExpanded = !!commit.expanded;
+            const fileCount = Array.isArray(commit.files) ? commit.files.length : 0;
+            if (isExpanded && fileCount > 0) {
+              const subOffset = Math.max(12, laneWidth * 0.85);
+              const subX = cx + subOffset;
+              const openStartY = cy;
+              const openEndY = cy + 14;
+              const capsuleBottomY = cy + coord.totalHeight - 8;
+
+              pathsMarkup += '<path d="M ' + cx + ' ' + openStartY + ' C ' + (cx + 4) + ' ' + (openStartY + 4) + ', ' + (subX - 2) + ' ' + (openStartY + 8) + ', ' + subX + ' ' + openEndY + '" fill="none" stroke="' + color + '" stroke-width="1.6" stroke-linecap="round" class="git-capsule-open"/>';
+              pathsMarkup += '<line x1="' + subX + '" y1="' + openEndY + '" x2="' + subX + '" y2="' + capsuleBottomY + '" stroke="' + color + '" stroke-width="1.4" stroke-dasharray="2,2" class="git-capsule-spine"/>';
+
+              for (let f = 0; f < fileCount; f++) {
+                const file = commit.files[f];
+                const fileStatus = (typeof file === 'object' && file.status) ? file.status.toUpperCase() : 'M';
+                const fileY = cy + rowHeight + f * fileRowHeight + (fileRowHeight / 2);
+                let fileColor = '#f59e0b';
+                if (fileStatus === 'A') fileColor = '#22c55e';
+                else if (fileStatus === 'D') fileColor = '#ef4444';
+                else if (fileStatus === 'R') fileColor = '#06b6d4';
+
+                nodesMarkup += '<circle cx="' + subX + '" cy="' + fileY + '" r="2.8" fill="' + fileColor + '" stroke="#181a1f" stroke-width="1" class="git-file-node" data-file-index="' + f + '"/>';
+              }
+
+              pathsMarkup += '<path d="M ' + subX + ' ' + capsuleBottomY + ' C ' + (subX - 2) + ' ' + (capsuleBottomY + 3) + ', ' + (cx + 4) + ' ' + (cy + coord.totalHeight - 2) + ', ' + cx + ' ' + (cy + coord.totalHeight) + '" fill="none" stroke="' + color + '" stroke-width="1.6" stroke-linecap="round" class="git-capsule-close"/>';
+            }
+
+            const isHead = (Array.isArray(commit.refs) && commit.refs.some(function(r) { return r.indexOf('HEAD') !== -1; })) || i === 0;
+            const isPushed = commit.pushed !== false;
+
+            if (isHead) {
+              nodesMarkup += '<circle cx="' + cx + '" cy="' + cy + '" r="6.5" fill="none" stroke="' + color + '" stroke-width="1.8" class="git-node-halo"/><circle cx="' + cx + '" cy="' + cy + '" r="3" fill="' + color + '" class="git-node-head" data-hash="' + commit.hash + '"/>';
+            } else if (!isPushed) {
+              nodesMarkup += '<circle cx="' + cx + '" cy="' + cy + '" r="5.5" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-dasharray="2,2" class="git-node-unpushed-ring"/><circle cx="' + cx + '" cy="' + cy + '" r="3" fill="' + color + '" stroke="#181a1f" stroke-width="1" class="git-node git-node-unpushed" data-hash="' + commit.hash + '"/>';
+            } else {
+              nodesMarkup += '<circle cx="' + cx + '" cy="' + cy + '" r="3.5" fill="' + color + '" stroke="#181a1f" stroke-width="1.5" class="git-node" data-hash="' + commit.hash + '"/>';
+            }
+          }
+
+          return '<svg class="git-graph-svg" width="' + svgWidth + '" height="' + svgHeight + '" viewBox="0 0 ' + svgWidth + ' ' + svgHeight + '" style="min-width: ' + svgWidth + 'px; height: ' + svgHeight + 'px;" xmlns="http://www.w3.org/2000/svg"><g class="git-graph-routes">' + pathsMarkup + '</g><g class="git-graph-nodes">' + nodesMarkup + '</g></svg>';
+        };
+
         window.__bindGitPanelEvents = function(hostEl) {
           if (!hostEl) return;
 
-          // Commit row click and file expansion
+          // Commit row click: Accordion hamburger file expansion & SVG reactive re-render
           hostEl.querySelectorAll('.git-commit-row').forEach(row => {
             row.addEventListener('click', (ev) => {
               hostEl.querySelectorAll('.git-commit-row.selected').forEach(r => r.classList.remove('selected'));
               row.classList.add('selected');
 
+              const hash = row.getAttribute('data-hash');
               const item = row.closest('.git-commit-item');
-              const isPillClick = ev.target.closest('.git-pill-files') || ev.target.closest('.git-commit-chevron');
 
-              if (item && isPillClick) {
-                ev.stopPropagation();
+              if (item) {
                 const filesContainer = item.querySelector('.git-commit-files-container');
                 const chevron = item.querySelector('.git-commit-chevron');
-                if (filesContainer) {
+                if (filesContainer && chevron && chevron.classList.contains('has-files')) {
                   const isNowOpen = filesContainer.style.display !== 'none';
                   filesContainer.style.display = isNowOpen ? 'none' : 'flex';
                   item.classList.toggle('is-expanded', !isNowOpen);
-                  if (chevron && chevron.classList.contains('has-files')) {
-                    chevron.textContent = isNowOpen ? '▸' : '▾';
+                  chevron.textContent = isNowOpen ? '▸' : '▾';
+
+                  // Reactively re-render SVG with inline capsule --< * * * * >--
+                  if (window.__antigravityVcsData && Array.isArray(window.__antigravityVcsData.commits)) {
+                    const c = window.__antigravityVcsData.commits.find(x => x.hash === hash);
+                    if (c) {
+                      c.expanded = !isNowOpen;
+                    }
+                    const svgCol = hostEl.querySelector('#antigravity-git-svg-column') || hostEl.querySelector('.git-svg-column');
+                    if (svgCol && typeof window.__antigravityRenderGitSvg === 'function') {
+                      svgCol.innerHTML = window.__antigravityRenderGitSvg(window.__antigravityVcsData.commits, {
+                        rowHeight: 26,
+                        fileRowHeight: 22,
+                        laneWidth: 14,
+                        startX: 14
+                      });
+                    }
                   }
                 }
               }
