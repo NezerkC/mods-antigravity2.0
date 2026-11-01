@@ -96,7 +96,7 @@ export function renderGitGraphSvg(commits = [], options = {}) {
         const fromY = cy;
         const toX = startX + route.toLane * laneWidth;
         const toY = nextCoord.cy;
-        const routeColor = getLaneColor(Math.min(route.fromLane, route.toLane));
+        const routeColor = getLaneColor(typeof route.colorLane === 'number' ? route.colorLane : Math.min(route.fromLane, route.toLane));
 
         if (route.fromLane === route.toLane) {
           // Straight vertical trunk line

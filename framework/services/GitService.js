@@ -164,7 +164,7 @@ export class GitService {
 
     try {
       const format = 'COMMIT:%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%D';
-      const rawLog = execSync(`git log --format="${format}" --name-status -n ${limit}`, {
+      const rawLog = execSync(`git log --all --topo-order --format="${format}" --name-status -n ${limit}`, {
         cwd: repoPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore']
