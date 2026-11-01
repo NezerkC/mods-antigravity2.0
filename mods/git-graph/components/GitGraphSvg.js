@@ -3,9 +3,9 @@
  * matching the compact VS Code Git Graph aesthetic.
  */
 
-const LANE_COLORS = [
-  '#38bdf8', // Sky Blue (Feature / Current branch)
-  '#f97316', // Orange (main / remote)
+export const LANE_COLORS = [
+  '#38bdf8', // Sky Blue (Main / Trunk)
+  '#f97316', // Orange
   '#a855f7', // Purple
   '#22c55e', // Emerald
   '#ec4899', // Pink
@@ -14,11 +14,20 @@ const LANE_COLORS = [
 
 /**
  * Returns color associated with a lane index.
+ * Self-contained palette so getLaneColor.toString() works cleanly in browser runtime.
  * @param {number} lane
  * @returns {string}
  */
 export function getLaneColor(lane = 0) {
-  return LANE_COLORS[Math.abs(lane) % LANE_COLORS.length];
+  const palette = [
+    '#38bdf8',
+    '#f97316',
+    '#a855f7',
+    '#22c55e',
+    '#ec4899',
+    '#06b6d4'
+  ];
+  return palette[Math.abs(lane) % palette.length];
 }
 
 /**
@@ -41,17 +50,23 @@ export function renderGitGraphSvg(commits = [], options = {}) {
   const fileRowHeight = options.fileRowHeight ?? 22;
   const laneWidth = options.laneWidth ?? 14;
   const startX = options.startX ?? (options.laneWidth ? options.laneWidth : 14);
-  const startY = options.startY ?? 13;
+  const startY = options.startY ?? Math.floor(rowHeight / 2);
 
   let maxLane = 0;
   for (const c of commits) {
     if (typeof c.lane === 'number' && c.lane > maxLane) {
       maxLane = c.lane;
     }
+    if (Array.isArray(c.routes)) {
+      for (const r of c.routes) {
+        if (typeof r.fromLane === 'number' && r.fromLane > maxLane) maxLane = r.fromLane;
+        if (typeof r.toLane === 'number' && r.toLane > maxLane) maxLane = r.toLane;
+      }
+    }
   }
 
   const hasExpanded = commits.some(c => !!c.expanded && Array.isArray(c.files) && c.files.length > 0);
-  const extraPad = hasExpanded ? 20 : 8;
+  const extraPad = hasExpanded ? 22 : 8;
   const svgWidth = Math.max(36, startX + (maxLane + 1) * laneWidth + extraPad);
 
   // Compute Y-center coordinates for each commit taking expanded files into account
@@ -67,6 +82,7 @@ export function renderGitGraphSvg(commits = [], options = {}) {
     const cy = currentY + startY;
     commitCoords.push({
       cy,
+      rowTop: currentY,
       lane: commit.lane ?? 0,
       totalHeight: rowHeight + extraHeight
     });
@@ -123,25 +139,29 @@ export function renderGitGraphSvg(commits = [], options = {}) {
     if (isExpanded && fileCount > 0) {
       const subOffset = Math.max(12, laneWidth * 0.85);
       const subX = cx + subOffset;
-      const openStartY = cy;
-      const openEndY = cy + 14;
-      const capsuleBottomY = cy + coord.totalHeight - 8;
+      const filesStartY = coord.rowTop + rowHeight;
+      const itemBottomY = coord.rowTop + coord.totalHeight;
+      const firstFileY = filesStartY + (fileRowHeight / 2);
+      const lastFileY = filesStartY + (fileCount - 1) * fileRowHeight + (fileRowHeight / 2);
+      const spineTopY = Math.min(firstFileY, filesStartY + 4);
+      const spineBottomY = Math.max(spineTopY, lastFileY + 4);
+      const closeTargetY = Math.min(itemBottomY - 1, spineBottomY + 7);
 
       // Opening bracket curve: --<
       pathsMarkup += `
-        <path d="M ${cx} ${openStartY} C ${cx + 4} ${openStartY + 4}, ${subX - 2} ${openStartY + 8}, ${subX} ${openEndY}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" class="git-capsule-open"/>
+        <path d="M ${cx} ${cy} C ${cx + 4} ${cy + 5}, ${subX - 2} ${spineTopY - 4}, ${subX} ${spineTopY}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" class="git-capsule-open"/>
       `;
 
       // Vertical spine connecting files
       pathsMarkup += `
-        <line x1="${subX}" y1="${openEndY}" x2="${subX}" y2="${capsuleBottomY}" stroke="${color}" stroke-width="1.4" stroke-dasharray="2,2" class="git-capsule-spine"/>
+        <line x1="${subX}" y1="${spineTopY}" x2="${subX}" y2="${spineBottomY}" stroke="${color}" stroke-width="1.4" stroke-dasharray="2,2" class="git-capsule-spine"/>
       `;
 
-      // File nodes (* * * *) with semantic status colors
+      // File nodes (* * * *) with semantic status colors aligned 1:1 with each .git-file-row center
       for (let f = 0; f < fileCount; f++) {
         const file = commit.files[f];
         const fileStatus = (typeof file === 'object' && file.status) ? file.status.toUpperCase() : 'M';
-        const fileY = cy + rowHeight + f * fileRowHeight + (fileRowHeight / 2);
+        const fileY = filesStartY + f * fileRowHeight + (fileRowHeight / 2);
 
         let fileColor = '#f59e0b'; // Amber (Modified)
         if (fileStatus === 'A') fileColor = '#22c55e'; // Emerald (Added)
@@ -155,7 +175,7 @@ export function renderGitGraphSvg(commits = [], options = {}) {
 
       // Closing bracket curve: >--
       pathsMarkup += `
-        <path d="M ${subX} ${capsuleBottomY} C ${subX - 2} ${capsuleBottomY + 3}, ${cx + 4} ${cy + coord.totalHeight - 2}, ${cx} ${cy + coord.totalHeight}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" class="git-capsule-close"/>
+        <path d="M ${subX} ${spineBottomY} C ${subX - 2} ${spineBottomY + 3}, ${cx + 4} ${closeTargetY - 2}, ${cx} ${closeTargetY}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" class="git-capsule-close"/>
       `;
     }
 

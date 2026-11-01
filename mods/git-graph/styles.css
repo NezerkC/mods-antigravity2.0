@@ -139,6 +139,22 @@
   color: #ef4444 !important;
 }
 
+/* Status Toast Banner */
+.git-vcs-toast {
+  padding: 4px 10px !important;
+  font-size: 10px !important;
+  font-family: monospace !important;
+  background: rgba(56, 189, 248, 0.12) !important;
+  color: #7dd3fc !important;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.25) !important;
+}
+
+.git-vcs-toast.is-error {
+  background: rgba(239, 68, 68, 0.16) !important;
+  color: #fca5a5 !important;
+  border-bottom-color: rgba(239, 68, 68, 0.35) !important;
+}
+
 /* Graph & Commits Viewport */
 .git-graph-container {
   display: flex !important;
@@ -185,6 +201,7 @@
 .git-commit-row {
   height: 26px !important;
   min-height: 26px !important;
+  box-sizing: border-box !important;
   display: flex !important;
   align-items: center !important;
   padding: 0 8px 0 4px !important;
@@ -260,12 +277,24 @@
   border: 1px solid rgba(249, 115, 22, 0.35) !important;
 }
 
-.git-pill-files {
+/* Selective Commit Push Button */
+.git-commit-push-btn {
   font-size: 9px !important;
-  color: #64748b !important;
-  background: rgba(255, 255, 255, 0.05) !important;
-  padding: 1px 4px !important;
-  border-radius: 3px !important;
+  font-weight: 600 !important;
+  font-family: monospace !important;
+  padding: 1px 5px !important;
+  border-radius: 4px !important;
+  background: rgba(34, 197, 94, 0.14) !important;
+  color: #4ade80 !important;
+  border: 1px solid rgba(34, 197, 94, 0.35) !important;
+  cursor: pointer !important;
+  white-space: nowrap !important;
+  transition: all 0.12s ease !important;
+}
+
+.git-commit-push-btn:hover {
+  background: rgba(34, 197, 94, 0.28) !important;
+  color: #dcfce7 !important;
 }
 
 .git-icon-cloud {
@@ -291,14 +320,15 @@
   cursor: pointer !important;
 }
 
-/* Expandable Inline File Diff List */
+/* Expandable Inline File Diff List (strictly 22px * fileCount, 0 vertical padding for 1:1 SVG alignment) */
 .git-commit-files-container {
   display: none !important;
   flex-direction: column !important;
   background: rgba(0, 0, 0, 0.3) !important;
   border-left: 2px solid rgba(56, 189, 248, 0.35) !important;
   margin-left: 14px !important;
-  padding: 2px 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
 }
 
 .git-commit-item.is-expanded > .git-commit-files-container {
@@ -308,6 +338,7 @@
 .git-file-row {
   height: 22px !important;
   min-height: 22px !important;
+  box-sizing: border-box !important;
   display: flex !important;
   align-items: center !important;
   padding: 0 10px 0 8px !important;
@@ -357,6 +388,12 @@
   background: rgba(168, 85, 247, 0.18) !important;
   color: #c084fc !important;
   border: 1px solid rgba(168, 85, 247, 0.35) !important;
+}
+
+.ext-html {
+  background: rgba(249, 115, 22, 0.18) !important;
+  color: #fb923c !important;
+  border: 1px solid rgba(249, 115, 22, 0.35) !important;
 }
 
 .ext-default {
@@ -416,18 +453,35 @@
 
 .git-pr-none {
   display: flex !important;
-  flex-direction: row !important;
-  align-items: center !important;
-  justify-content: space-between !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
   color: #64748b !important;
   background: #11141c !important;
   padding: 6px 12px !important;
+  gap: 6px !important;
+}
+
+.git-pr-none-main {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  width: 100% !important;
 }
 
 .git-pr-none-left {
   display: flex !important;
   align-items: center !important;
   gap: 6px !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+}
+
+.git-pr-none-text {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
 }
 
 .git-pr-icon {
@@ -438,7 +492,8 @@
 .git-pr-none-right {
   display: flex !important;
   align-items: center !important;
-  gap: 8px !important;
+  gap: 5px !important;
+  flex-shrink: 0 !important;
 }
 
 .git-pr-sync-badge {
@@ -447,6 +502,44 @@
   border-radius: 4px !important;
   background: rgba(255, 255, 255, 0.05) !important;
   color: #94a3b8 !important;
+}
+
+.git-pr-action-btn {
+  font-size: 9px !important;
+  font-weight: 700 !important;
+  font-family: monospace !important;
+  padding: 2px 5px !important;
+  border-radius: 4px !important;
+  cursor: pointer !important;
+  border: 1px solid transparent !important;
+}
+
+.git-pr-action-btn.btn-push {
+  background: rgba(34, 197, 94, 0.16) !important;
+  color: #4ade80 !important;
+  border-color: rgba(34, 197, 94, 0.35) !important;
+}
+
+.git-pr-action-btn.btn-pull {
+  background: rgba(249, 115, 22, 0.16) !important;
+  color: #fb923c !important;
+  border-color: rgba(249, 115, 22, 0.35) !important;
+}
+
+.git-pr-create-btn {
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  padding: 2px 7px !important;
+  border-radius: 4px !important;
+  background: rgba(56, 189, 248, 0.15) !important;
+  color: #38bdf8 !important;
+  border: 1px solid rgba(56, 189, 248, 0.35) !important;
+  cursor: pointer !important;
+  white-space: nowrap !important;
+}
+
+.git-pr-create-btn:hover {
+  background: rgba(56, 189, 248, 0.25) !important;
 }
 
 .git-pr-create-link {
@@ -458,6 +551,71 @@
 
 .git-pr-create-link:hover {
   text-decoration: underline !important;
+}
+
+.git-pr-commits-drawer {
+  padding: 6px 8px !important;
+  border-radius: 6px !important;
+  background: #0d1017 !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+}
+
+.git-pr-commits-list {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 3px !important;
+  max-height: 120px !important;
+  overflow-y: auto !important;
+  margin-bottom: 6px !important;
+}
+
+.git-pr-commit-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 2px 4px !important;
+  border-radius: 4px !important;
+  background: rgba(255, 255, 255, 0.02) !important;
+}
+
+.git-pr-commit-sha {
+  font-family: monospace !important;
+  font-size: 10px !important;
+  color: #93c5fd !important;
+  flex-shrink: 0 !important;
+}
+
+.git-pr-commit-msg {
+  font-size: 10px !important;
+  color: #cbd5e1 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  flex: 1 1 0% !important;
+}
+
+.git-pr-drawer-footer {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  padding-top: 4px !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.06) !important;
+}
+
+.git-pr-submit-btn {
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  padding: 3px 8px !important;
+  border-radius: 4px !important;
+  background: rgba(56, 189, 248, 0.2) !important;
+  color: #7dd3fc !important;
+  border: 1px solid rgba(56, 189, 248, 0.45) !important;
+  cursor: pointer !important;
+}
+
+.git-pr-submit-btn:hover {
+  background: rgba(56, 189, 248, 0.32) !important;
 }
 
 .git-pr-card-main {
@@ -540,6 +698,9 @@
 /* CI/CD Rollup Button */
 .git-pr-ci-badge-wrap {
   flex-shrink: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
 }
 
 .git-ci-rollup-btn {
@@ -754,7 +915,7 @@
 .git-branches-drawer {
   background: #0d1017 !important;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
-  max-height: 180px !important;
+  max-height: 220px !important;
   overflow-y: auto !important;
   padding: 6px 10px !important;
 }
@@ -766,6 +927,15 @@
   letter-spacing: 0.5px !important;
   color: #64748b !important;
   margin: 4px 0 2px !important;
+}
+
+.git-branch-cluster-header {
+  font-size: 9px !important;
+  font-weight: 600 !important;
+  color: #94a3b8 !important;
+  padding: 4px 4px 1px !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.04) !important;
+  margin-top: 2px !important;
 }
 
 .git-branches-list-wrap {
@@ -801,6 +971,49 @@
   text-overflow: ellipsis !important;
   white-space: nowrap !important;
   flex: 1 1 0% !important;
+}
+
+.git-branch-sync-badges {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 3px !important;
+  flex-shrink: 0 !important;
+}
+
+.git-branch-sync-badge {
+  font-family: monospace !important;
+  font-size: 9px !important;
+  font-weight: 700 !important;
+  padding: 1px 4px !important;
+  border-radius: 3px !important;
+  border: 1px solid transparent !important;
+  line-height: 1.2 !important;
+}
+
+.git-branch-sync-badge.badge-ahead {
+  background: rgba(34, 197, 94, 0.15) !important;
+  color: #4ade80 !important;
+  border-color: rgba(34, 197, 94, 0.35) !important;
+  cursor: pointer !important;
+}
+
+.git-branch-sync-badge.badge-behind {
+  background: rgba(249, 115, 22, 0.15) !important;
+  color: #fb923c !important;
+  border-color: rgba(249, 115, 22, 0.35) !important;
+  cursor: pointer !important;
+}
+
+.git-branch-sync-badge.badge-dirty {
+  background: rgba(234, 179, 8, 0.15) !important;
+  color: #facc15 !important;
+  border-color: rgba(234, 179, 8, 0.35) !important;
+}
+
+.git-branch-sync-badge.badge-merged {
+  background: rgba(168, 85, 247, 0.15) !important;
+  color: #c084fc !important;
+  border-color: rgba(168, 85, 247, 0.3) !important;
 }
 
 .git-branch-drawer-hash {
