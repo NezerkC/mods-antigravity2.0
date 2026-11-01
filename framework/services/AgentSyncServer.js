@@ -65,13 +65,48 @@ export class AgentSyncServer {
 
   /**
    * Updates an agent entry for a specific conversation cascadeId.
+   * Preserves existing modifiers (like caveman) unless explicitly specified.
    * @param {string} cascadeId
    * @param {Object} agent
    */
   updateAgentForCascade(cascadeId, agent) {
     if (!cascadeId) return;
     const current = this.readActiveAgents();
-    current[cascadeId] = agent;
+    const existing = current[cascadeId] || {};
+    const existingModifiers = existing.modifiers || {};
+    const modifiers = agent.modifiers || existingModifiers;
+    const caveman = (agent.caveman !== undefined)
+      ? !!agent.caveman
+      : ((modifiers.caveman !== undefined) ? !!modifiers.caveman : (existing.caveman ?? false));
+
+    current[cascadeId] = {
+      ...agent,
+      modifiers: { ...existingModifiers, ...modifiers, caveman },
+      caveman
+    };
+    this.writeActiveAgents(current);
+  }
+
+  /**
+   * Updates modifier flags (such as caveman mode) for a specific cascadeId.
+   * @param {string} cascadeId
+   * @param {Object} modifiers
+   */
+  updateModifiersForCascade(cascadeId, modifiers = {}) {
+    if (!cascadeId) return;
+    const current = this.readActiveAgents();
+    const existing = current[cascadeId] || {};
+    const existingModifiers = existing.modifiers || {};
+    const nextModifiers = { ...existingModifiers, ...modifiers };
+    const caveman = (modifiers.caveman !== undefined)
+      ? !!modifiers.caveman
+      : (existing.caveman ?? false);
+
+    current[cascadeId] = {
+      ...existing,
+      modifiers: nextModifiers,
+      caveman
+    };
     this.writeActiveAgents(current);
   }
 
@@ -103,6 +138,25 @@ export class AgentSyncServer {
               const payload = JSON.parse(body);
               if (payload.cascadeId && payload.agent) {
                 this.updateAgentForCascade(payload.cascadeId, payload.agent);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, cascadeId: payload.cascadeId }));
+                return;
+              }
+            } catch {}
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid payload' }));
+          });
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/active-agent/modifier') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            try {
+              const payload = JSON.parse(body);
+              if (payload.cascadeId && (payload.modifiers || payload.modifier)) {
+                this.updateModifiersForCascade(payload.cascadeId, payload.modifiers || { [payload.modifier]: payload.value });
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true, cascadeId: payload.cascadeId }));
                 return;

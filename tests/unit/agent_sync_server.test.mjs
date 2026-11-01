@@ -96,4 +96,44 @@ describe('AgentSyncServer', () => {
     const fetchData = await fetchRes.json();
     assert.equal(fetchData.success, true);
   });
+
+  it('updates modifiers (caveman mode) for cascade and handles POST /active-agent/modifier', async () => {
+    // 1. Direct method call
+    server.updateModifiersForCascade('cascade-123', { caveman: true });
+    let onDisk = server.readActiveAgents();
+    assert.equal(onDisk['cascade-123'].caveman, true);
+    assert.equal(onDisk['cascade-123'].modifiers.caveman, true);
+
+    // 2. HTTP POST endpoint
+    const postRes = await fetch('http://127.0.0.1:53913/active-agent/modifier', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cascadeId: 'cascade-456',
+        modifiers: { caveman: true }
+      })
+    });
+    assert.equal(postRes.status, 200);
+    const postData = await postRes.json();
+    assert.equal(postData.success, true);
+    assert.equal(postData.cascadeId, 'cascade-456');
+
+    onDisk = server.readActiveAgents();
+    assert.equal(onDisk['cascade-456'].caveman, true);
+    assert.equal(onDisk['cascade-456'].modifiers.caveman, true);
+
+    // 3. Toggle back to false
+    const toggleOff = await fetch('http://127.0.0.1:53913/active-agent/modifier', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cascadeId: 'cascade-456',
+        modifiers: { caveman: false }
+      })
+    });
+    assert.equal(toggleOff.status, 200);
+    onDisk = server.readActiveAgents();
+    assert.equal(onDisk['cascade-456'].caveman, false);
+    assert.equal(onDisk['cascade-456'].modifiers.caveman, false);
+  });
 });

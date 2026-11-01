@@ -2593,8 +2593,9 @@ class GitService {
     // Determine set of commit hashes on trunk (main/master/origin/main)
     const trunkHashes = new Set();
     const remoteHashes = new Set();
+    const localHashes = new Set();
     try {
-      const trunkLog = execSync('git rev-list origin/main || git rev-list main', {
+      const trunkLog = execSync('git rev-list --first-parent origin/main || git rev-list --first-parent main || git rev-list origin/main || git rev-list main', {
         cwd: repoPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore']
@@ -2605,6 +2606,20 @@ class GitService {
       }
     } catch {
       // fallback: commit at the very end or with 'main' ref
+    }
+
+    try {
+      const locLog = execSync('git rev-list --branches HEAD', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+      for (const h of locLog.split('\n')) {
+        const tr = h.trim();
+        if (tr) localHashes.add(tr);
+      }
+    } catch {
+      // fallback
     }
 
     try {
@@ -2793,12 +2808,34 @@ class GitService {
         }
       }
 
-      const isPushed = remoteHashes.size === 0 ? true : remoteHashes.has(hash);
+      let isPushed = remoteHashes.size === 0 ? true : remoteHashes.has(hash);
+      let isPendingPull = false;
+      let syncState = 'synced';
+
+      if (remoteHashes.size > 0 && localHashes.size > 0) {
+        const inLocal = localHashes.has(hash);
+        const inRemote = remoteHashes.has(hash);
+        if (inLocal && !inRemote) {
+          syncState = 'local_pending_push';
+          isPushed = false;
+        } else if (!inLocal && inRemote) {
+          syncState = 'remote_pending_pull';
+          isPendingPull = true;
+          isPushed = true;
+        } else {
+          syncState = 'synced';
+          isPushed = true;
+        }
+      } else {
+        syncState = isPushed ? 'synced' : 'local_pending_push';
+      }
 
       enriched.push({
         ...commit,
         lane: cLane,
         pushed: isPushed,
+        pendingPull: isPendingPull,
+        syncState,
         isTrunk: trunkHashes.has(hash),
         routes
       });
@@ -3467,13 +3504,48 @@ class AgentSyncServer {
 
   /**
    * Updates an agent entry for a specific conversation cascadeId.
+   * Preserves existing modifiers (like caveman) unless explicitly specified.
    * @param {string} cascadeId
    * @param {Object} agent
    */
   updateAgentForCascade(cascadeId, agent) {
     if (!cascadeId) return;
     const current = this.readActiveAgents();
-    current[cascadeId] = agent;
+    const existing = current[cascadeId] || {};
+    const existingModifiers = existing.modifiers || {};
+    const modifiers = agent.modifiers || existingModifiers;
+    const caveman = (agent.caveman !== undefined)
+      ? !!agent.caveman
+      : ((modifiers.caveman !== undefined) ? !!modifiers.caveman : (existing.caveman ?? false));
+
+    current[cascadeId] = {
+      ...agent,
+      modifiers: { ...existingModifiers, ...modifiers, caveman },
+      caveman
+    };
+    this.writeActiveAgents(current);
+  }
+
+  /**
+   * Updates modifier flags (such as caveman mode) for a specific cascadeId.
+   * @param {string} cascadeId
+   * @param {Object} modifiers
+   */
+  updateModifiersForCascade(cascadeId, modifiers = {}) {
+    if (!cascadeId) return;
+    const current = this.readActiveAgents();
+    const existing = current[cascadeId] || {};
+    const existingModifiers = existing.modifiers || {};
+    const nextModifiers = { ...existingModifiers, ...modifiers };
+    const caveman = (modifiers.caveman !== undefined)
+      ? !!modifiers.caveman
+      : (existing.caveman ?? false);
+
+    current[cascadeId] = {
+      ...existing,
+      modifiers: nextModifiers,
+      caveman
+    };
     this.writeActiveAgents(current);
   }
 
@@ -3505,6 +3577,25 @@ class AgentSyncServer {
               const payload = JSON.parse(body);
               if (payload.cascadeId && payload.agent) {
                 this.updateAgentForCascade(payload.cascadeId, payload.agent);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, cascadeId: payload.cascadeId }));
+                return;
+              }
+            } catch {}
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid payload' }));
+          });
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/active-agent/modifier') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            try {
+              const payload = JSON.parse(body);
+              if (payload.cascadeId && (payload.modifiers || payload.modifier)) {
+                this.updateModifiersForCascade(payload.cascadeId, payload.modifiers || { [payload.modifier]: payload.value });
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true, cascadeId: payload.cascadeId }));
                 return;
@@ -5607,7 +5698,9 @@ function renderGitGraphSvg(commits = [], options = {}) {
     }
   }
 
-  const svgWidth = Math.max(32, startX + (maxLane + 1) * laneWidth + 8);
+  const hasExpanded = commits.some(c => !!c.expanded && Array.isArray(c.files) && c.files.length > 0);
+  const extraPad = hasExpanded ? 20 : 8;
+  const svgWidth = Math.max(36, startX + (maxLane + 1) * laneWidth + extraPad);
 
   // Compute Y-center coordinates for each commit taking expanded files into account
   const commitCoords = [];
@@ -5670,6 +5763,48 @@ function renderGitGraphSvg(commits = [], options = {}) {
           `;
         }
       }
+    }
+
+    // Render inline inspection capsule: --< * * * * >--
+    const isExpanded = !!commit.expanded;
+    const fileCount = Array.isArray(commit.files) ? commit.files.length : 0;
+    if (isExpanded && fileCount > 0) {
+      const subOffset = Math.max(12, laneWidth * 0.85);
+      const subX = cx + subOffset;
+      const openStartY = cy;
+      const openEndY = cy + 14;
+      const capsuleBottomY = cy + coord.totalHeight - 8;
+
+      // Opening bracket curve: --<
+      pathsMarkup += `
+        <path d="M ${cx} ${openStartY} C ${cx + 4} ${openStartY + 4}, ${subX - 2} ${openStartY + 8}, ${subX} ${openEndY}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" class="git-capsule-open"/>
+      `;
+
+      // Vertical spine connecting files
+      pathsMarkup += `
+        <line x1="${subX}" y1="${openEndY}" x2="${subX}" y2="${capsuleBottomY}" stroke="${color}" stroke-width="1.4" stroke-dasharray="2,2" class="git-capsule-spine"/>
+      `;
+
+      // File nodes (* * * *) with semantic status colors
+      for (let f = 0; f < fileCount; f++) {
+        const file = commit.files[f];
+        const fileStatus = (typeof file === 'object' && file.status) ? file.status.toUpperCase() : 'M';
+        const fileY = cy + rowHeight + f * fileRowHeight + (fileRowHeight / 2);
+
+        let fileColor = '#f59e0b'; // Amber (Modified)
+        if (fileStatus === 'A') fileColor = '#22c55e'; // Emerald (Added)
+        else if (fileStatus === 'D') fileColor = '#ef4444'; // Red (Deleted)
+        else if (fileStatus === 'R') fileColor = '#06b6d4'; // Cyan (Renamed)
+
+        nodesMarkup += `
+          <circle cx="${subX}" cy="${fileY}" r="2.8" fill="${fileColor}" stroke="#181a1f" stroke-width="1" class="git-file-node" data-file-index="${f}"/>
+        `;
+      }
+
+      // Closing bracket curve: >--
+      pathsMarkup += `
+        <path d="M ${subX} ${capsuleBottomY} C ${subX - 2} ${capsuleBottomY + 3}, ${cx + 4} ${cy + coord.totalHeight - 2}, ${cx} ${cy + coord.totalHeight}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" class="git-capsule-close"/>
+      `;
     }
 
     // Node Circle
