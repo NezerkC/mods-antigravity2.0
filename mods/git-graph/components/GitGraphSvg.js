@@ -117,11 +117,19 @@ export function renderGitGraphSvg(commits = [], options = {}) {
 
     // Node Circle
     const isHead = (Array.isArray(commit.refs) && commit.refs.some(r => r.includes('HEAD'))) || i === 0;
+    const isPushed = commit.pushed !== false;
+
     if (isHead) {
       // Glowing halo ring around current/HEAD commit
       nodesMarkup += `
         <circle cx="${cx}" cy="${cy}" r="6.5" fill="none" stroke="${color}" stroke-width="1.8" class="git-node-halo"/>
         <circle cx="${cx}" cy="${cy}" r="3" fill="${color}" class="git-node-head" data-hash="${commit.hash}"/>
+      `;
+    } else if (!isPushed) {
+      // Local unpushed commit: concentric target ring
+      nodesMarkup += `
+        <circle cx="${cx}" cy="${cy}" r="5.5" fill="none" stroke="${color}" stroke-width="1.5" stroke-dasharray="2,2" class="git-node-unpushed-ring"/>
+        <circle cx="${cx}" cy="${cy}" r="3" fill="${color}" stroke="#181a1f" stroke-width="1" class="git-node git-node-unpushed" data-hash="${commit.hash}"/>
       `;
     } else {
       nodesMarkup += `

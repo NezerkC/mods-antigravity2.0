@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execSync } from 'node:child_process';
 import { VcsOrchestrator } from './VcsOrchestrator.js';
 
 /**
@@ -143,6 +144,66 @@ export class AgentSyncServer {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err.message }));
           }
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/vcs/action') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            try {
+              const payload = JSON.parse(body || '{}');
+              const { action, branch, targetSha } = payload;
+              if (!action) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing action parameter' }));
+                return;
+              }
+
+              let result = {};
+              if (action === 'checkout') {
+                if (!branch) {
+                  res.writeHead(400, { 'Content-Type': 'application/json' });
+                  res.end(JSON.stringify({ error: 'Missing branch for checkout' }));
+                  return;
+                }
+                execSync(`git checkout ${branch}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                result = { success: true, action: 'checkout', branch };
+              } else if (action === 'pull') {
+                const targetBranch = branch || 'main';
+                execSync(`git pull origin ${targetBranch}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                result = { success: true, action: 'pull', branch: targetBranch };
+              } else if (action === 'push') {
+                const targetBranch = branch || 'main';
+                const refspec = targetSha ? `${targetSha}:refs/heads/${targetBranch}` : targetBranch;
+                execSync(`git push origin ${refspec}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                result = { success: true, action: 'push', branch: targetBranch, refspec };
+              } else if (action === 'create-pr') {
+                try {
+                  const prOut = execSync(`gh pr create --fill`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                  result = { success: true, action: 'create-pr', output: prOut.trim() };
+                } catch (e) {
+                  try {
+                    const remoteUrl = execSync('git remote get-url origin', { cwd: this.repoPath, encoding: 'utf-8' }).trim();
+                    const cleanRemote = remoteUrl.replace(/\.git$/, '').replace(/^git@github\.com:/, 'https://github.com/');
+                    result = { success: false, fallbackUrl: `${cleanRemote}/compare`, error: e.message };
+                  } catch {
+                    result = { success: false, error: e.message };
+                  }
+                }
+              } else {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: `Unsupported action: ${action}` }));
+                return;
+              }
+
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify(result));
+            } catch (err) {
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: err.message }));
+            }
+          });
           return;
         }
 

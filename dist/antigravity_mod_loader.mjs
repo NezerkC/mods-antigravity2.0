@@ -3406,6 +3406,7 @@ class VcsOrchestrator {
 
 
 
+
 /**
  * Lightweight local HTTP bridge server for synchronizing active agent selections
  * from the Electron renderer directly to disk (~/.gemini/config/mods/active_agents.json)
@@ -3545,6 +3546,66 @@ class AgentSyncServer {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err.message }));
           }
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/vcs/action') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            try {
+              const payload = JSON.parse(body || '{}');
+              const { action, branch, targetSha } = payload;
+              if (!action) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing action parameter' }));
+                return;
+              }
+
+              let result = {};
+              if (action === 'checkout') {
+                if (!branch) {
+                  res.writeHead(400, { 'Content-Type': 'application/json' });
+                  res.end(JSON.stringify({ error: 'Missing branch for checkout' }));
+                  return;
+                }
+                execSync(`git checkout ${branch}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                result = { success: true, action: 'checkout', branch };
+              } else if (action === 'pull') {
+                const targetBranch = branch || 'main';
+                execSync(`git pull origin ${targetBranch}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                result = { success: true, action: 'pull', branch: targetBranch };
+              } else if (action === 'push') {
+                const targetBranch = branch || 'main';
+                const refspec = targetSha ? `${targetSha}:refs/heads/${targetBranch}` : targetBranch;
+                execSync(`git push origin ${refspec}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                result = { success: true, action: 'push', branch: targetBranch, refspec };
+              } else if (action === 'create-pr') {
+                try {
+                  const prOut = execSync(`gh pr create --fill`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                  result = { success: true, action: 'create-pr', output: prOut.trim() };
+                } catch (e) {
+                  try {
+                    const remoteUrl = execSync('git remote get-url origin', { cwd: this.repoPath, encoding: 'utf-8' }).trim();
+                    const cleanRemote = remoteUrl.replace(/\.git$/, '').replace(/^git@github\.com:/, 'https://github.com/');
+                    result = { success: false, fallbackUrl: `${cleanRemote}/compare`, error: e.message };
+                  } catch {
+                    result = { success: false, error: e.message };
+                  }
+                }
+              } else {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: `Unsupported action: ${action}` }));
+                return;
+              }
+
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify(result));
+            } catch (err) {
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: err.message }));
+            }
+          });
           return;
         }
 
@@ -5613,11 +5674,19 @@ function renderGitGraphSvg(commits = [], options = {}) {
 
     // Node Circle
     const isHead = (Array.isArray(commit.refs) && commit.refs.some(r => r.includes('HEAD'))) || i === 0;
+    const isPushed = commit.pushed !== false;
+
     if (isHead) {
       // Glowing halo ring around current/HEAD commit
       nodesMarkup += `
         <circle cx="${cx}" cy="${cy}" r="6.5" fill="none" stroke="${color}" stroke-width="1.8" class="git-node-halo"/>
         <circle cx="${cx}" cy="${cy}" r="3" fill="${color}" class="git-node-head" data-hash="${commit.hash}"/>
+      `;
+    } else if (!isPushed) {
+      // Local unpushed commit: concentric target ring
+      nodesMarkup += `
+        <circle cx="${cx}" cy="${cy}" r="5.5" fill="none" stroke="${color}" stroke-width="1.5" stroke-dasharray="2,2" class="git-node-unpushed-ring"/>
+        <circle cx="${cx}" cy="${cy}" r="3" fill="${color}" stroke="#181a1f" stroke-width="1" class="git-node git-node-unpushed" data-hash="${commit.hash}"/>
       `;
     } else {
       nodesMarkup += `
