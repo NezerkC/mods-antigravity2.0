@@ -89,6 +89,31 @@ export function renderModsManagerPanelHtml() {
         </label>
       </div>
 
+      <!-- Mod Card: Minimize Chatbox Mods -->
+      <div class="mod-card compact-chatbox-card">
+        <div class="mod-info">
+          <div class="mod-icon-box compact-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="4 14 10 14 10 20"></polyline>
+              <polyline points="20 10 14 10 14 4"></polyline>
+              <line x1="14" y1="10" x2="21" y2="3"></line>
+              <line x1="3" y1="21" x2="10" y2="14"></line>
+            </svg>
+          </div>
+          <div class="mod-text">
+            <div class="mod-title">
+              <span>Minimizar en Chatbox</span>
+              <span class="mod-status-pill" id="compact-chatbox-status-pill">Normal</span>
+            </div>
+            <div class="mod-desc">Contrae el tacómetro y selector a iconos compactos para no molestar la vista.</div>
+          </div>
+        </div>
+        <label class="mod-switch">
+          <input type="checkbox" id="mod-toggle-compact-chatbox" data-action="toggle-compact-chatbox">
+          <span class="mod-slider"></span>
+        </label>
+      </div>
+
       <!-- Mod Card: Git Graph -->
       <div class="mod-card">
         <div class="mod-info">

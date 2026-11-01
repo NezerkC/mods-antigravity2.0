@@ -102,6 +102,9 @@ test('ModLoader - generates mods manager panel and visibility synchronization lo
   assert.ok(script.includes('__antigravity_daemon_enabled'));
   assert.ok(script.includes('mod-toggle-git-graph'));
   assert.ok(script.includes('#antigravity-git-tab-trigger'));
+  assert.ok(script.includes('mod-toggle-compact-chatbox'));
+  assert.ok(script.includes('__applyChatboxModsCompact'));
+  assert.ok(script.includes('__antigravity_compact_chatbox_mods'));
 });
 
 test('ModLoader - mutation observer traverses parent to prevent self-closest infinite loop', () => {

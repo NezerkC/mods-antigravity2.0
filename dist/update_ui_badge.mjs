@@ -1104,6 +1104,20 @@ class ModLoader {
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
         window.__renderModsManagerPanelHtml = ${renderModsManagerPanelHtml.toString()};
 
+        window.__applyChatboxModsCompact = function() {
+          const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
+          document.querySelectorAll('.antigravity-tachometer-badge').forEach(tach => {
+            const footer = tach.closest('[class*="input-footer"]') || tach.closest('.flex.items-center.justify-between') || tach.parentElement;
+            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
+            tach.classList.toggle('compact', isForcedCompact || isNarrow);
+          });
+          document.querySelectorAll('.antigravity-agent-badge').forEach(agent => {
+            const footer = agent.closest('[class*="input-footer"]') || agent.closest('.flex.items-center.justify-between') || agent.parentElement;
+            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
+            agent.classList.toggle('compact', isForcedCompact || isNarrow);
+          });
+        };
+
         window.__applyModsVisibility = function() {
           const tachEnabled = localStorage.getItem('__antigravity_mod_enabled_context-tachometer') !== 'false';
           const agentEnabled = localStorage.getItem('__antigravity_mod_enabled_agent-selector') !== 'false';
@@ -1188,6 +1202,28 @@ class ModLoader {
               };
             }
 
+            const compactChatboxEnabled = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
+            const compactChatboxInput = portal.querySelector('#mod-toggle-compact-chatbox');
+            const compactChatboxPill = portal.querySelector('#compact-chatbox-status-pill');
+            if (compactChatboxInput) {
+              compactChatboxInput.checked = compactChatboxEnabled;
+              if (compactChatboxPill) {
+                compactChatboxPill.textContent = compactChatboxEnabled ? 'Minimizado' : 'Normal';
+                compactChatboxPill.className = 'mod-status-pill ' + (compactChatboxEnabled ? 'compact' : '');
+              }
+              compactChatboxInput.onchange = (ev) => {
+                const isChecked = ev.target.checked;
+                localStorage.setItem('__antigravity_compact_chatbox_mods', isChecked ? 'true' : 'false');
+                if (compactChatboxPill) {
+                  compactChatboxPill.textContent = isChecked ? 'Minimizado' : 'Normal';
+                  compactChatboxPill.className = 'mod-status-pill ' + (isChecked ? 'compact' : '');
+                }
+                if (typeof window.__applyChatboxModsCompact === 'function') {
+                  window.__applyChatboxModsCompact();
+                }
+              };
+            }
+
             const gitGraphEnabled = localStorage.getItem('__antigravity_mod_enabled_git-graph') !== 'false';
             const gitGraphInput = portal.querySelector('#mod-toggle-git-graph');
             if (gitGraphInput) {
@@ -1235,28 +1271,158 @@ class ModLoader {
           }
         };
 
+
+        const __LANE_COLORS = ['#38bdf8', '#f97316', '#a855f7', '#22c55e', '#ec4899', '#06b6d4'];
+        function __getLaneColor(lane) {
+          return __LANE_COLORS[Math.abs(lane || 0) % __LANE_COLORS.length];
+        }
+
+        window.__antigravityRenderGitSvg = function(commits, options) {
+          if (!Array.isArray(commits) || commits.length === 0) return '';
+          options = options || {};
+          const rowHeight = options.rowHeight || 26;
+          const fileRowHeight = options.fileRowHeight || 22;
+          const laneWidth = options.laneWidth || 14;
+          const startX = options.startX || 14;
+          const startY = options.startY || 13;
+
+          let maxLane = 0;
+          for (let i = 0; i < commits.length; i++) {
+            if (typeof commits[i].lane === 'number' && commits[i].lane > maxLane) {
+              maxLane = commits[i].lane;
+            }
+          }
+
+          const hasExpanded = commits.some(c => !!c.expanded && Array.isArray(c.files) && c.files.length > 0);
+          const extraPad = hasExpanded ? 20 : 8;
+          const svgWidth = Math.max(36, startX + (maxLane + 1) * laneWidth + extraPad);
+
+          const commitCoords = [];
+          let currentY = 0;
+
+          for (let i = 0; i < commits.length; i++) {
+            const commit = commits[i];
+            const isExpanded = !!commit.expanded;
+            const fileCount = Array.isArray(commit.files) ? commit.files.length : 0;
+            const extraHeight = isExpanded ? fileCount * fileRowHeight : 0;
+            const cy = currentY + startY;
+            commitCoords.push({ cy, lane: commit.lane || 0, totalHeight: rowHeight + extraHeight });
+            currentY += rowHeight + extraHeight;
+          }
+
+          const svgHeight = Math.max(currentY, commits.length * rowHeight);
+          let pathsMarkup = '';
+          let nodesMarkup = '';
+
+          for (let i = 0; i < commits.length; i++) {
+            const commit = commits[i];
+            const coord = commitCoords[i];
+            const lane = coord.lane;
+            const cx = startX + lane * laneWidth;
+            const cy = coord.cy;
+            const color = __getLaneColor(lane);
+
+            if (Array.isArray(commit.routes)) {
+              for (let r = 0; r < commit.routes.length; r++) {
+                const route = commit.routes[r];
+                const nextIdx = i + 1;
+                if (nextIdx >= commits.length) continue;
+                const nextCoord = commitCoords[nextIdx];
+                const fromX = startX + route.fromLane * laneWidth;
+                const fromY = cy;
+                const toX = startX + route.toLane * laneWidth;
+                const toY = nextCoord.cy;
+                const routeColor = __getLaneColor(typeof route.colorLane === 'number' ? route.colorLane : Math.min(route.fromLane, route.toLane));
+
+                if (route.fromLane === route.toLane) {
+                  pathsMarkup += '<line x1="' + fromX + '" y1="' + fromY + '" x2="' + toX + '" y2="' + toY + '" stroke="' + routeColor + '" stroke-width="2" stroke-linecap="round"/>';
+                } else {
+                  const deltaY = toY - fromY;
+                  const cpY1 = fromY + deltaY * 0.45;
+                  const cpY2 = toY - deltaY * 0.45;
+                  pathsMarkup += '<path d="M ' + fromX + ' ' + fromY + ' C ' + fromX + ' ' + cpY1 + ', ' + toX + ' ' + cpY2 + ', ' + toX + ' ' + toY + '" fill="none" stroke="' + routeColor + '" stroke-width="2" stroke-linecap="round"/>';
+                }
+              }
+            }
+
+            const isExpanded = !!commit.expanded;
+            const fileCount = Array.isArray(commit.files) ? commit.files.length : 0;
+            if (isExpanded && fileCount > 0) {
+              const subOffset = Math.max(12, laneWidth * 0.85);
+              const subX = cx + subOffset;
+              const openStartY = cy;
+              const openEndY = cy + 14;
+              const capsuleBottomY = cy + coord.totalHeight - 8;
+
+              pathsMarkup += '<path d="M ' + cx + ' ' + openStartY + ' C ' + (cx + 4) + ' ' + (openStartY + 4) + ', ' + (subX - 2) + ' ' + (openStartY + 8) + ', ' + subX + ' ' + openEndY + '" fill="none" stroke="' + color + '" stroke-width="1.6" stroke-linecap="round" class="git-capsule-open"/>';
+              pathsMarkup += '<line x1="' + subX + '" y1="' + openEndY + '" x2="' + subX + '" y2="' + capsuleBottomY + '" stroke="' + color + '" stroke-width="1.4" stroke-dasharray="2,2" class="git-capsule-spine"/>';
+
+              for (let f = 0; f < fileCount; f++) {
+                const file = commit.files[f];
+                const fileStatus = (typeof file === 'object' && file.status) ? file.status.toUpperCase() : 'M';
+                const fileY = cy + rowHeight + f * fileRowHeight + (fileRowHeight / 2);
+                let fileColor = '#f59e0b';
+                if (fileStatus === 'A') fileColor = '#22c55e';
+                else if (fileStatus === 'D') fileColor = '#ef4444';
+                else if (fileStatus === 'R') fileColor = '#06b6d4';
+
+                nodesMarkup += '<circle cx="' + subX + '" cy="' + fileY + '" r="2.8" fill="' + fileColor + '" stroke="#181a1f" stroke-width="1" class="git-file-node" data-file-index="' + f + '"/>';
+              }
+
+              pathsMarkup += '<path d="M ' + subX + ' ' + capsuleBottomY + ' C ' + (subX - 2) + ' ' + (capsuleBottomY + 3) + ', ' + (cx + 4) + ' ' + (cy + coord.totalHeight - 2) + ', ' + cx + ' ' + (cy + coord.totalHeight) + '" fill="none" stroke="' + color + '" stroke-width="1.6" stroke-linecap="round" class="git-capsule-close"/>';
+            }
+
+            const isHead = (Array.isArray(commit.refs) && commit.refs.some(function(r) { return r.indexOf('HEAD') !== -1; })) || i === 0;
+            const isPushed = commit.pushed !== false;
+
+            if (isHead) {
+              nodesMarkup += '<circle cx="' + cx + '" cy="' + cy + '" r="6.5" fill="none" stroke="' + color + '" stroke-width="1.8" class="git-node-halo"/><circle cx="' + cx + '" cy="' + cy + '" r="3" fill="' + color + '" class="git-node-head" data-hash="' + commit.hash + '"/>';
+            } else if (!isPushed) {
+              nodesMarkup += '<circle cx="' + cx + '" cy="' + cy + '" r="5.5" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-dasharray="2,2" class="git-node-unpushed-ring"/><circle cx="' + cx + '" cy="' + cy + '" r="3" fill="' + color + '" stroke="#181a1f" stroke-width="1" class="git-node git-node-unpushed" data-hash="' + commit.hash + '"/>';
+            } else {
+              nodesMarkup += '<circle cx="' + cx + '" cy="' + cy + '" r="3.5" fill="' + color + '" stroke="#181a1f" stroke-width="1.5" class="git-node" data-hash="' + commit.hash + '"/>';
+            }
+          }
+
+          return '<svg class="git-graph-svg" width="' + svgWidth + '" height="' + svgHeight + '" viewBox="0 0 ' + svgWidth + ' ' + svgHeight + '" style="min-width: ' + svgWidth + 'px; height: ' + svgHeight + 'px;" xmlns="http://www.w3.org/2000/svg"><g class="git-graph-routes">' + pathsMarkup + '</g><g class="git-graph-nodes">' + nodesMarkup + '</g></svg>';
+        };
+
         window.__bindGitPanelEvents = function(hostEl) {
           if (!hostEl) return;
 
-          // Commit row click and file expansion
+          // Commit row click: Accordion hamburger file expansion & SVG reactive re-render
           hostEl.querySelectorAll('.git-commit-row').forEach(row => {
             row.addEventListener('click', (ev) => {
               hostEl.querySelectorAll('.git-commit-row.selected').forEach(r => r.classList.remove('selected'));
               row.classList.add('selected');
 
+              const hash = row.getAttribute('data-hash');
               const item = row.closest('.git-commit-item');
-              const isPillClick = ev.target.closest('.git-pill-files') || ev.target.closest('.git-commit-chevron');
 
-              if (item && isPillClick) {
-                ev.stopPropagation();
+              if (item) {
                 const filesContainer = item.querySelector('.git-commit-files-container');
                 const chevron = item.querySelector('.git-commit-chevron');
-                if (filesContainer) {
+                if (filesContainer && chevron && chevron.classList.contains('has-files')) {
                   const isNowOpen = filesContainer.style.display !== 'none';
                   filesContainer.style.display = isNowOpen ? 'none' : 'flex';
                   item.classList.toggle('is-expanded', !isNowOpen);
-                  if (chevron && chevron.classList.contains('has-files')) {
-                    chevron.textContent = isNowOpen ? '▸' : '▾';
+                  chevron.textContent = isNowOpen ? '▸' : '▾';
+
+                  // Reactively re-render SVG with inline capsule --< * * * * >--
+                  if (window.__antigravityVcsData && Array.isArray(window.__antigravityVcsData.commits)) {
+                    const c = window.__antigravityVcsData.commits.find(x => x.hash === hash);
+                    if (c) {
+                      c.expanded = !isNowOpen;
+                    }
+                    const svgCol = hostEl.querySelector('#antigravity-git-svg-column') || hostEl.querySelector('.git-svg-column');
+                    if (svgCol && typeof window.__antigravityRenderGitSvg === 'function') {
+                      svgCol.innerHTML = window.__antigravityRenderGitSvg(window.__antigravityVcsData.commits, {
+                        rowHeight: 26,
+                        fileRowHeight: 22,
+                        laneWidth: 14,
+                        startX: 14
+                      });
+                    }
                   }
                 }
               }
@@ -1896,11 +2062,13 @@ class ModLoader {
               }
             }
             const footer = slot.closest('[class*="input-footer"]') || slot.closest('.flex.items-center.justify-between') || slot.parentElement || slot;
+            const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
             const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
+            const shouldCompact = isForcedCompact || isNarrow;
             const tach = slot.querySelector('.antigravity-tachometer-badge');
-            if (tach) tach.classList.toggle('compact', isNarrow);
+            if (tach) tach.classList.toggle('compact', shouldCompact);
             const agent = slot.querySelector('.antigravity-agent-badge');
-            if (agent) agent.classList.toggle('compact', isNarrow);
+            if (agent) agent.classList.toggle('compact', shouldCompact);
           });
         }
 
@@ -1914,16 +2082,18 @@ class ModLoader {
           for (const entry of entries) {
             const container = entry.target;
             const footer = container.closest('[class*="input-footer"]') || container.closest('.flex.items-center.justify-between') || container.parentElement || container;
+            const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
             const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
+            const shouldCompact = isForcedCompact || isNarrow;
 
             const tach = container.querySelector('.antigravity-tachometer-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-tachometer-badge') : null);
             if (tach) {
-              tach.classList.toggle('compact', isNarrow);
+              tach.classList.toggle('compact', shouldCompact);
             }
 
             const agent = container.querySelector('.antigravity-agent-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-agent-badge') : null);
             if (agent) {
-              agent.classList.toggle('compact', isNarrow);
+              agent.classList.toggle('compact', shouldCompact);
             }
           }
         });
@@ -5179,6 +5349,28 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
         <button class="agent-close-btn" id="antigravity-agent-close" title="Cerrar">✕</button>
       </div>
 
+      <!-- 1.1 CAVEMAN MODIFIER CARD -->
+      <div class="agent-card agent-modifier-card" id="antigravity-caveman-card">
+        <div class="agent-modifier-info">
+          <div class="agent-modifier-icon">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+            </svg>
+          </div>
+          <div class="agent-modifier-text">
+            <div class="agent-modifier-title-row">
+              <span class="agent-modifier-title">Modo Caveman</span>
+              <span class="agent-modifier-pill" id="antigravity-caveman-pill">OFF</span>
+            </div>
+            <div class="agent-modifier-subtitle">Compresion semantica (~70% ahorro de tokens)</div>
+          </div>
+        </div>
+        <label class="agent-modifier-switch">
+          <input type="checkbox" id="antigravity-caveman-toggle" onchange="window.__toggleCavemanMode(this.checked)">
+          <span class="agent-modifier-slider"></span>
+        </label>
+      </div>
+
       <!-- 2. SECCIÓN PRINCIPAL: 3 CARDS DIRECTAS CON PIN -->
       <div class="agent-primary-section agent-cards-list">
         ${defaultCardHtml}
@@ -5443,6 +5635,31 @@ function renderModsManagerPanelHtml() {
         </label>
       </div>
 
+      <!-- Mod Card: Minimize Chatbox Mods -->
+      <div class="mod-card compact-chatbox-card">
+        <div class="mod-info">
+          <div class="mod-icon-box compact-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="4 14 10 14 10 20"></polyline>
+              <polyline points="20 10 14 10 14 4"></polyline>
+              <line x1="14" y1="10" x2="21" y2="3"></line>
+              <line x1="3" y1="21" x2="10" y2="14"></line>
+            </svg>
+          </div>
+          <div class="mod-text">
+            <div class="mod-title">
+              <span>Minimizar en Chatbox</span>
+              <span class="mod-status-pill" id="compact-chatbox-status-pill">Normal</span>
+            </div>
+            <div class="mod-desc">Contrae el tacómetro y selector a iconos compactos para no molestar la vista.</div>
+          </div>
+        </div>
+        <label class="mod-switch">
+          <input type="checkbox" id="mod-toggle-compact-chatbox" data-action="toggle-compact-chatbox">
+          <span class="mod-slider"></span>
+        </label>
+      </div>
+
       <!-- Mod Card: Git Graph -->
       <div class="mod-card">
         <div class="mod-info">
@@ -5525,7 +5742,7 @@ class ModsManagerMod extends AntigravityMod {
       priority: 100
     });
 
-    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY MODS MANAGER MOD - STYLES\r\n   Card Architecture: Every text section enclosed in card components\r\n   ========================================================================= */\r\n\r\n/* Mods Manager Menu Button in Top Menubar */\r\n.antigravity-mods-manager-btn {\r\n  height: 28px !important;\r\n  padding: 0 10px !important;\r\n  font-size: 13px !important;\r\n  font-weight: 500 !important;\r\n  color: rgba(255, 255, 255, 0.72) !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  transition: all 0.15s ease !important;\r\n  app-region: no-drag !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn:hover {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn.open {\r\n  background: rgba(255, 255, 255, 0.14) !important;\r\n  color: #ffffff !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn svg {\r\n  width: 14px;\r\n  height: 14px;\r\n  opacity: 0.85;\r\n}\r\n\r\n/* Floating Portal Panel for Mods Manager */\r\n.antigravity-mods-manager-portal {\r\n  position: fixed !important;\r\n  z-index: 1000000 !important;\r\n  width: 380px !important;\r\n  background: #161822 !important;\r\n  background: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 14px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 14px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: none;\r\n  box-sizing: border-box !important;\r\n  animation: modManagerPopIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n}\r\n\r\n.antigravity-mods-manager-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n@keyframes modManagerPopIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-6px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* Header Card Component */\r\n.mods-manager-header,\r\n.mods-manager-header-card {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 10px 12px !important;\r\n  margin-bottom: 12px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.mods-manager-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.mods-manager-header-icon {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(122, 162, 247, 0.15) !important;\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.25) !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.mods-manager-title-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.mods-manager-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.mods-manager-title {\r\n  font-size: 13.5px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n  margin: 0 !important;\r\n}\r\n\r\n.mods-manager-badge {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(122, 162, 247, 0.18) !important;\r\n  color: #7aa2f7 !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\r\n  letter-spacing: 0.3px !important;\r\n}\r\n\r\n.mods-manager-subtitle {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n}\r\n\r\n.mods-manager-close-btn {\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  cursor: pointer !important;\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 6px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  font-size: 12px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.mods-manager-close-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.16) !important;\r\n}\r\n\r\n/* Mod Cards List */\r\n.mods-manager-cards-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n/* Mod Card Item */\r\n.mod-card {\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 11px 13px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 12px !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.mod-card:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(122, 162, 247, 0.35) !important;\r\n  transform: translateY(-1px) !important;\r\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;\r\n}\r\n\r\n.mod-card.daemon-card {\r\n  background: rgba(122, 162, 247, 0.05) !important;\r\n  border-color: rgba(122, 162, 247, 0.22) !important;\r\n}\r\n\r\n.mod-card.daemon-card:hover {\r\n  background: rgba(122, 162, 247, 0.09) !important;\r\n  border-color: rgba(122, 162, 247, 0.45) !important;\r\n  box-shadow: 0 4px 18px rgba(122, 162, 247, 0.15) !important;\r\n}\r\n\r\n.mod-info {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.mod-icon-box {\r\n  width: 34px !important;\r\n  height: 34px !important;\r\n  border-radius: 8px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  color: #7aa2f7 !important;\r\n}\r\n\r\n.mod-icon-box.tach-icon {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.mod-icon-box.agent-icon {\r\n  background: rgba(168, 85, 247, 0.12) !important;\r\n  color: #c084fc !important;\r\n  border: 1px solid rgba(168, 85, 247, 0.25) !important;\r\n}\r\n\r\n.mod-icon-box.daemon-icon {\r\n  background: rgba(74, 222, 128, 0.12) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(74, 222, 128, 0.25) !important;\r\n}\r\n\r\n.mod-text {\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.mod-title {\r\n  font-size: 13px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  margin-bottom: 2px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.mod-desc {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.6) !important;\r\n  line-height: 1.35 !important;\r\n}\r\n\r\n/* Status Pill */\r\n.mod-status-pill {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  line-height: 14px !important;\r\n  letter-spacing: 0.2px !important;\r\n}\r\n\r\n.mod-status-pill.active {\r\n  background: rgba(74, 222, 128, 0.15) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(74, 222, 128, 0.3) !important;\r\n}\r\n\r\n.mod-status-pill.paused {\r\n  background: rgba(248, 113, 113, 0.15) !important;\r\n  color: #f87171 !important;\r\n  border: 1px solid rgba(248, 113, 113, 0.3) !important;\r\n}\r\n\r\n/* Modern Toggle Switch */\r\n.mod-switch {\r\n  position: relative !important;\r\n  display: inline-block !important;\r\n  width: 38px !important;\r\n  height: 20px !important;\r\n  flex-shrink: 0 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.mod-switch input {\r\n  opacity: 0 !important;\r\n  width: 0 !important;\r\n  height: 0 !important;\r\n  position: absolute !important;\r\n  margin: 0 !important;\r\n  pointer-events: none !important;\r\n  display: none !important;\r\n}\r\n\r\n.mod-slider {\r\n  position: absolute !important;\r\n  top: 0 !important;\r\n  left: 0 !important;\r\n  right: 0 !important;\r\n  bottom: 0 !important;\r\n  background-color: rgba(255, 255, 255, 0.16) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.2) !important;\r\n  border-radius: 9999px !important;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n}\r\n\r\n.mod-slider:before {\r\n  position: absolute !important;\r\n  content: \"\" !important;\r\n  height: 14px !important;\r\n  width: 14px !important;\r\n  left: 2px !important;\r\n  bottom: 2px !important;\r\n  background-color: #ffffff !important;\r\n  border-radius: 50% !important;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4) !important;\r\n}\r\n\r\n.mod-switch input:checked + .mod-slider {\r\n  background-color: #7aa2f7 !important;\r\n  border-color: #7aa2f7 !important;\r\n}\r\n\r\n.mod-switch input:checked + .mod-slider:before {\r\n  transform: translateX(18px) !important;\r\n}\r\n\r\n/* Footer Status Card */\r\n.mods-manager-footer-card {\r\n  background: rgba(0, 0, 0, 0.25) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 8px !important;\r\n  padding: 8px 10px !important;\r\n  margin-top: 10px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.mods-manager-footer-icon {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  color: #4ade80 !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.mods-manager-footer-text {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  font-weight: 500 !important;\r\n  letter-spacing: -0.1px !important;\r\n}\r\n";
+    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY MODS MANAGER MOD - STYLES\r\n   Card Architecture: Every text section enclosed in card components\r\n   ========================================================================= */\r\n\r\n/* Mods Manager Menu Button in Top Menubar */\r\n.antigravity-mods-manager-btn {\r\n  height: 28px !important;\r\n  padding: 0 10px !important;\r\n  font-size: 13px !important;\r\n  font-weight: 500 !important;\r\n  color: rgba(255, 255, 255, 0.72) !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  transition: all 0.15s ease !important;\r\n  app-region: no-drag !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn:hover {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn.open {\r\n  background: rgba(255, 255, 255, 0.14) !important;\r\n  color: #ffffff !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn svg {\r\n  width: 14px;\r\n  height: 14px;\r\n  opacity: 0.85;\r\n}\r\n\r\n/* Floating Portal Panel for Mods Manager */\r\n.antigravity-mods-manager-portal {\r\n  position: fixed !important;\r\n  z-index: 1000000 !important;\r\n  width: 380px !important;\r\n  background: #161822 !important;\r\n  background: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 14px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 14px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: none;\r\n  box-sizing: border-box !important;\r\n  animation: modManagerPopIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n}\r\n\r\n.antigravity-mods-manager-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n@keyframes modManagerPopIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-6px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* Header Card Component */\r\n.mods-manager-header,\r\n.mods-manager-header-card {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 10px 12px !important;\r\n  margin-bottom: 12px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.mods-manager-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.mods-manager-header-icon {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(122, 162, 247, 0.15) !important;\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.25) !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.mods-manager-title-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.mods-manager-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.mods-manager-title {\r\n  font-size: 13.5px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n  margin: 0 !important;\r\n}\r\n\r\n.mods-manager-badge {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(122, 162, 247, 0.18) !important;\r\n  color: #7aa2f7 !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\r\n  letter-spacing: 0.3px !important;\r\n}\r\n\r\n.mods-manager-subtitle {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n}\r\n\r\n.mods-manager-close-btn {\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  cursor: pointer !important;\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 6px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  font-size: 12px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.mods-manager-close-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.16) !important;\r\n}\r\n\r\n/* Mod Cards List */\r\n.mods-manager-cards-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n/* Mod Card Item */\r\n.mod-card {\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 11px 13px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 12px !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.mod-card:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(122, 162, 247, 0.35) !important;\r\n  transform: translateY(-1px) !important;\r\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;\r\n}\r\n\r\n.mod-card.daemon-card {\r\n  background: rgba(122, 162, 247, 0.05) !important;\r\n  border-color: rgba(122, 162, 247, 0.22) !important;\r\n}\r\n\r\n.mod-card.daemon-card:hover {\r\n  background: rgba(122, 162, 247, 0.09) !important;\r\n  border-color: rgba(122, 162, 247, 0.45) !important;\r\n  box-shadow: 0 4px 18px rgba(122, 162, 247, 0.15) !important;\r\n}\r\n\r\n.mod-info {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.mod-icon-box {\r\n  width: 34px !important;\r\n  height: 34px !important;\r\n  border-radius: 8px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  color: #7aa2f7 !important;\r\n}\r\n\r\n.mod-icon-box.tach-icon {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.mod-icon-box.agent-icon {\r\n  background: rgba(168, 85, 247, 0.12) !important;\r\n  color: #c084fc !important;\r\n  border: 1px solid rgba(168, 85, 247, 0.25) !important;\r\n}\r\n\r\n.mod-icon-box.compact-icon {\n  background: rgba(245, 158, 11, 0.12) !important;\n  color: #f59e0b !important;\n  border: 1px solid rgba(245, 158, 11, 0.25) !important;\n}\n\n.mod-icon-box.daemon-icon {\r\n  background: rgba(74, 222, 128, 0.12) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(74, 222, 128, 0.25) !important;\r\n}\r\n\r\n.mod-text {\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.mod-title {\r\n  font-size: 13px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  margin-bottom: 2px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.mod-desc {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.6) !important;\r\n  line-height: 1.35 !important;\r\n}\r\n\r\n/* Status Pill */\r\n.mod-status-pill {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  line-height: 14px !important;\r\n  letter-spacing: 0.2px !important;\r\n}\r\n\r\n.mod-status-pill.active {\r\n  background: rgba(74, 222, 128, 0.15) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(74, 222, 128, 0.3) !important;\r\n}\r\n\r\n.mod-status-pill.compact {\n  background: rgba(245, 158, 11, 0.15) !important;\n  color: #f59e0b !important;\n  border: 1px solid rgba(245, 158, 11, 0.3) !important;\n}\n\n.mod-status-pill.paused {\r\n  background: rgba(248, 113, 113, 0.15) !important;\r\n  color: #f87171 !important;\r\n  border: 1px solid rgba(248, 113, 113, 0.3) !important;\r\n}\r\n\r\n/* Modern Toggle Switch */\r\n.mod-switch {\r\n  position: relative !important;\r\n  display: inline-block !important;\r\n  width: 38px !important;\r\n  height: 20px !important;\r\n  flex-shrink: 0 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.mod-switch input {\r\n  opacity: 0 !important;\r\n  width: 0 !important;\r\n  height: 0 !important;\r\n  position: absolute !important;\r\n  margin: 0 !important;\r\n  pointer-events: none !important;\r\n  display: none !important;\r\n}\r\n\r\n.mod-slider {\r\n  position: absolute !important;\r\n  top: 0 !important;\r\n  left: 0 !important;\r\n  right: 0 !important;\r\n  bottom: 0 !important;\r\n  background-color: rgba(255, 255, 255, 0.16) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.2) !important;\r\n  border-radius: 9999px !important;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n}\r\n\r\n.mod-slider:before {\r\n  position: absolute !important;\r\n  content: \"\" !important;\r\n  height: 14px !important;\r\n  width: 14px !important;\r\n  left: 2px !important;\r\n  bottom: 2px !important;\r\n  background-color: #ffffff !important;\r\n  border-radius: 50% !important;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4) !important;\r\n}\r\n\r\n.mod-switch input:checked + .mod-slider {\r\n  background-color: #7aa2f7 !important;\r\n  border-color: #7aa2f7 !important;\r\n}\r\n\r\n.mod-switch input:checked + .mod-slider:before {\r\n  transform: translateX(18px) !important;\r\n}\r\n\r\n/* Footer Status Card */\r\n.mods-manager-footer-card {\r\n  background: rgba(0, 0, 0, 0.25) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 8px !important;\r\n  padding: 8px 10px !important;\r\n  margin-top: 10px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.mods-manager-footer-icon {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  color: #4ade80 !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.mods-manager-footer-text {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  font-weight: 500 !important;\r\n  letter-spacing: -0.1px !important;\r\n}\r\n";
   }
 
   /**
