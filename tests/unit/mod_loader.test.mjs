@@ -158,3 +158,66 @@ test('ModLoader - generates CI/CD accordion trigger and VCS refresh handler in G
   assert.ok(script.includes('window.__toggleGitGraphPanel()'));
 });
 
+
+test('ModLoader - compiles valid executable JavaScript syntax without SyntaxError when GitGraphMod is registered', async () => {
+  const { GitGraphMod } = await import('../../mods/git-graph/index.js');
+  const loader = new ModLoader();
+  loader.register(new GitGraphMod({
+    initialContext: {
+      activeRepo: 'NezerkC/mods-antigravity2.0',
+      status: { branch: 'feat/mods-vcs-git-github-cicd', isClean: false, ahead: 2, behind: 1 },
+      github: { isGitHub: true, fullName: 'NezerkC/mods-antigravity2.0', webUrl: 'https://github.com/NezerkC/mods-antigravity2.0' },
+      branches: {
+        local: [
+          { name: 'main', isCurrent: false, isTrunk: true, cluster: 'trunk', ahead: 0, behind: 1, hash: '509b6b3' },
+          { name: 'feat/mods-vcs-git-github-cicd', isCurrent: true, cluster: 'vcs', ahead: 2, behind: 0, dirtyFiles: 1, hash: '65bf3bb' }
+        ],
+        remote: [{ name: 'origin/main', shortName: 'main', hash: '509b6b3' }]
+      },
+      commits: [
+        {
+          hash: '65bf3bb020e50b06a6517380143129d92adf4329',
+          shortHash: '65bf3bb',
+          lane: 1,
+          pushed: false,
+          isTrunk: false,
+          parents: ['509b6b3'],
+          routes: [
+            { fromLane: 0, toLane: 0, type: 'straight', colorLane: 0 },
+            { fromLane: 1, toLane: 0, type: 'branch-join', colorLane: 1 }
+          ],
+          author: { name: 'Victor', email: 'victor@test.com', avatarUrl: '' },
+          subject: 'feat(vcs): implement inline inspection capsule',
+          relativeDate: '2m ago',
+          refs: ['HEAD -> feat/mods-vcs-git-github-cicd'],
+          files: [{ status: 'M', path: 'mods/git-graph/index.js', fileName: 'index.js', dir: 'mods/git-graph', ext: 'JS' }]
+        },
+        {
+          hash: '509b6b3',
+          shortHash: '509b6b3',
+          lane: 0,
+          pushed: true,
+          isTrunk: true,
+          parents: [],
+          routes: [],
+          author: { name: 'Victor', email: 'victor@test.com', avatarUrl: '' },
+          subject: 'Merge pull request #32',
+          relativeDate: '1h ago',
+          refs: ['origin/main', 'main'],
+          files: []
+        }
+      ]
+    }
+  }));
+
+  const script = loader.buildInjectionPayload({});
+
+  // Must parse and compile in V8 with zero SyntaxError (catches duplicate const declarations or broken quotes)
+  assert.doesNotThrow(() => new Function(script), 'Generated client injection payload must be valid JS without SyntaxError');
+
+  assert.ok(script.includes('window.__antigravityRenderGitSvg'));
+  assert.ok(script.includes('window.__antigravityUpdateVcsData'));
+  assert.ok(script.includes('window.__antigravityRunVcsAction'));
+  assert.ok(script.includes('window.__antigravityProjectFilteredCommits'));
+  assert.ok(!script.includes('.git-pill-files'));
+});
