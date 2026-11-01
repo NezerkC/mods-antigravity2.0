@@ -444,6 +444,20 @@ export class ModLoader {
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
         window.__renderModsManagerPanelHtml = ${renderModsManagerPanelHtml.toString()};
 
+        window.__applyChatboxModsCompact = function() {
+          const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
+          document.querySelectorAll('.antigravity-tachometer-badge').forEach(tach => {
+            const footer = tach.closest('[class*="input-footer"]') || tach.closest('.flex.items-center.justify-between') || tach.parentElement;
+            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
+            tach.classList.toggle('compact', isForcedCompact || isNarrow);
+          });
+          document.querySelectorAll('.antigravity-agent-badge').forEach(agent => {
+            const footer = agent.closest('[class*="input-footer"]') || agent.closest('.flex.items-center.justify-between') || agent.parentElement;
+            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
+            agent.classList.toggle('compact', isForcedCompact || isNarrow);
+          });
+        };
+
         window.__applyModsVisibility = function() {
           const tachEnabled = localStorage.getItem('__antigravity_mod_enabled_context-tachometer') !== 'false';
           const agentEnabled = localStorage.getItem('__antigravity_mod_enabled_agent-selector') !== 'false';
@@ -525,6 +539,28 @@ export class ModLoader {
               agentInput.onchange = (ev) => {
                 localStorage.setItem('__antigravity_mod_enabled_agent-selector', ev.target.checked);
                 window.__applyModsVisibility();
+              };
+            }
+
+            const compactChatboxEnabled = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
+            const compactChatboxInput = portal.querySelector('#mod-toggle-compact-chatbox');
+            const compactChatboxPill = portal.querySelector('#compact-chatbox-status-pill');
+            if (compactChatboxInput) {
+              compactChatboxInput.checked = compactChatboxEnabled;
+              if (compactChatboxPill) {
+                compactChatboxPill.textContent = compactChatboxEnabled ? 'Minimizado' : 'Normal';
+                compactChatboxPill.className = 'mod-status-pill ' + (compactChatboxEnabled ? 'compact' : '');
+              }
+              compactChatboxInput.onchange = (ev) => {
+                const isChecked = ev.target.checked;
+                localStorage.setItem('__antigravity_compact_chatbox_mods', isChecked ? 'true' : 'false');
+                if (compactChatboxPill) {
+                  compactChatboxPill.textContent = isChecked ? 'Minimizado' : 'Normal';
+                  compactChatboxPill.className = 'mod-status-pill ' + (isChecked ? 'compact' : '');
+                }
+                if (typeof window.__applyChatboxModsCompact === 'function') {
+                  window.__applyChatboxModsCompact();
+                }
               };
             }
 
@@ -1366,11 +1402,13 @@ export class ModLoader {
               }
             }
             const footer = slot.closest('[class*="input-footer"]') || slot.closest('.flex.items-center.justify-between') || slot.parentElement || slot;
+            const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
             const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
+            const shouldCompact = isForcedCompact || isNarrow;
             const tach = slot.querySelector('.antigravity-tachometer-badge');
-            if (tach) tach.classList.toggle('compact', isNarrow);
+            if (tach) tach.classList.toggle('compact', shouldCompact);
             const agent = slot.querySelector('.antigravity-agent-badge');
-            if (agent) agent.classList.toggle('compact', isNarrow);
+            if (agent) agent.classList.toggle('compact', shouldCompact);
           });
         }
 
@@ -1384,16 +1422,18 @@ export class ModLoader {
           for (const entry of entries) {
             const container = entry.target;
             const footer = container.closest('[class*="input-footer"]') || container.closest('.flex.items-center.justify-between') || container.parentElement || container;
+            const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
             const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
+            const shouldCompact = isForcedCompact || isNarrow;
 
             const tach = container.querySelector('.antigravity-tachometer-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-tachometer-badge') : null);
             if (tach) {
-              tach.classList.toggle('compact', isNarrow);
+              tach.classList.toggle('compact', shouldCompact);
             }
 
             const agent = container.querySelector('.antigravity-agent-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-agent-badge') : null);
             if (agent) {
-              agent.classList.toggle('compact', isNarrow);
+              agent.classList.toggle('compact', shouldCompact);
             }
           }
         });
