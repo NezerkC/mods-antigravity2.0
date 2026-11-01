@@ -652,3 +652,65 @@
     transform: translateY(0) scale(1);
   }
 }
+
+/* =========================================================================
+   EXTERIOR FOCUS / EXPLICATIVO RETICLE TRIGGER
+   ========================================================================= */
+.antigravity-agent-selector-group {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+}
+
+.antigravity-caveman-reticle-trigger {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 28px !important;
+  height: 28px !important;
+  box-sizing: border-box !important;
+  padding: 0 !important;
+  border-radius: 9999px !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: #94a3b8 !important;
+  cursor: pointer !important;
+  outline: none !important;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  position: relative !important;
+  flex-shrink: 0 !important;
+}
+
+.antigravity-caveman-reticle-trigger:hover {
+  background: rgba(255, 255, 255, 0.09) !important;
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  color: #f1f5f9 !important;
+}
+
+.antigravity-caveman-reticle-trigger.is-focus {
+  background: rgba(245, 158, 11, 0.15) !important;
+  border-color: rgba(245, 158, 11, 0.4) !important;
+  color: #f59e0b !important;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.25) !important;
+}
+
+.antigravity-caveman-reticle-trigger.is-focus:hover {
+  background: rgba(245, 158, 11, 0.22) !important;
+  border-color: rgba(245, 158, 11, 0.6) !important;
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.4) !important;
+}
+
+.caveman-reticle-box {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  pointer-events: none !important;
+}
+
+.reticle-icon {
+  transition: transform 0.2s ease, stroke 0.2s ease !important;
+}
+
+.antigravity-caveman-reticle-trigger:hover .reticle-icon {
+  transform: scale(1.08) !important;
+}

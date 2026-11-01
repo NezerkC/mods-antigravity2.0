@@ -663,6 +663,10 @@ class AntigravityMod {
 
 
 
+
+
+
+
 /**
  * Discovers, registers, and compiles UI mods into coordinated injection scripts.
  */
@@ -971,6 +975,18 @@ class ModLoader {
             portal.style.left = clampedLeft + 'px';
             portal.classList.add('open');
 
+            // Sync Caveman toggle state for this cascade
+            if (window.__resolveCavemanForCascade) {
+              const isCaveman = window.__resolveCavemanForCascade(cascadeId);
+              const cavemanToggle = portal.querySelector('#antigravity-caveman-toggle');
+              const cavemanPill = portal.querySelector('#antigravity-caveman-pill');
+              if (cavemanToggle) cavemanToggle.checked = isCaveman;
+              if (cavemanPill) {
+                cavemanPill.textContent = isCaveman ? 'FOCUS' : 'EXPLICATIVO';
+                cavemanPill.classList.toggle('active', isCaveman);
+              }
+            }
+
             const closeBtn = portal.querySelector('#antigravity-agent-close');
             if (closeBtn) {
               closeBtn.onclick = () => {
@@ -981,6 +997,92 @@ class ModLoader {
               };
             }
           }
+        };
+
+        window.__resolveCavemanForCascade = function(cascadeId) {
+          if (window.__antigravityCavemanModes && cascadeId && window.__antigravityCavemanModes[cascadeId] !== undefined) {
+            return !!window.__antigravityCavemanModes[cascadeId];
+          }
+          try {
+            const map = JSON.parse(localStorage.getItem('__antigravity_caveman_map') || '{}');
+            if (cascadeId && map[cascadeId] !== undefined) {
+              return !!map[cascadeId];
+            }
+            return localStorage.getItem('__antigravity_caveman_mode') === 'true';
+          } catch (e) {}
+          return false;
+        };
+
+        window.__toggleCavemanMode = function(explicitValue, targetEl) {
+          const portal = document.getElementById('antigravity-agent-dropdown-portal');
+          const currentBadge = (targetEl && targetEl.closest('.antigravity-agent-selector-group')?.querySelector('.antigravity-agent-badge')) ||
+            (portal && portal.__currentBadge && portal.__currentBadge.isConnected ? portal.__currentBadge : null) ||
+            document.querySelector('.antigravity-agent-badge');
+          const cascadeId = (portal && portal.__currentCascadeId) ||
+            window.__resolveCascadeId(currentBadge) ||
+            null;
+
+          const currentVal = window.__resolveCavemanForCascade(cascadeId);
+          const nextVal = (typeof explicitValue === 'boolean') ? explicitValue : !currentVal;
+
+          window.__antigravityCavemanModes = window.__antigravityCavemanModes || {};
+          if (cascadeId) {
+            window.__antigravityCavemanModes[cascadeId] = nextVal;
+          }
+
+          try {
+            localStorage.setItem('__antigravity_caveman_mode', nextVal ? 'true' : 'false');
+            const map = JSON.parse(localStorage.getItem('__antigravity_caveman_map') || '{}');
+            if (cascadeId) {
+              map[cascadeId] = nextVal;
+              localStorage.setItem('__antigravity_caveman_map', JSON.stringify(map));
+            }
+          } catch (e) {}
+
+          // Update portal UI elements if open
+          if (portal) {
+            const toggle = portal.querySelector('#antigravity-caveman-toggle');
+            if (toggle) toggle.checked = nextVal;
+            const pill = portal.querySelector('#antigravity-caveman-pill');
+            if (pill) {
+              pill.textContent = nextVal ? 'FOCUS' : 'EXPLICATIVO';
+              pill.classList.toggle('active', nextVal);
+            }
+          }
+
+          // Update exterior reticle triggers across panels
+          const reticleSvg = window.__renderReticleSvg ? window.__renderReticleSvg(nextVal, 14) : '';
+          const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
+          const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
+
+          document.querySelectorAll('.antigravity-caveman-reticle-trigger').forEach(triggerEl => {
+            const parent = triggerEl.parentElement;
+            const group = parent ? parent.closest('.antigravity-agent-selector-group') : null;
+            const b = group ? group.querySelector('.antigravity-agent-badge') : null;
+            const bCascadeId = b ? window.__resolveCascadeId(b) : null;
+            if (!cascadeId || !bCascadeId || bCascadeId === cascadeId) {
+              triggerEl.classList.toggle('is-focus', nextVal);
+              triggerEl.setAttribute('title', nextVal ? focusTitle : explicativoTitle);
+              const box = triggerEl.querySelector('.caveman-reticle-box');
+              if (box && reticleSvg) {
+                box.innerHTML = reticleSvg;
+              }
+            }
+          });
+
+          // Non-blocking sync to local bridge server (active_agents.json)
+          try {
+            if (cascadeId) {
+              fetch('http://127.0.0.1:53912/active-agent/modifier', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  cascadeId: cascadeId,
+                  modifiers: { caveman: nextVal }
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
         };
 
         window.__selectAntigravityAgent = function(agentId, agentName, agentColor, agentFilePath) {
@@ -1103,6 +1205,8 @@ class ModLoader {
         window.__renderSvgIcon = renderSvgIcon;
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
         window.__renderModsManagerPanelHtml = ${renderModsManagerPanelHtml.toString()};
+        const renderReticleSvg = ${renderReticleSvg.toString()};
+        window.__renderReticleSvg = renderReticleSvg;
 
         window.__applyChatboxModsCompact = function() {
           const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
@@ -1272,128 +1376,290 @@ class ModLoader {
         };
 
 
-        const __LANE_COLORS = ['#38bdf8', '#f97316', '#a855f7', '#22c55e', '#ec4899', '#06b6d4'];
-        function __getLaneColor(lane) {
-          return __LANE_COLORS[Math.abs(lane || 0) % __LANE_COLORS.length];
-        }
+        const getLaneColor = ${getLaneColor.toString()};
+        const renderGitGraphSvg = ${renderGitGraphSvg.toString()};
+        const escapeGitHtml = ${escapeGitHtml.toString()};
+        const getExtClass = ${getExtClass.toString()};
+        const renderPrCiCardHtml = ${renderPrCiCardHtml.toString()};
+        const renderGitGraphPanelHtml = ${renderGitGraphPanelHtml.toString()};
+        window.__antigravityRenderGitSvg = renderGitGraphSvg;
+        window.__antigravityRenderGitPanel = renderGitGraphPanelHtml;
 
-        window.__antigravityRenderGitSvg = function(commits, options) {
-          if (!Array.isArray(commits) || commits.length === 0) return '';
-          options = options || {};
-          const rowHeight = options.rowHeight || 26;
-          const fileRowHeight = options.fileRowHeight || 22;
-          const laneWidth = options.laneWidth || 14;
-          const startX = options.startX || 14;
-          const startY = options.startY || 13;
+        window.__antigravityProjectFilteredCommits = function(commits, filterType) {
+          if (!Array.isArray(commits)) return [];
+          if (!filterType || filterType === 'all') return commits;
 
-          let maxLane = 0;
-          for (let i = 0; i < commits.length; i++) {
-            if (typeof commits[i].lane === 'number' && commits[i].lane > maxLane) {
-              maxLane = commits[i].lane;
-            }
+          const filtered = commits.filter(function(c) {
+            const hasOrigin = Array.isArray(c.refs) && c.refs.some(function(r) { return r.indexOf('origin/') !== -1; });
+            const cType = (c.pushed !== undefined) ? (c.pushed === false ? 'local' : 'remote') : (hasOrigin ? 'remote' : 'local');
+            return cType === filterType;
+          });
+
+          const visibleSet = {};
+          for (let i = 0; i < filtered.length; i++) {
+            if (filtered[i] && filtered[i].hash) visibleSet[filtered[i].hash] = true;
           }
 
-          const hasExpanded = commits.some(c => !!c.expanded && Array.isArray(c.files) && c.files.length > 0);
-          const extraPad = hasExpanded ? 20 : 8;
-          const svgWidth = Math.max(36, startX + (maxLane + 1) * laneWidth + extraPad);
+          let activeLanes = [];
+          const projected = [];
 
-          const commitCoords = [];
-          let currentY = 0;
+          for (let i = 0; i < filtered.length; i++) {
+            const commit = filtered[i];
+            const hash = commit.hash;
+            const isTrunk = !!commit.isTrunk;
+            let cLane = activeLanes.indexOf(hash);
 
-          for (let i = 0; i < commits.length; i++) {
-            const commit = commits[i];
-            const isExpanded = !!commit.expanded;
-            const fileCount = Array.isArray(commit.files) ? commit.files.length : 0;
-            const extraHeight = isExpanded ? fileCount * fileRowHeight : 0;
-            const cy = currentY + startY;
-            commitCoords.push({ cy, lane: commit.lane || 0, totalHeight: rowHeight + extraHeight });
-            currentY += rowHeight + extraHeight;
-          }
-
-          const svgHeight = Math.max(currentY, commits.length * rowHeight);
-          let pathsMarkup = '';
-          let nodesMarkup = '';
-
-          for (let i = 0; i < commits.length; i++) {
-            const commit = commits[i];
-            const coord = commitCoords[i];
-            const lane = coord.lane;
-            const cx = startX + lane * laneWidth;
-            const cy = coord.cy;
-            const color = __getLaneColor(lane);
-
-            if (Array.isArray(commit.routes)) {
-              for (let r = 0; r < commit.routes.length; r++) {
-                const route = commit.routes[r];
-                const nextIdx = i + 1;
-                if (nextIdx >= commits.length) continue;
-                const nextCoord = commitCoords[nextIdx];
-                const fromX = startX + route.fromLane * laneWidth;
-                const fromY = cy;
-                const toX = startX + route.toLane * laneWidth;
-                const toY = nextCoord.cy;
-                const routeColor = __getLaneColor(typeof route.colorLane === 'number' ? route.colorLane : Math.min(route.fromLane, route.toLane));
-
-                if (route.fromLane === route.toLane) {
-                  pathsMarkup += '<line x1="' + fromX + '" y1="' + fromY + '" x2="' + toX + '" y2="' + toY + '" stroke="' + routeColor + '" stroke-width="2" stroke-linecap="round"/>';
+            if (cLane === -1) {
+              if (isTrunk) {
+                if (activeLanes.length === 0) {
+                  activeLanes.push(hash);
+                } else if (activeLanes[0] === null) {
+                  activeLanes[0] = hash;
                 } else {
-                  const deltaY = toY - fromY;
-                  const cpY1 = fromY + deltaY * 0.45;
-                  const cpY2 = toY - deltaY * 0.45;
-                  pathsMarkup += '<path d="M ' + fromX + ' ' + fromY + ' C ' + fromX + ' ' + cpY1 + ', ' + toX + ' ' + cpY2 + ', ' + toX + ' ' + toY + '" fill="none" stroke="' + routeColor + '" stroke-width="2" stroke-linecap="round"/>';
+                  const prev0 = activeLanes[0];
+                  let freeIdx = -1;
+                  for (let k = 1; k < activeLanes.length; k++) {
+                    if (activeLanes[k] === null) { freeIdx = k; break; }
+                  }
+                  if (freeIdx !== -1) activeLanes[freeIdx] = prev0;
+                  else activeLanes.push(prev0);
+                  activeLanes[0] = hash;
+                }
+                cLane = 0;
+              } else {
+                if (activeLanes.length === 0) activeLanes.push(null);
+                let freeIdx = -1;
+                for (let k = 1; k < activeLanes.length; k++) {
+                  if (activeLanes[k] === null) { freeIdx = k; break; }
+                }
+                if (freeIdx !== -1) {
+                  cLane = freeIdx;
+                  activeLanes[cLane] = hash;
+                } else {
+                  cLane = activeLanes.length;
+                  activeLanes.push(hash);
                 }
               }
             }
 
-            const isExpanded = !!commit.expanded;
-            const fileCount = Array.isArray(commit.files) ? commit.files.length : 0;
-            if (isExpanded && fileCount > 0) {
-              const subOffset = Math.max(12, laneWidth * 0.85);
-              const subX = cx + subOffset;
-              const openStartY = cy;
-              const openEndY = cy + 14;
-              const capsuleBottomY = cy + coord.totalHeight - 8;
+            const preLanes = activeLanes.slice();
+            const routes = [];
+            const visibleParents = (Array.isArray(commit.parents) ? commit.parents : []).filter(function(p) {
+              return !!visibleSet[p];
+            });
+            const nextLanes = preLanes.slice();
 
-              pathsMarkup += '<path d="M ' + cx + ' ' + openStartY + ' C ' + (cx + 4) + ' ' + (openStartY + 4) + ', ' + (subX - 2) + ' ' + (openStartY + 8) + ', ' + subX + ' ' + openEndY + '" fill="none" stroke="' + color + '" stroke-width="1.6" stroke-linecap="round" class="git-capsule-open"/>';
-              pathsMarkup += '<line x1="' + subX + '" y1="' + openEndY + '" x2="' + subX + '" y2="' + capsuleBottomY + '" stroke="' + color + '" stroke-width="1.4" stroke-dasharray="2,2" class="git-capsule-spine"/>';
-
-              for (let f = 0; f < fileCount; f++) {
-                const file = commit.files[f];
-                const fileStatus = (typeof file === 'object' && file.status) ? file.status.toUpperCase() : 'M';
-                const fileY = cy + rowHeight + f * fileRowHeight + (fileRowHeight / 2);
-                let fileColor = '#f59e0b';
-                if (fileStatus === 'A') fileColor = '#22c55e';
-                else if (fileStatus === 'D') fileColor = '#ef4444';
-                else if (fileStatus === 'R') fileColor = '#06b6d4';
-
-                nodesMarkup += '<circle cx="' + subX + '" cy="' + fileY + '" r="2.8" fill="' + fileColor + '" stroke="#181a1f" stroke-width="1" class="git-file-node" data-file-index="' + f + '"/>';
+            for (let l = 0; l < preLanes.length; l++) {
+              if (preLanes[l] !== null && l !== cLane && preLanes[l] !== hash) {
+                routes.push({ fromLane: l, toLane: l, type: 'straight', colorLane: l });
               }
-
-              pathsMarkup += '<path d="M ' + subX + ' ' + capsuleBottomY + ' C ' + (subX - 2) + ' ' + (capsuleBottomY + 3) + ', ' + (cx + 4) + ' ' + (cy + coord.totalHeight - 2) + ', ' + cx + ' ' + (cy + coord.totalHeight) + '" fill="none" stroke="' + color + '" stroke-width="1.6" stroke-linecap="round" class="git-capsule-close"/>';
             }
 
-            const isHead = (Array.isArray(commit.refs) && commit.refs.some(function(r) { return r.indexOf('HEAD') !== -1; })) || i === 0;
-            const isPushed = commit.pushed !== false;
+            for (let l = 0; l < nextLanes.length; l++) {
+              if (nextLanes[l] === hash && l !== cLane) {
+                routes.push({ fromLane: l, toLane: cLane, type: 'merge-in', colorLane: l });
+                nextLanes[l] = null;
+              }
+            }
 
-            if (isHead) {
-              nodesMarkup += '<circle cx="' + cx + '" cy="' + cy + '" r="6.5" fill="none" stroke="' + color + '" stroke-width="1.8" class="git-node-halo"/><circle cx="' + cx + '" cy="' + cy + '" r="3" fill="' + color + '" class="git-node-head" data-hash="' + commit.hash + '"/>';
-            } else if (!isPushed) {
-              nodesMarkup += '<circle cx="' + cx + '" cy="' + cy + '" r="5.5" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-dasharray="2,2" class="git-node-unpushed-ring"/><circle cx="' + cx + '" cy="' + cy + '" r="3" fill="' + color + '" stroke="#181a1f" stroke-width="1" class="git-node git-node-unpushed" data-hash="' + commit.hash + '"/>';
+            if (visibleParents.length === 0) {
+              nextLanes[cLane] = null;
             } else {
-              nodesMarkup += '<circle cx="' + cx + '" cy="' + cy + '" r="3.5" fill="' + color + '" stroke="#181a1f" stroke-width="1.5" class="git-node" data-hash="' + commit.hash + '"/>';
+              const p0 = visibleParents[0];
+              const existingP0 = nextLanes.indexOf(p0);
+              if (existingP0 !== -1 && existingP0 !== cLane) {
+                routes.push({ fromLane: cLane, toLane: existingP0, type: 'branch-join', colorLane: cLane });
+                nextLanes[cLane] = null;
+              } else {
+                nextLanes[cLane] = p0;
+                routes.push({ fromLane: cLane, toLane: cLane, type: 'straight', colorLane: cLane });
+              }
+              for (let pIdx = 1; pIdx < visibleParents.length; pIdx++) {
+                const pHash = visibleParents[pIdx];
+                let pLane = nextLanes.indexOf(pHash);
+                if (pLane === -1) {
+                  let freeSlot = -1;
+                  for (let k = 1; k < nextLanes.length; k++) {
+                    if (nextLanes[k] === null) { freeSlot = k; break; }
+                  }
+                  if (freeSlot !== -1) {
+                    pLane = freeSlot;
+                    nextLanes[pLane] = pHash;
+                  } else {
+                    pLane = nextLanes.length;
+                    nextLanes.push(pHash);
+                  }
+                }
+                routes.push({ fromLane: cLane, toLane: pLane, type: 'merge-branch', colorLane: pLane });
+              }
             }
+
+            while (nextLanes.length > 1 && nextLanes[nextLanes.length - 1] === null) {
+              nextLanes.pop();
+            }
+            activeLanes = nextLanes;
+
+            projected.push(Object.assign({}, commit, {
+              lane: cLane,
+              routes: routes
+            }));
           }
 
-          return '<svg class="git-graph-svg" width="' + svgWidth + '" height="' + svgHeight + '" viewBox="0 0 ' + svgWidth + ' ' + svgHeight + '" style="min-width: ' + svgWidth + 'px; height: ' + svgHeight + 'px;" xmlns="http://www.w3.org/2000/svg"><g class="git-graph-routes">' + pathsMarkup + '</g><g class="git-graph-nodes">' + nodesMarkup + '</g></svg>';
+          return projected;
+        };
+
+        window.__antigravityRefreshGitSvg = function(hostEl) {
+          if (!hostEl || !window.__antigravityVcsData || !Array.isArray(window.__antigravityVcsData.commits)) return;
+          const activePill = hostEl.querySelector('.git-filter-pill.active');
+          const filterType = activePill ? (activePill.getAttribute('data-branch-filter') || 'all') : 'all';
+          const projected = window.__antigravityProjectFilteredCommits(window.__antigravityVcsData.commits, filterType);
+          const svgCol = hostEl.querySelector('#antigravity-git-svg-column') || hostEl.querySelector('.git-svg-column');
+          if (svgCol && typeof window.__antigravityRenderGitSvg === 'function') {
+            svgCol.innerHTML = window.__antigravityRenderGitSvg(projected, {
+              rowHeight: 26,
+              fileRowHeight: 22,
+              laneWidth: 14,
+              startX: 14
+            });
+          }
+        };
+
+        window.__antigravityUpdateVcsData = function(data) {
+          if (!data || typeof data !== 'object') return;
+          const prevMap = {};
+          if (window.__antigravityVcsData && Array.isArray(window.__antigravityVcsData.commits)) {
+            window.__antigravityVcsData.commits.forEach(function(c) {
+              if (c && c.hash) prevMap[c.hash] = !!c.expanded;
+            });
+          }
+          if (Array.isArray(data.commits)) {
+            data.commits.forEach(function(c) {
+              if (c && c.hash && prevMap[c.hash] !== undefined) {
+                c.expanded = prevMap[c.hash];
+              } else if (c && c.expanded === undefined) {
+                c.expanded = false;
+              }
+            });
+          }
+          window.__antigravityVcsData = data;
+
+          if (typeof window.__antigravityRenderGitPanel === 'function') {
+            const html = window.__antigravityRenderGitPanel(data);
+            const tpl = document.getElementById('antigravity-git-panel-template');
+            if (tpl) tpl.innerHTML = html;
+            const hostEl = document.getElementById('antigravity-git-panel-host');
+            if (hostEl && hostEl.style.display !== 'none') {
+              hostEl.__skipInitialStateParse = true;
+              hostEl.innerHTML = html;
+              window.__bindGitPanelEvents(hostEl);
+            }
+          }
+        };
+
+        window.__antigravityShowGitToast = function(hostEl, msg, isError) {
+          if (!hostEl) return;
+          const toast = hostEl.querySelector('#antigravity-git-vcs-toast');
+          if (!toast) return;
+          toast.textContent = msg;
+          toast.classList.toggle('is-error', !!isError);
+          toast.style.display = 'block';
+          clearTimeout(toast.__timer);
+          toast.__timer = setTimeout(function() {
+            toast.style.display = 'none';
+          }, isError ? 5000 : 2800);
+        };
+
+        window.__antigravityRunVcsAction = async function(hostEl, payload) {
+          if (!payload || !payload.action) return;
+          const labelMap = {
+            checkout: 'Cambiando a rama ' + (payload.branch || '') + '...',
+            pull: 'Sincronizando (git pull) ' + (payload.branch || '') + '...',
+            push: payload.targetSha ? ('Subiendo commits hasta ' + String(payload.targetSha).slice(0, 7) + '...') : ('Subiendo rama ' + (payload.branch || '') + '...'),
+            'create-pr': 'Preparando Pull Request para ' + (payload.branch || '') + '...'
+          };
+          window.__antigravityShowGitToast(hostEl, labelMap[payload.action] || ('Ejecutando ' + payload.action + '...'), false);
+
+          try {
+            if (payload.action === 'create-pr' && payload.branch) {
+              await fetch('http://127.0.0.1:53912/vcs/action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'push', branch: payload.branch })
+              }).catch(function() {});
+            }
+
+            const res = await fetch('http://127.0.0.1:53912/vcs/action', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            const result = await res.json();
+
+            if (!res.ok || (result && result.error && !result.fallbackUrl)) {
+              window.__antigravityShowGitToast(hostEl, 'Error: ' + ((result && result.error) || res.statusText), true);
+              return;
+            }
+
+            if (result && result.fallbackUrl) {
+              window.open(result.fallbackUrl, '_blank');
+            } else if (result && result.output && result.output.indexOf('http') === 0) {
+              window.open(result.output, '_blank');
+            }
+
+            const ovRes = await fetch('http://127.0.0.1:53912/vcs/overview');
+            if (ovRes.ok) {
+              const freshData = await ovRes.json();
+              window.__antigravityUpdateVcsData(freshData);
+              const newHost = document.getElementById('antigravity-git-panel-host') || hostEl;
+              window.__antigravityShowGitToast(newHost, 'Accion completada: ' + payload.action, false);
+            }
+          } catch (err) {
+            window.__antigravityShowGitToast(hostEl, 'Servidor VCS local no disponible (daemon inactivo)', true);
+          }
         };
 
         window.__bindGitPanelEvents = function(hostEl) {
           if (!hostEl) return;
 
-          // Commit row click: Accordion hamburger file expansion & SVG reactive re-render
-          hostEl.querySelectorAll('.git-commit-row').forEach(row => {
-            row.addEventListener('click', (ev) => {
-              hostEl.querySelectorAll('.git-commit-row.selected').forEach(r => r.classList.remove('selected'));
+          // Hydrate window.__antigravityVcsData from embedded JSON script tag on initial mount
+          if (!hostEl.__skipInitialStateParse) {
+            const stateScript = hostEl.querySelector('#antigravity-git-vcs-state');
+            if (stateScript && stateScript.textContent) {
+              try {
+                window.__antigravityVcsData = JSON.parse(stateScript.textContent);
+              } catch (e) {}
+            }
+          }
+          hostEl.__skipInitialStateParse = false;
+
+          function bindVcsActionButtons(root) {
+            root.querySelectorAll('[data-vcs-action]').forEach(function(actionBtn) {
+              actionBtn.onclick = function(ev) {
+                ev.stopPropagation();
+                ev.preventDefault();
+                const rawAction = actionBtn.getAttribute('data-vcs-action');
+                const currentBranch = (window.__antigravityVcsData && window.__antigravityVcsData.status && window.__antigravityVcsData.status.branch) || 'main';
+                const branch = actionBtn.getAttribute('data-branch') || currentBranch;
+                const targetHash = actionBtn.getAttribute('data-hash') || '';
+                if (rawAction === 'push-commit' && targetHash) {
+                  window.__antigravityRunVcsAction(hostEl, { action: 'push', branch: branch, targetSha: targetHash });
+                } else if (rawAction) {
+                  window.__antigravityRunVcsAction(hostEl, { action: rawAction, branch: branch });
+                }
+              };
+            });
+          }
+
+          bindVcsActionButtons(hostEl);
+
+          // Unified commit row click: select inspector + toggle inline file accordion + re-render --< * * * * >-- SVG capsule
+          hostEl.querySelectorAll('.git-commit-row').forEach(function(row) {
+            row.addEventListener('click', function(ev) {
+              if (ev.target && ev.target.closest && ev.target.closest('[data-vcs-action]')) {
+                return;
+              }
+
+              hostEl.querySelectorAll('.git-commit-row.selected').forEach(function(r) { r.classList.remove('selected'); });
               row.classList.add('selected');
 
               const hash = row.getAttribute('data-hash');
@@ -1403,31 +1669,22 @@ class ModLoader {
                 const filesContainer = item.querySelector('.git-commit-files-container');
                 const chevron = item.querySelector('.git-commit-chevron');
                 if (filesContainer && chevron && chevron.classList.contains('has-files')) {
-                  const isNowOpen = filesContainer.style.display !== 'none';
-                  filesContainer.style.display = isNowOpen ? 'none' : 'flex';
-                  item.classList.toggle('is-expanded', !isNowOpen);
-                  chevron.textContent = isNowOpen ? '▸' : '▾';
+                  const isNowOpen = item.classList.contains('is-expanded') || filesContainer.style.display === 'flex';
+                  const nextExpanded = !isNowOpen;
+                  filesContainer.style.display = nextExpanded ? 'flex' : 'none';
+                  item.classList.toggle('is-expanded', nextExpanded);
+                  chevron.textContent = nextExpanded ? '▾' : '▸';
 
-                  // Reactively re-render SVG with inline capsule --< * * * * >--
                   if (window.__antigravityVcsData && Array.isArray(window.__antigravityVcsData.commits)) {
-                    const c = window.__antigravityVcsData.commits.find(x => x.hash === hash);
-                    if (c) {
-                      c.expanded = !isNowOpen;
-                    }
-                    const svgCol = hostEl.querySelector('#antigravity-git-svg-column') || hostEl.querySelector('.git-svg-column');
-                    if (svgCol && typeof window.__antigravityRenderGitSvg === 'function') {
-                      svgCol.innerHTML = window.__antigravityRenderGitSvg(window.__antigravityVcsData.commits, {
-                        rowHeight: 26,
-                        fileRowHeight: 22,
-                        laneWidth: 14,
-                        startX: 14
-                      });
+                    const targetCommit = window.__antigravityVcsData.commits.find(function(x) { return x.hash === hash; });
+                    if (targetCommit) {
+                      targetCommit.expanded = nextExpanded;
                     }
                   }
+                  window.__antigravityRefreshGitSvg(hostEl);
                 }
               }
 
-              const hash = row.getAttribute('data-hash');
               const inspector = hostEl.querySelector('#antigravity-git-inspector');
               if (inspector && hash) {
                 const authorName = row.getAttribute('data-author') || 'Unknown';
@@ -1437,42 +1694,38 @@ class ModLoader {
                 const shortHash = row.getAttribute('data-short-hash') || hash.slice(0, 7);
                 const subject = row.getAttribute('data-subject') || '';
                 const relativeDate = row.getAttribute('data-date') || '';
+                const isUnpushed = row.getAttribute('data-pushed') === 'false';
                 const filesCount = parseInt(row.getAttribute('data-files-count') || '0', 10);
 
-                function esc(str) {
-                  return String(str || '')
-                    .replace(/&/g, '&amp;')
-                    .replace(/</g, '&lt;')
-                    .replace(/>/g, '&gt;')
-                    .replace(/"/g, '&quot;')
-                    .replace(/'/g, '&#039;');
-                }
-
-                const safeAuthor = esc(authorName);
-                const safeEmail = authorEmail ? ('&lt;' + esc(authorEmail) + '&gt;') : '';
-                const safeSubject = esc(subject);
-                const safeShortHash = esc(shortHash);
-                const initials = (authorName || 'U').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
+                const safeAuthor = escapeGitHtml(authorName);
+                const safeEmail = authorEmail ? ('&lt;' + escapeGitHtml(authorEmail) + '&gt;') : '';
+                const safeSubject = escapeGitHtml(subject);
+                const safeShortHash = escapeGitHtml(shortHash);
+                const initials = (authorName || 'U').split(' ').map(function(w) { return w[0]; }).slice(0, 2).join('').toUpperCase();
                 const linkHtml = commitUrl
-                  ? '<a href="' + esc(commitUrl) + '" target="_blank" rel="noopener" class="git-inspector-btn-gh" title="Ver commit en GitHub">GitHub ↗</a>'
+                  ? '<a href="' + escapeGitHtml(commitUrl) + '" target="_blank" rel="noopener" class="git-inspector-btn-gh" title="Ver commit en GitHub">GitHub ↗</a>'
+                  : '';
+                const pushHtml = isUnpushed
+                  ? '<button class="git-commit-push-btn" data-vcs-action="push-commit" data-hash="' + escapeGitHtml(hash) + '" title="Push hasta este commit">↑ Push hasta aquí</button>'
                   : '';
 
                 inspector.innerHTML = '<div class="git-inspector-card">' +
                   '<div class="git-inspector-top">' +
                   '<div class="git-inspector-author-group">' +
                   '<div class="git-avatar-frame">' +
-                  '<div class="git-inspector-avatar-fallback">' + esc(initials) + '</div>' +
-                  (avatarUrl ? '<img class="git-inspector-avatar" src="' + avatarUrl + '" alt="' + safeAuthor + '" onerror="this.remove()"/>' : '') +
+                  '<div class="git-inspector-avatar-fallback">' + escapeGitHtml(initials) + '</div>' +
+                  (avatarUrl ? '<img class="git-inspector-avatar" src="' + escapeGitHtml(avatarUrl) + '" alt="' + safeAuthor + '" onerror="this.remove()"/>' : '') +
                   '</div>' +
                   '<div class="git-inspector-author-text">' +
                   '<div class="git-inspector-name-row">' +
                   '<span class="git-inspector-author-name">' + safeAuthor + '</span>' +
-                  (relativeDate ? '<span class="git-inspector-date">' + esc(relativeDate) + '</span>' : '') +
+                  (relativeDate ? '<span class="git-inspector-date">' + escapeGitHtml(relativeDate) + '</span>' : '') +
                   '</div>' +
                   (safeEmail ? '<span class="git-inspector-author-email">' + safeEmail + '</span>' : '') +
                   '</div></div>' +
                   '<div class="git-inspector-meta-group">' +
-                  '<span class="git-inspector-hash-pill" title="Hash: ' + esc(hash) + '">' + safeShortHash + '</span>' +
+                  '<span class="git-inspector-hash-pill" title="Hash: ' + escapeGitHtml(hash) + '">' + safeShortHash + '</span>' +
+                  pushHtml +
                   linkHtml +
                   '<button class="git-inspector-btn-close" id="antigravity-git-inspector-close-btn" title="Cerrar inspector">✕</button>' +
                   '</div></div>' +
@@ -1481,9 +1734,11 @@ class ModLoader {
                   '</div>';
                 inspector.style.display = 'block';
 
+                bindVcsActionButtons(inspector);
+
                 const inspClose = inspector.querySelector('#antigravity-git-inspector-close-btn');
                 if (inspClose) {
-                  inspClose.onclick = (eClose) => {
+                  inspClose.onclick = function(eClose) {
                     eClose.stopPropagation();
                     inspector.style.display = 'none';
                   };
@@ -1492,36 +1747,42 @@ class ModLoader {
             });
           });
 
-          // Expand/Collapse all files toggle button
+          // Expand/Collapse all files toggle button + reactive SVG re-render
           const toggleAllBtn = hostEl.querySelector('#antigravity-git-toggle-all-btn');
           if (toggleAllBtn) {
             let allExpanded = false;
-            toggleAllBtn.onclick = (e) => {
+            toggleAllBtn.onclick = function(e) {
               e.stopPropagation();
               allExpanded = !allExpanded;
-              hostEl.querySelectorAll('.git-commit-item').forEach(item => {
+              hostEl.querySelectorAll('.git-commit-item').forEach(function(item) {
                 const filesContainer = item.querySelector('.git-commit-files-container');
                 const chevron = item.querySelector('.git-commit-chevron');
-                if (filesContainer) {
+                const hasFiles = chevron && chevron.classList.contains('has-files');
+                if (filesContainer && hasFiles) {
                   filesContainer.style.display = allExpanded ? 'flex' : 'none';
                   item.classList.toggle('is-expanded', allExpanded);
-                  if (chevron && chevron.classList.contains('has-files')) {
-                    chevron.textContent = allExpanded ? '▾' : '▸';
-                  }
+                  chevron.textContent = allExpanded ? '▾' : '▸';
                 }
               });
+              if (window.__antigravityVcsData && Array.isArray(window.__antigravityVcsData.commits)) {
+                window.__antigravityVcsData.commits.forEach(function(c) {
+                  const hasFiles = Array.isArray(c.files) && c.files.length > 0;
+                  c.expanded = hasFiles ? allExpanded : false;
+                });
+              }
+              window.__antigravityRefreshGitSvg(hostEl);
             };
           }
 
-          // Branch filter pills (Todas / Locales / GitHub)
-          hostEl.querySelectorAll('.git-filter-pill').forEach(pill => {
-            pill.onclick = (e) => {
+          // Branch filter pills (Todas / Locales / GitHub) with synchronized SVG re-projection
+          hostEl.querySelectorAll('.git-filter-pill').forEach(function(pill) {
+            pill.onclick = function(e) {
               e.stopPropagation();
-              hostEl.querySelectorAll('.git-filter-pill.active').forEach(p => p.classList.remove('active'));
+              hostEl.querySelectorAll('.git-filter-pill.active').forEach(function(p) { p.classList.remove('active'); });
               pill.classList.add('active');
 
               const filterType = pill.getAttribute('data-branch-filter') || 'all';
-              hostEl.querySelectorAll('.git-commit-item').forEach(item => {
+              hostEl.querySelectorAll('.git-commit-item').forEach(function(item) {
                 const type = item.getAttribute('data-commit-type');
                 if (filterType === 'all') {
                   item.style.display = '';
@@ -1531,14 +1792,15 @@ class ModLoader {
                   item.style.display = type === 'remote' ? '' : 'none';
                 }
               });
+              window.__antigravityRefreshGitSvg(hostEl);
             };
           });
 
-          // Branches Drawer dropdown toggle
+          // Branches Drawer dropdown toggle & branch checkout rows
           const drawerBtn = hostEl.querySelector('#antigravity-git-branches-drawer-btn');
           const drawer = hostEl.querySelector('#antigravity-git-branches-drawer');
           if (drawerBtn && drawer) {
-            drawerBtn.onclick = (e) => {
+            drawerBtn.onclick = function(e) {
               e.stopPropagation();
               const isHidden = drawer.style.display === 'none';
               drawer.style.display = isHidden ? 'block' : 'none';
@@ -1547,10 +1809,33 @@ class ModLoader {
             };
           }
 
+          hostEl.querySelectorAll('.git-branch-drawer-row').forEach(function(branchRow) {
+            branchRow.onclick = function(e) {
+              if (e.target && e.target.closest && e.target.closest('[data-vcs-action]')) return;
+              e.stopPropagation();
+              if (branchRow.classList.contains('is-active-branch')) return;
+              const targetBranch = branchRow.getAttribute('data-branch');
+              if (targetBranch) {
+                window.__antigravityRunVcsAction(hostEl, { action: 'checkout', branch: targetBranch });
+              }
+            };
+          });
+
+          // PR creation & pending commits drawer toggle
+          const prDrawerTrigger = hostEl.querySelector('#antigravity-git-pr-drawer-trigger');
+          const prDrawer = hostEl.querySelector('#antigravity-git-pr-drawer');
+          if (prDrawerTrigger && prDrawer) {
+            prDrawerTrigger.onclick = function(e) {
+              e.stopPropagation();
+              const isHidden = prDrawer.style.display === 'none';
+              prDrawer.style.display = isHidden ? 'block' : 'none';
+            };
+          }
+
           const ciTrigger = hostEl.querySelector('#antigravity-git-ci-rollup-trigger');
           const ciAccordion = hostEl.querySelector('#antigravity-git-ci-accordion');
           if (ciTrigger && ciAccordion) {
-            ciTrigger.onclick = (e) => {
+            ciTrigger.onclick = function(e) {
               e.stopPropagation();
               const isHidden = ciAccordion.style.display === 'none';
               ciAccordion.style.display = isHidden ? 'block' : 'none';
@@ -1561,11 +1846,11 @@ class ModLoader {
 
           const refreshBtn = hostEl.querySelector('#antigravity-git-refresh-btn');
           if (refreshBtn) {
-            refreshBtn.onclick = async (e) => {
+            refreshBtn.onclick = async function(e) {
               if (e) e.stopPropagation();
               refreshBtn.style.transform = 'rotate(360deg)';
               refreshBtn.style.transition = 'transform 0.5s ease';
-              setTimeout(() => { refreshBtn.style.transform = ''; }, 500);
+              setTimeout(function() { refreshBtn.style.transform = ''; }, 500);
 
               try {
                 const res = await fetch('http://127.0.0.1:53912/vcs/overview');
@@ -1576,7 +1861,7 @@ class ModLoader {
                     return;
                   }
                 }
-              } catch {}
+              } catch (err) {}
 
               if (window.__antigravityMountAll) {
                 window.__antigravityMountAll();
@@ -1586,7 +1871,7 @@ class ModLoader {
 
           const closeBtn = hostEl.querySelector('#antigravity-git-close-btn');
           if (closeBtn) {
-            closeBtn.onclick = (e) => {
+            closeBtn.onclick = function(e) {
               e.stopPropagation();
               window.__toggleGitGraphPanel();
             };
@@ -1607,9 +1892,10 @@ class ModLoader {
           const trigger = btn || document.querySelector('#antigravity-git-tab-trigger');
           let auxContainer = trigger ? (trigger.closest('.h-full.w-full.flex.flex-col') || trigger.closest('.flex.flex-col')) : null;
           if (!auxContainer) {
-            auxContainer = document.querySelector('[data-testid="aux-pane-new-tab-button"]')?.closest('.flex.flex-col');
+            const newTabBtn = document.querySelector('[data-testid="aux-pane-new-tab-button"]');
+            auxContainer = newTabBtn ? newTabBtn.closest('.flex.flex-col') : null;
           }
-          let auxBody = auxContainer ? auxContainer.querySelector('.flex-grow.overflow-hidden') : null;
+          const auxBody = auxContainer ? auxContainer.querySelector('.flex-grow.overflow-hidden') : null;
 
           let hostEl = document.getElementById('antigravity-git-panel-host');
           if (!hostEl) {
@@ -1634,15 +1920,27 @@ class ModLoader {
             hostEl.style.cssText = 'position:fixed; right:0; top:40px; bottom:24px; width:420px; display:' + (isCurrentActive ? 'none' : 'flex') + '; flex-direction:column; overflow:hidden; z-index:99999; background:#0f111a; box-shadow:-12px 0 30px rgba(0,0,0,0.7); border-left:1px solid #1e2438;';
           }
 
-          if (isCurrentActive) {
-            // panel closed
-          } else {
-            const template = document.getElementById('antigravity-git-panel-template');
-            if (template) {
-              hostEl.innerHTML = template.innerHTML;
+          if (!isCurrentActive) {
+            if (window.__antigravityVcsData && typeof window.__antigravityRenderGitPanel === 'function') {
+              hostEl.__skipInitialStateParse = true;
+              hostEl.innerHTML = window.__antigravityRenderGitPanel(window.__antigravityVcsData);
+            } else {
+              const template = document.getElementById('antigravity-git-panel-template');
+              if (template) {
+                hostEl.innerHTML = template.innerHTML;
+              }
             }
             hostEl.style.display = 'flex';
             window.__bindGitPanelEvents(hostEl);
+
+            fetch('http://127.0.0.1:53912/vcs/overview')
+              .then(function(r) { return r.ok ? r.json() : null; })
+              .then(function(liveData) {
+                if (liveData && window.__antigravityUpdateVcsData) {
+                  window.__antigravityUpdateVcsData(liveData);
+                }
+              })
+              .catch(function() {});
           }
         };
 
@@ -1757,6 +2055,21 @@ class ModLoader {
               if (currentAgentId !== agentToApply.id || currentEffMode !== nextEffMode || badge.__lastCascadeId !== cId) {
                 badge.__lastCascadeId = cId;
                 window.__applyAgentToBadge(badge, agentToApply);
+              }
+            }
+
+            // Sync exterior reticle trigger in the same group
+            const group = badge.closest('.antigravity-agent-selector-group');
+            const reticleBtn = group ? group.querySelector('.antigravity-caveman-reticle-trigger') : null;
+            if (reticleBtn) {
+              const isFocus = window.__resolveCavemanForCascade ? window.__resolveCavemanForCascade(cId) : false;
+              const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
+              const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
+              reticleBtn.classList.toggle('is-focus', isFocus);
+              reticleBtn.setAttribute('title', isFocus ? focusTitle : explicativoTitle);
+              const box = reticleBtn.querySelector('.caveman-reticle-box');
+              if (box && window.__renderReticleSvg) {
+                box.innerHTML = window.__renderReticleSvg(isFocus, 14);
               }
             }
           });
@@ -1888,6 +2201,14 @@ class ModLoader {
               if (text && window.__handleAutoPromptContextUpdate) {
                 window.__handleAutoPromptContextUpdate(text, sendBtn);
               }
+            }
+
+            const reticleBtn = e.target.closest('.antigravity-caveman-reticle-trigger');
+            if (reticleBtn) {
+              e.preventDefault();
+              e.stopPropagation();
+              window.__toggleCavemanMode(undefined, reticleBtn);
+              return;
             }
 
             const isAgentBadge = e.target.closest('.antigravity-agent-badge');
@@ -4839,6 +5160,40 @@ function renderAgentSvg(agentId, size = 16, strokeWidth = 2, extraClass = '') {
   `.trim();
 }
 
+/**
+ * Renders the circular reticle target SVG representing Focus vs Explicativo.
+ * Focus (Concentracion): Concentric rings converging into a solid core with crosshair ticks.
+ * Explicativo (Dispersion): Concentric open rings radiating outwards with an open center.
+ * @param {boolean} isFocus
+ * @param {number} [size=14]
+ * @param {number} [strokeWidth=1.4]
+ * @param {string} [extraClass='']
+ * @returns {string} SVG markup
+ */
+function renderReticleSvg(isFocus = false, size = 14, strokeWidth = 1.4, extraClass = '') {
+  const className = `reticle-icon ${isFocus ? 'reticle-focus' : 'reticle-explicativo'} ${extraClass}`.trim();
+  if (isFocus) {
+    return `
+      <svg class="${className}" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" style="display: inline-block; vertical-align: middle; flex-shrink: 0;">
+        <circle cx="12" cy="12" r="9" stroke-opacity="0.35" stroke-dasharray="2 2"/>
+        <circle cx="12" cy="12" r="5.5" stroke-opacity="0.8"/>
+        <circle cx="12" cy="12" r="2" fill="currentColor"/>
+        <line x1="12" y1="1" x2="12" y2="4"/>
+        <line x1="12" y1="20" x2="12" y2="23"/>
+        <line x1="1" y1="12" x2="4" y2="12"/>
+        <line x1="20" y1="12" x2="23" y2="12"/>
+      </svg>
+    `.trim();
+  }
+  return `
+    <svg class="${className}" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" style="display: inline-block; vertical-align: middle; flex-shrink: 0;">
+      <circle cx="12" cy="12" r="4" stroke-opacity="0.6"/>
+      <circle cx="12" cy="12" r="7.5" stroke-opacity="0.4" stroke-dasharray="3 3"/>
+      <circle cx="12" cy="12" r="10.5" stroke-opacity="0.25" stroke-dasharray="1 3"/>
+    </svg>
+  `.trim();
+}
+
 
 /**
  * Vector SVG representation of the Fedora Hat and Sunglasses icon.
@@ -5349,20 +5704,22 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
         <button class="agent-close-btn" id="antigravity-agent-close" title="Cerrar">✕</button>
       </div>
 
-      <!-- 1.1 CAVEMAN MODIFIER CARD -->
+      <!-- 1.1 CAVEMAN MODIFIER CARD (FOCUS / EXPLICATIVO) -->
       <div class="agent-card agent-modifier-card" id="antigravity-caveman-card">
         <div class="agent-modifier-info">
           <div class="agent-modifier-icon">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+            <svg class="reticle-card-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="12" cy="12" r="9" stroke-opacity="0.35" stroke-dasharray="2 2"/>
+              <circle cx="12" cy="12" r="5.5" stroke-opacity="0.8"/>
+              <circle cx="12" cy="12" r="2" fill="currentColor"/>
             </svg>
           </div>
           <div class="agent-modifier-text">
             <div class="agent-modifier-title-row">
-              <span class="agent-modifier-title">Modo Caveman</span>
-              <span class="agent-modifier-pill" id="antigravity-caveman-pill">OFF</span>
+              <span class="agent-modifier-title">Modo Focus (Caveman)</span>
+              <span class="agent-modifier-pill" id="antigravity-caveman-pill">EXPLICATIVO</span>
             </div>
-            <div class="agent-modifier-subtitle">Compresion semantica (~70% ahorro de tokens)</div>
+            <div class="agent-modifier-subtitle">Alternar entre Focus y Explicativo</div>
           </div>
         </div>
         <label class="agent-modifier-switch">
@@ -5497,7 +5854,7 @@ class AgentSelectorMod extends AntigravityMod {
     });
 
     this.discoveryService = options.discoveryService || new AgentDiscoveryService();
-    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY AGENT SELECTOR MOD - STYLES\r\n   Card Architecture: Every text section enclosed in card components\r\n   ========================================================================= */\r\n\r\n.antigravity-agent-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 10px 0 7px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #f4f4f5;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.agent-badge-dot {\r\n  width: 6px;\r\n  height: 6px;\r\n  border-radius: 9999px;\r\n  flex-shrink: 0;\r\n  transition: all 0.3s ease;\r\n}\r\n\r\n.antigravity-agent-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-agent-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n.antigravity-agent-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n.agent-label {\r\n  font-weight: 500;\r\n  letter-spacing: -0.01em;\r\n  color: #e4e4e7;\r\n  white-space: nowrap;\r\n}\r\n\r\n.agent-caret {\r\n  font-size: 8px;\r\n  color: #a1a1aa;\r\n  margin-left: 1px;\r\n  transition: transform 0.2s ease;\r\n}\r\n\r\n.antigravity-agent-badge.open .agent-caret {\r\n  transform: rotate(180deg);\r\n}\r\n\r\n/* Responsive compact mode */\r\n.antigravity-agent-badge.compact {\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 7px !important;\r\n  gap: 5px !important;\r\n  border-radius: 9999px !important;\r\n  justify-content: center !important;\r\n}\r\n.antigravity-agent-badge.compact .agent-label,\r\n.antigravity-agent-badge.compact .agent-caret {\r\n  display: none !important;\r\n}\r\n\r\n@media (max-width: 960px) {\r\n  .agent-label,\r\n  .agent-caret {\r\n    display: none !important;\r\n  }\r\n  .antigravity-agent-badge {\r\n    height: 28px !important;\r\n    box-sizing: border-box !important;\r\n    padding: 0 7px !important;\r\n    gap: 5px !important;\r\n    border-radius: 9999px !important;\r\n    justify-content: center !important;\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   OSCILLATING AUTO BADGE (CONTEXT-DRIVEN PLAN / BUILD FLIPPER)\r\n   Transitions automatically only when context changes between PLAN and BUILD\r\n   ========================================================================= */\r\n.antigravity-agent-badge.mode-auto {\r\n  border-color: rgba(168, 85, 247, 0.45);\r\n  box-shadow: 0 0 10px rgba(168, 85, 247, 0.25);\r\n  transition: border-color 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto .agent-badge-dot {\r\n  background: #a855f7 !important;\r\n  box-shadow: 0 0 8px #a855f7 !important;\r\n  transition: background 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build {\r\n  border-color: rgba(245, 158, 11, 0.45);\r\n  box-shadow: 0 0 10px rgba(245, 158, 11, 0.25);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .agent-badge-dot {\r\n  background: #f59e0b !important;\r\n  box-shadow: 0 0 8px #f59e0b !important;\r\n}\r\n\r\n.auto-oscillate-track {\r\n  display: inline-flex;\r\n  flex-direction: column;\r\n  height: 28px;\r\n  line-height: 28px;\r\n  overflow: hidden;\r\n  vertical-align: top;\r\n}\r\n\r\n.auto-oscillate-step {\r\n  height: 28px;\r\n  line-height: 28px;\r\n  display: block;\r\n  font-weight: 600;\r\n  letter-spacing: -0.01em;\r\n  white-space: nowrap;\r\n  transform: translateY(0);\r\n  transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .auto-oscillate-step {\r\n  transform: translateY(-28px);\r\n}\r\n\r\n.auto-oscillate-step.plan {\r\n  color: #c084fc;\r\n}\r\n\r\n.auto-oscillate-step.build {\r\n  color: #fbbf24;\r\n}\r\n\r\n/* =========================================================================\r\n   DROPDOWN PORTAL (FIXED TO VIEWPORT)\r\n   Card Architecture: Harmonized with Mods Manager design language\r\n   ========================================================================= */\r\n.antigravity-agent-dropdown-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  width: 380px !important;\r\n  animation: agentFadeIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n  filter: drop-shadow(0 24px 60px rgba(0, 0, 0, 0.85));\r\n}\r\n\r\n.antigravity-agent-dropdown-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-agent-dropdown-wrapper {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-agent-dropdown {\r\n  width: 380px !important;\r\n  background: #161822 !important;\r\n  background: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 14px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 14px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  pointer-events: auto !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* =========================================================================\r\n   CARD COMPONENT SYSTEM\r\n   ========================================================================= */\r\n.agent-card {\r\n  box-sizing: border-box !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n}\r\n\r\n/* 1. HEADER CARD */\r\n.agent-header-card {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 10px 12px !important;\r\n  margin-bottom: 2px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.agent-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.agent-header-icon {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(122, 162, 247, 0.15) !important;\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.25) !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-title-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.agent-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-main-title {\r\n  font-size: 13.5px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n  margin: 0 !important;\r\n}\r\n\r\n.agent-header-badge {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(122, 162, 247, 0.18) !important;\r\n  color: #7aa2f7 !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\r\n  letter-spacing: 0.3px !important;\r\n}\r\n\r\n.agent-subtitle {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n}\r\n\r\n.agent-close-btn {\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  cursor: pointer !important;\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 6px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  font-size: 12px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.agent-close-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.16) !important;\r\n}\r\n\r\n/* 2. PRIMARY SECTION: CARDS DIRECTAS CON PIN */\r\n.agent-primary-section,\r\n.agent-cards-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-card.primary-hero-card {\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 11px 13px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 12px !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-sizing: border-box !important;\r\n  cursor: pointer !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-card.primary-hero-card:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(122, 162, 247, 0.35) !important;\r\n  transform: translateY(-1px) !important;\r\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;\r\n}\r\n\r\n.agent-card.primary-hero-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 16px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 30%, transparent) !important;\r\n}\r\n\r\n.agent-card-info {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-icon-box {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n.agent-text-wrap {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-title {\r\n  font-size: 13px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.agent-tag {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  letter-spacing: 0.04em !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n/* =========================================================================\r\n   PIN TOGGLE BUTTON COMPONENT\r\n   ========================================================================= */\r\n.agent-pin-btn {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  color: rgba(255, 255, 255, 0.35) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  flex-shrink: 0 !important;\r\n  padding: 0 !important;\r\n}\r\n\r\n.agent-pin-btn:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #ffffff !important;\r\n  transform: scale(1.06) !important;\r\n}\r\n\r\n.agent-pin-btn.active {\r\n  background: rgba(122, 162, 247, 0.2) !important;\r\n  border-color: rgba(122, 162, 247, 0.6) !important;\r\n  color: #7aa2f7 !important;\r\n  box-shadow: 0 0 12px rgba(122, 162, 247, 0.35) !important;\r\n  transform: scale(1.02) !important;\r\n}\r\n\r\n.agent-pin-btn.active svg {\r\n  fill: currentColor !important;\r\n}\r\n\r\n.antigravity-agent-item.selected .agent-pin-btn.active {\r\n  background: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 22%, transparent) !important;\r\n  border-color: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 70%, transparent) !important;\r\n  color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 14px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 45%, transparent) !important;\r\n}\r\n\r\n/* 3. TOGGLE ACORDEÓN CARD */\r\n.agent-toggle-card {\r\n  padding: 0 !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 9px 12px !important;\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 9px !important;\r\n  color: rgba(255, 255, 255, 0.7) !important;\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn:hover {\r\n  background: rgba(255, 255, 255, 0.07) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.catalog-toggle-count {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #a1a1aa !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n/* 4. DRAWER CONTAINER CARD */\r\n.agent-catalog-drawer {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n.agent-catalog-drawer.collapsed {\r\n  display: none !important;\r\n}\r\n\r\n.agent-drawer-card {\r\n  padding: 10px !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  background: rgba(0, 0, 0, 0.35) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n}\r\n\r\n/* LEVEL TABS DENTRO DEL DRAWER */\r\n.agent-level-tabs {\r\n  display: flex !important;\r\n  gap: 4px !important;\r\n  padding: 3px !important;\r\n  background: rgba(0, 0, 0, 0.4) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 7px !important;\r\n}\r\n\r\n.agent-tab-btn {\r\n  flex: 1 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  gap: 6px !important;\r\n  height: 26px !important;\r\n  border: none !important;\r\n  background: transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  border-radius: 5px !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-tab-btn:hover {\r\n  color: #e4e4e7 !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.agent-tab-btn.active {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #ffffff !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.tab-icon {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n/* TAB PANELS */\r\n.agent-tab-content {\r\n  display: none !important;\r\n  max-height: 220px !important;\r\n  overflow-y: auto !important;\r\n  padding-right: 2px !important;\r\n}\r\n\r\n.agent-tab-content.active {\r\n  display: block !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar {\r\n  width: 4px !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar-thumb {\r\n  background: rgba(255, 255, 255, 0.15) !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n/* COMPACT GRID */\r\n.compact-grid {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.compact-agent-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n  padding: 8px 10px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.025) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.compact-agent-card:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  transform: translateY(-0.5px) !important;\r\n}\r\n\r\n.compact-agent-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 10px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 25%, transparent) !important;\r\n}\r\n\r\n.compact-icon-box {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n  border: 1px solid transparent !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.compact-details {\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 1px !important;\r\n}\r\n\r\n.compact-name-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n.compact-name {\r\n  font-size: 11.5px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-sub {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-pin-btn {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n}\r\n\r\n/* 5. FOOTER CARD */\r\n.agent-footer-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  padding: 8px 12px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 8px !important;\r\n}\r\n\r\n.agent-footer-icon {\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-footer-text {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.55) !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n@keyframes agentFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-6px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n";
+    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY AGENT SELECTOR MOD - STYLES\r\n   Card Architecture: Every text section enclosed in card components\r\n   ========================================================================= */\r\n\r\n.antigravity-agent-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 10px 0 7px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #f4f4f5;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.agent-badge-dot {\r\n  width: 6px;\r\n  height: 6px;\r\n  border-radius: 9999px;\r\n  flex-shrink: 0;\r\n  transition: all 0.3s ease;\r\n}\r\n\r\n.antigravity-agent-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-agent-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n.antigravity-agent-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n.agent-label {\r\n  font-weight: 500;\r\n  letter-spacing: -0.01em;\r\n  color: #e4e4e7;\r\n  white-space: nowrap;\r\n}\r\n\r\n.agent-caret {\r\n  font-size: 8px;\r\n  color: #a1a1aa;\r\n  margin-left: 1px;\r\n  transition: transform 0.2s ease;\r\n}\r\n\r\n.antigravity-agent-badge.open .agent-caret {\r\n  transform: rotate(180deg);\r\n}\r\n\r\n/* Responsive compact mode */\r\n.antigravity-agent-badge.compact {\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 7px !important;\r\n  gap: 5px !important;\r\n  border-radius: 9999px !important;\r\n  justify-content: center !important;\r\n}\r\n.antigravity-agent-badge.compact .agent-label,\r\n.antigravity-agent-badge.compact .agent-caret {\r\n  display: none !important;\r\n}\r\n\r\n@media (max-width: 960px) {\r\n  .agent-label,\r\n  .agent-caret {\r\n    display: none !important;\r\n  }\r\n  .antigravity-agent-badge {\r\n    height: 28px !important;\r\n    box-sizing: border-box !important;\r\n    padding: 0 7px !important;\r\n    gap: 5px !important;\r\n    border-radius: 9999px !important;\r\n    justify-content: center !important;\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   OSCILLATING AUTO BADGE (CONTEXT-DRIVEN PLAN / BUILD FLIPPER)\r\n   Transitions automatically only when context changes between PLAN and BUILD\r\n   ========================================================================= */\r\n.antigravity-agent-badge.mode-auto {\r\n  border-color: rgba(168, 85, 247, 0.45);\r\n  box-shadow: 0 0 10px rgba(168, 85, 247, 0.25);\r\n  transition: border-color 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto .agent-badge-dot {\r\n  background: #a855f7 !important;\r\n  box-shadow: 0 0 8px #a855f7 !important;\r\n  transition: background 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build {\r\n  border-color: rgba(245, 158, 11, 0.45);\r\n  box-shadow: 0 0 10px rgba(245, 158, 11, 0.25);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .agent-badge-dot {\r\n  background: #f59e0b !important;\r\n  box-shadow: 0 0 8px #f59e0b !important;\r\n}\r\n\r\n.auto-oscillate-track {\r\n  display: inline-flex;\r\n  flex-direction: column;\r\n  height: 28px;\r\n  line-height: 28px;\r\n  overflow: hidden;\r\n  vertical-align: top;\r\n}\r\n\r\n.auto-oscillate-step {\r\n  height: 28px;\r\n  line-height: 28px;\r\n  display: block;\r\n  font-weight: 600;\r\n  letter-spacing: -0.01em;\r\n  white-space: nowrap;\r\n  transform: translateY(0);\r\n  transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .auto-oscillate-step {\r\n  transform: translateY(-28px);\r\n}\r\n\r\n.auto-oscillate-step.plan {\r\n  color: #c084fc;\r\n}\r\n\r\n.auto-oscillate-step.build {\r\n  color: #fbbf24;\r\n}\r\n\r\n/* =========================================================================\r\n   DROPDOWN PORTAL (FIXED TO VIEWPORT)\r\n   Card Architecture: Harmonized with Mods Manager design language\r\n   ========================================================================= */\r\n.antigravity-agent-dropdown-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  width: 380px !important;\r\n  animation: agentFadeIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n  filter: drop-shadow(0 24px 60px rgba(0, 0, 0, 0.85));\r\n}\r\n\r\n.antigravity-agent-dropdown-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-agent-dropdown-wrapper {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-agent-dropdown {\r\n  width: 380px !important;\r\n  background: #161822 !important;\r\n  background: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 14px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 14px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  pointer-events: auto !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* =========================================================================\r\n   CARD COMPONENT SYSTEM\r\n   ========================================================================= */\r\n.agent-card {\r\n  box-sizing: border-box !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n}\r\n\r\n/* 1. HEADER CARD */\r\n.agent-header-card {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 10px 12px !important;\r\n  margin-bottom: 2px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.agent-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.agent-header-icon {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(122, 162, 247, 0.15) !important;\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.25) !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-title-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.agent-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-main-title {\r\n  font-size: 13.5px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n  margin: 0 !important;\r\n}\r\n\r\n.agent-header-badge {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(122, 162, 247, 0.18) !important;\r\n  color: #7aa2f7 !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\r\n  letter-spacing: 0.3px !important;\r\n}\r\n\r\n.agent-subtitle {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n}\r\n\r\n.agent-close-btn {\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  cursor: pointer !important;\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 6px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  font-size: 12px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.agent-close-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.16) !important;\r\n}\r\n\r\n/* 2. PRIMARY SECTION: CARDS DIRECTAS CON PIN */\r\n.agent-primary-section,\r\n.agent-cards-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-card.primary-hero-card {\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 11px 13px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 12px !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-sizing: border-box !important;\r\n  cursor: pointer !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-card.primary-hero-card:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(122, 162, 247, 0.35) !important;\r\n  transform: translateY(-1px) !important;\r\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;\r\n}\r\n\r\n.agent-card.primary-hero-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 16px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 30%, transparent) !important;\r\n}\r\n\r\n.agent-card-info {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-icon-box {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n.agent-text-wrap {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-title {\r\n  font-size: 13px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.agent-tag {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  letter-spacing: 0.04em !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n/* =========================================================================\r\n   PIN TOGGLE BUTTON COMPONENT\r\n   ========================================================================= */\r\n.agent-pin-btn {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  color: rgba(255, 255, 255, 0.35) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  flex-shrink: 0 !important;\r\n  padding: 0 !important;\r\n}\r\n\r\n.agent-pin-btn:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #ffffff !important;\r\n  transform: scale(1.06) !important;\r\n}\r\n\r\n.agent-pin-btn.active {\r\n  background: rgba(122, 162, 247, 0.2) !important;\r\n  border-color: rgba(122, 162, 247, 0.6) !important;\r\n  color: #7aa2f7 !important;\r\n  box-shadow: 0 0 12px rgba(122, 162, 247, 0.35) !important;\r\n  transform: scale(1.02) !important;\r\n}\r\n\r\n.agent-pin-btn.active svg {\r\n  fill: currentColor !important;\r\n}\r\n\r\n.antigravity-agent-item.selected .agent-pin-btn.active {\r\n  background: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 22%, transparent) !important;\r\n  border-color: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 70%, transparent) !important;\r\n  color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 14px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 45%, transparent) !important;\r\n}\r\n\r\n/* 3. TOGGLE ACORDEÓN CARD */\r\n.agent-toggle-card {\r\n  padding: 0 !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 9px 12px !important;\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 9px !important;\r\n  color: rgba(255, 255, 255, 0.7) !important;\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn:hover {\r\n  background: rgba(255, 255, 255, 0.07) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.catalog-toggle-count {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #a1a1aa !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n/* 4. DRAWER CONTAINER CARD */\r\n.agent-catalog-drawer {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n.agent-catalog-drawer.collapsed {\r\n  display: none !important;\r\n}\r\n\r\n.agent-drawer-card {\r\n  padding: 10px !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  background: rgba(0, 0, 0, 0.35) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n}\r\n\r\n/* LEVEL TABS DENTRO DEL DRAWER */\r\n.agent-level-tabs {\r\n  display: flex !important;\r\n  gap: 4px !important;\r\n  padding: 3px !important;\r\n  background: rgba(0, 0, 0, 0.4) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 7px !important;\r\n}\r\n\r\n.agent-tab-btn {\r\n  flex: 1 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  gap: 6px !important;\r\n  height: 26px !important;\r\n  border: none !important;\r\n  background: transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  border-radius: 5px !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-tab-btn:hover {\r\n  color: #e4e4e7 !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.agent-tab-btn.active {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #ffffff !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.tab-icon {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n/* TAB PANELS */\r\n.agent-tab-content {\r\n  display: none !important;\r\n  max-height: 220px !important;\r\n  overflow-y: auto !important;\r\n  padding-right: 2px !important;\r\n}\r\n\r\n.agent-tab-content.active {\r\n  display: block !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar {\r\n  width: 4px !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar-thumb {\r\n  background: rgba(255, 255, 255, 0.15) !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n/* COMPACT GRID */\r\n.compact-grid {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.compact-agent-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n  padding: 8px 10px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.025) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.compact-agent-card:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  transform: translateY(-0.5px) !important;\r\n}\r\n\r\n.compact-agent-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 10px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 25%, transparent) !important;\r\n}\r\n\r\n.compact-icon-box {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n  border: 1px solid transparent !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.compact-details {\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 1px !important;\r\n}\r\n\r\n.compact-name-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n.compact-name {\r\n  font-size: 11.5px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-sub {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-pin-btn {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n}\r\n\r\n/* 5. FOOTER CARD */\r\n.agent-footer-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  padding: 8px 12px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 8px !important;\r\n}\r\n\r\n.agent-footer-icon {\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-footer-text {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.55) !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n@keyframes agentFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-6px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   EXTERIOR FOCUS / EXPLICATIVO RETICLE TRIGGER\r\n   ========================================================================= */\r\n.antigravity-agent-selector-group {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  width: 28px !important;\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  color: #94a3b8 !important;\r\n  cursor: pointer !important;\r\n  outline: none !important;\r\n  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;\r\n  position: relative !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger:hover {\r\n  background: rgba(255, 255, 255, 0.09) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger.is-focus {\r\n  background: rgba(245, 158, 11, 0.15) !important;\r\n  border-color: rgba(245, 158, 11, 0.4) !important;\r\n  color: #f59e0b !important;\r\n  box-shadow: 0 0 8px rgba(245, 158, 11, 0.25) !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger.is-focus:hover {\r\n  background: rgba(245, 158, 11, 0.22) !important;\r\n  border-color: rgba(245, 158, 11, 0.6) !important;\r\n  box-shadow: 0 0 12px rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.caveman-reticle-box {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.reticle-icon {\r\n  transition: transform 0.2s ease, stroke 0.2s ease !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger:hover .reticle-icon {\r\n  transform: scale(1.08) !important;\r\n}\r\n";
   }
 
   /**
@@ -5512,26 +5869,41 @@ class AgentSelectorMod extends AntigravityMod {
     const iconSvg = `<span id="antigravity-active-agent-icon" class="antigravity-active-agent-icon" style="display: inline-flex; align-items: center; pointer-events: none;">${renderAgentSvg(initialAgentId, 14)}</span>`;
     const discoveredAgents = context.dynamicAgents || this.discoveryService.discoverAgents();
     const dropdownHtml = renderAgentDropdownHtml(initialAgentId, discoveredAgents);
+    const initialReticleSvg = renderReticleSvg(false, 14);
 
     const html = `
-      <div 
-        id="antigravity-agent-badge" 
-        class="antigravity-agent-badge" 
-        title="Modo Activo: ${initialAgentName}" 
-        style="border-color: ${initialColor}55; box-shadow: 0 0 8px ${initialColor}22;"
-        tabindex="0"
-      >
-        <span 
-          id="antigravity-active-agent-dot" 
-          class="agent-badge-dot antigravity-active-agent-dot" 
-          style="background: ${initialColor}; box-shadow: 0 0 6px ${initialColor}; pointer-events: none;"
-        ></span>
-        ${iconSvg}
-        <span id="antigravity-active-agent-name" class="agent-label antigravity-active-agent-name" style="pointer-events: none;">${initialAgentName}</span>
-        <span class="agent-caret" style="pointer-events: none;">▼</span>
-        <template class="antigravity-agent-dropdown-template">
-          ${dropdownHtml}
-        </template>
+      <div class="antigravity-agent-selector-group" style="display: inline-flex; align-items: center; gap: 5px;">
+        <div 
+          id="antigravity-agent-badge" 
+          class="antigravity-agent-badge" 
+          title="Modo Activo: ${initialAgentName}" 
+          style="border-color: ${initialColor}55; box-shadow: 0 0 8px ${initialColor}22;"
+          tabindex="0"
+        >
+          <span 
+            id="antigravity-active-agent-dot" 
+            class="agent-badge-dot antigravity-active-agent-dot" 
+            style="background: ${initialColor}; box-shadow: 0 0 6px ${initialColor}; pointer-events: none;"
+          ></span>
+          ${iconSvg}
+          <span id="antigravity-active-agent-name" class="agent-label antigravity-active-agent-name" style="pointer-events: none;">${initialAgentName}</span>
+          <span class="agent-caret" style="pointer-events: none;">▼</span>
+          <template class="antigravity-agent-dropdown-template">
+            ${dropdownHtml}
+          </template>
+        </div>
+
+        <button
+          id="antigravity-caveman-reticle-trigger"
+          class="antigravity-caveman-reticle-trigger"
+          type="button"
+          title="Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus"
+          tabindex="0"
+        >
+          <span id="antigravity-caveman-reticle-box" class="caveman-reticle-box">
+            ${initialReticleSvg}
+          </span>
+        </button>
       </div>
     `.trim();
 
@@ -5742,7 +6114,7 @@ class ModsManagerMod extends AntigravityMod {
       priority: 100
     });
 
-    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY MODS MANAGER MOD - STYLES\r\n   Card Architecture: Every text section enclosed in card components\r\n   ========================================================================= */\r\n\r\n/* Mods Manager Menu Button in Top Menubar */\r\n.antigravity-mods-manager-btn {\r\n  height: 28px !important;\r\n  padding: 0 10px !important;\r\n  font-size: 13px !important;\r\n  font-weight: 500 !important;\r\n  color: rgba(255, 255, 255, 0.72) !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  transition: all 0.15s ease !important;\r\n  app-region: no-drag !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn:hover {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn.open {\r\n  background: rgba(255, 255, 255, 0.14) !important;\r\n  color: #ffffff !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn svg {\r\n  width: 14px;\r\n  height: 14px;\r\n  opacity: 0.85;\r\n}\r\n\r\n/* Floating Portal Panel for Mods Manager */\r\n.antigravity-mods-manager-portal {\r\n  position: fixed !important;\r\n  z-index: 1000000 !important;\r\n  width: 380px !important;\r\n  background: #161822 !important;\r\n  background: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 14px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 14px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: none;\r\n  box-sizing: border-box !important;\r\n  animation: modManagerPopIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n}\r\n\r\n.antigravity-mods-manager-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n@keyframes modManagerPopIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-6px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* Header Card Component */\r\n.mods-manager-header,\r\n.mods-manager-header-card {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 10px 12px !important;\r\n  margin-bottom: 12px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.mods-manager-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.mods-manager-header-icon {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(122, 162, 247, 0.15) !important;\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.25) !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.mods-manager-title-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.mods-manager-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.mods-manager-title {\r\n  font-size: 13.5px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n  margin: 0 !important;\r\n}\r\n\r\n.mods-manager-badge {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(122, 162, 247, 0.18) !important;\r\n  color: #7aa2f7 !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\r\n  letter-spacing: 0.3px !important;\r\n}\r\n\r\n.mods-manager-subtitle {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n}\r\n\r\n.mods-manager-close-btn {\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  cursor: pointer !important;\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 6px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  font-size: 12px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.mods-manager-close-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.16) !important;\r\n}\r\n\r\n/* Mod Cards List */\r\n.mods-manager-cards-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n/* Mod Card Item */\r\n.mod-card {\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 11px 13px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 12px !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.mod-card:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(122, 162, 247, 0.35) !important;\r\n  transform: translateY(-1px) !important;\r\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;\r\n}\r\n\r\n.mod-card.daemon-card {\r\n  background: rgba(122, 162, 247, 0.05) !important;\r\n  border-color: rgba(122, 162, 247, 0.22) !important;\r\n}\r\n\r\n.mod-card.daemon-card:hover {\r\n  background: rgba(122, 162, 247, 0.09) !important;\r\n  border-color: rgba(122, 162, 247, 0.45) !important;\r\n  box-shadow: 0 4px 18px rgba(122, 162, 247, 0.15) !important;\r\n}\r\n\r\n.mod-info {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.mod-icon-box {\r\n  width: 34px !important;\r\n  height: 34px !important;\r\n  border-radius: 8px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  color: #7aa2f7 !important;\r\n}\r\n\r\n.mod-icon-box.tach-icon {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.mod-icon-box.agent-icon {\r\n  background: rgba(168, 85, 247, 0.12) !important;\r\n  color: #c084fc !important;\r\n  border: 1px solid rgba(168, 85, 247, 0.25) !important;\r\n}\r\n\r\n.mod-icon-box.compact-icon {\n  background: rgba(245, 158, 11, 0.12) !important;\n  color: #f59e0b !important;\n  border: 1px solid rgba(245, 158, 11, 0.25) !important;\n}\n\n.mod-icon-box.daemon-icon {\r\n  background: rgba(74, 222, 128, 0.12) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(74, 222, 128, 0.25) !important;\r\n}\r\n\r\n.mod-text {\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.mod-title {\r\n  font-size: 13px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  margin-bottom: 2px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.mod-desc {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.6) !important;\r\n  line-height: 1.35 !important;\r\n}\r\n\r\n/* Status Pill */\r\n.mod-status-pill {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  line-height: 14px !important;\r\n  letter-spacing: 0.2px !important;\r\n}\r\n\r\n.mod-status-pill.active {\r\n  background: rgba(74, 222, 128, 0.15) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(74, 222, 128, 0.3) !important;\r\n}\r\n\r\n.mod-status-pill.compact {\n  background: rgba(245, 158, 11, 0.15) !important;\n  color: #f59e0b !important;\n  border: 1px solid rgba(245, 158, 11, 0.3) !important;\n}\n\n.mod-status-pill.paused {\r\n  background: rgba(248, 113, 113, 0.15) !important;\r\n  color: #f87171 !important;\r\n  border: 1px solid rgba(248, 113, 113, 0.3) !important;\r\n}\r\n\r\n/* Modern Toggle Switch */\r\n.mod-switch {\r\n  position: relative !important;\r\n  display: inline-block !important;\r\n  width: 38px !important;\r\n  height: 20px !important;\r\n  flex-shrink: 0 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.mod-switch input {\r\n  opacity: 0 !important;\r\n  width: 0 !important;\r\n  height: 0 !important;\r\n  position: absolute !important;\r\n  margin: 0 !important;\r\n  pointer-events: none !important;\r\n  display: none !important;\r\n}\r\n\r\n.mod-slider {\r\n  position: absolute !important;\r\n  top: 0 !important;\r\n  left: 0 !important;\r\n  right: 0 !important;\r\n  bottom: 0 !important;\r\n  background-color: rgba(255, 255, 255, 0.16) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.2) !important;\r\n  border-radius: 9999px !important;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n}\r\n\r\n.mod-slider:before {\r\n  position: absolute !important;\r\n  content: \"\" !important;\r\n  height: 14px !important;\r\n  width: 14px !important;\r\n  left: 2px !important;\r\n  bottom: 2px !important;\r\n  background-color: #ffffff !important;\r\n  border-radius: 50% !important;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4) !important;\r\n}\r\n\r\n.mod-switch input:checked + .mod-slider {\r\n  background-color: #7aa2f7 !important;\r\n  border-color: #7aa2f7 !important;\r\n}\r\n\r\n.mod-switch input:checked + .mod-slider:before {\r\n  transform: translateX(18px) !important;\r\n}\r\n\r\n/* Footer Status Card */\r\n.mods-manager-footer-card {\r\n  background: rgba(0, 0, 0, 0.25) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 8px !important;\r\n  padding: 8px 10px !important;\r\n  margin-top: 10px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.mods-manager-footer-icon {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  color: #4ade80 !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.mods-manager-footer-text {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  font-weight: 500 !important;\r\n  letter-spacing: -0.1px !important;\r\n}\r\n";
+    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY MODS MANAGER MOD - STYLES\r\n   Card Architecture: Every text section enclosed in card components\r\n   ========================================================================= */\r\n\r\n/* Mods Manager Menu Button in Top Menubar */\r\n.antigravity-mods-manager-btn {\r\n  height: 28px !important;\r\n  padding: 0 10px !important;\r\n  font-size: 13px !important;\r\n  font-weight: 500 !important;\r\n  color: rgba(255, 255, 255, 0.72) !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  transition: all 0.15s ease !important;\r\n  app-region: no-drag !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn:hover {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn.open {\r\n  background: rgba(255, 255, 255, 0.14) !important;\r\n  color: #ffffff !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n}\r\n\r\n.antigravity-mods-manager-btn svg {\r\n  width: 14px;\r\n  height: 14px;\r\n  opacity: 0.85;\r\n}\r\n\r\n/* Floating Portal Panel for Mods Manager */\r\n.antigravity-mods-manager-portal {\r\n  position: fixed !important;\r\n  z-index: 1000000 !important;\r\n  width: 380px !important;\r\n  background: #161822 !important;\r\n  background: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 14px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 14px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: none;\r\n  box-sizing: border-box !important;\r\n  animation: modManagerPopIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n}\r\n\r\n.antigravity-mods-manager-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n@keyframes modManagerPopIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-6px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* Header Card Component */\r\n.mods-manager-header,\r\n.mods-manager-header-card {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 10px 12px !important;\r\n  margin-bottom: 12px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.mods-manager-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.mods-manager-header-icon {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(122, 162, 247, 0.15) !important;\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.25) !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.mods-manager-title-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.mods-manager-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.mods-manager-title {\r\n  font-size: 13.5px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n  margin: 0 !important;\r\n}\r\n\r\n.mods-manager-badge {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(122, 162, 247, 0.18) !important;\r\n  color: #7aa2f7 !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\r\n  letter-spacing: 0.3px !important;\r\n}\r\n\r\n.mods-manager-subtitle {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n}\r\n\r\n.mods-manager-close-btn {\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  cursor: pointer !important;\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 6px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  font-size: 12px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.mods-manager-close-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.16) !important;\r\n}\r\n\r\n/* Mod Cards List */\r\n.mods-manager-cards-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n/* Mod Card Item */\r\n.mod-card {\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 11px 13px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 12px !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.mod-card:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(122, 162, 247, 0.35) !important;\r\n  transform: translateY(-1px) !important;\r\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;\r\n}\r\n\r\n.mod-card.daemon-card {\r\n  background: rgba(122, 162, 247, 0.05) !important;\r\n  border-color: rgba(122, 162, 247, 0.22) !important;\r\n}\r\n\r\n.mod-card.daemon-card:hover {\r\n  background: rgba(122, 162, 247, 0.09) !important;\r\n  border-color: rgba(122, 162, 247, 0.45) !important;\r\n  box-shadow: 0 4px 18px rgba(122, 162, 247, 0.15) !important;\r\n}\r\n\r\n.mod-info {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.mod-icon-box {\r\n  width: 34px !important;\r\n  height: 34px !important;\r\n  border-radius: 8px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  color: #7aa2f7 !important;\r\n}\r\n\r\n.mod-icon-box.tach-icon {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.mod-icon-box.agent-icon {\r\n  background: rgba(168, 85, 247, 0.12) !important;\r\n  color: #c084fc !important;\r\n  border: 1px solid rgba(168, 85, 247, 0.25) !important;\r\n}\r\n\r\n.mod-icon-box.compact-icon {\r\n  background: rgba(245, 158, 11, 0.12) !important;\r\n  color: #f59e0b !important;\r\n  border: 1px solid rgba(245, 158, 11, 0.25) !important;\r\n}\r\n\r\n.mod-icon-box.daemon-icon {\r\n  background: rgba(74, 222, 128, 0.12) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(74, 222, 128, 0.25) !important;\r\n}\r\n\r\n.mod-text {\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.mod-title {\r\n  font-size: 13px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  margin-bottom: 2px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.mod-desc {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.6) !important;\r\n  line-height: 1.35 !important;\r\n}\r\n\r\n/* Status Pill */\r\n.mod-status-pill {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  line-height: 14px !important;\r\n  letter-spacing: 0.2px !important;\r\n}\r\n\r\n.mod-status-pill.active {\r\n  background: rgba(74, 222, 128, 0.15) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(74, 222, 128, 0.3) !important;\r\n}\r\n\r\n.mod-status-pill.compact {\r\n  background: rgba(245, 158, 11, 0.15) !important;\r\n  color: #f59e0b !important;\r\n  border: 1px solid rgba(245, 158, 11, 0.3) !important;\r\n}\r\n\r\n.mod-status-pill.paused {\r\n  background: rgba(248, 113, 113, 0.15) !important;\r\n  color: #f87171 !important;\r\n  border: 1px solid rgba(248, 113, 113, 0.3) !important;\r\n}\r\n\r\n/* Modern Toggle Switch */\r\n.mod-switch {\r\n  position: relative !important;\r\n  display: inline-block !important;\r\n  width: 38px !important;\r\n  height: 20px !important;\r\n  flex-shrink: 0 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.mod-switch input {\r\n  opacity: 0 !important;\r\n  width: 0 !important;\r\n  height: 0 !important;\r\n  position: absolute !important;\r\n  margin: 0 !important;\r\n  pointer-events: none !important;\r\n  display: none !important;\r\n}\r\n\r\n.mod-slider {\r\n  position: absolute !important;\r\n  top: 0 !important;\r\n  left: 0 !important;\r\n  right: 0 !important;\r\n  bottom: 0 !important;\r\n  background-color: rgba(255, 255, 255, 0.16) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.2) !important;\r\n  border-radius: 9999px !important;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n}\r\n\r\n.mod-slider:before {\r\n  position: absolute !important;\r\n  content: \"\" !important;\r\n  height: 14px !important;\r\n  width: 14px !important;\r\n  left: 2px !important;\r\n  bottom: 2px !important;\r\n  background-color: #ffffff !important;\r\n  border-radius: 50% !important;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4) !important;\r\n}\r\n\r\n.mod-switch input:checked + .mod-slider {\r\n  background-color: #7aa2f7 !important;\r\n  border-color: #7aa2f7 !important;\r\n}\r\n\r\n.mod-switch input:checked + .mod-slider:before {\r\n  transform: translateX(18px) !important;\r\n}\r\n\r\n/* Footer Status Card */\r\n.mods-manager-footer-card {\r\n  background: rgba(0, 0, 0, 0.25) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 8px !important;\r\n  padding: 8px 10px !important;\r\n  margin-top: 10px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.mods-manager-footer-icon {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  color: #4ade80 !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.mods-manager-footer-text {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  font-weight: 500 !important;\r\n  letter-spacing: -0.1px !important;\r\n}\r\n";
   }
 
   /**
@@ -5762,17 +6134,20 @@ class ModsManagerMod extends AntigravityMod {
 // ===================== Git Graph Mod =====================
 
 /**
- * Generates HTML for the Pull Request and CI/CD status card.
+ * Generates HTML for the Pull Request and CI/CD status card,
+ * including branch sync controls and pending commit selection for PR creation.
  * @param {Object | null} pr Active Pull Request or null
  * @param {Object} [status={}] Local Git repository status
  * @param {Object} [github={}] GitHub remote metadata
+ * @param {Array<Object>} [commits=[]] Enriched commit history
  * @returns {string}
  */
-function renderPrCiCardHtml(pr, status = {}, github = {}) {
+function renderPrCiCardHtml(pr, status = {}, github = {}, commits = []) {
+  const ahead = status.ahead || 0;
+  const behind = status.behind || 0;
+  const branchName = status.branch || 'main';
+
   if (!pr) {
-    const ahead = status.ahead || 0;
-    const behind = status.behind || 0;
-    const branchName = status.branch || 'main';
     const syncText = ahead > 0 && behind > 0
       ? `${ahead} ahead, ${behind} behind`
       : ahead > 0
@@ -5781,15 +6156,49 @@ function renderPrCiCardHtml(pr, status = {}, github = {}) {
           ? `${behind} behind`
           : 'Sincronizado';
 
+    const pendingCommits = Array.isArray(commits)
+      ? commits.filter(c => c && c.pushed === false).slice(0, 12)
+      : [];
+
+    const pendingListHtml = pendingCommits.length > 0
+      ? pendingCommits.map(c => {
+          const shortSha = c.shortHash || (c.hash ? String(c.hash).slice(0, 7) : '');
+          return `
+            <div class="git-pr-commit-row">
+              <span class="git-pr-commit-sha">${escapeGitHtml(shortSha)}</span>
+              <span class="git-pr-commit-msg" title="${escapeGitHtml(c.subject || '')}">${escapeGitHtml(c.subject || '')}</span>
+              <button class="git-commit-push-btn" data-vcs-action="push-commit" data-hash="${escapeGitHtml(c.hash || '')}" data-branch="${escapeGitHtml(branchName)}" title="Subir commits hasta ${escapeGitHtml(shortSha)}">↑ Push hasta aquí</button>
+            </div>
+          `;
+        }).join('')
+      : '<div class="git-ci-empty">Todos los commits locales están sincronizados con el remoto.</div>';
+
     return `
       <div class="git-pr-card git-pr-none">
-        <div class="git-pr-none-left">
-          <span class="git-pr-icon">ᛦ</span>
-          <span class="git-pr-none-text">Sin PR activo en esta rama (${escapeGitHtml(branchName)})</span>
+        <div class="git-pr-none-main">
+          <div class="git-pr-none-left">
+            <span class="git-pr-icon">ᛦ</span>
+            <span class="git-pr-none-text">Sin PR activo en esta rama (${escapeGitHtml(branchName)})</span>
+          </div>
+          <div class="git-pr-none-right">
+            <span class="git-pr-sync-badge" title="Commits respecto al upstream">${escapeGitHtml(syncText)}</span>
+            ${behind > 0 ? `<button class="git-pr-action-btn btn-pull" data-vcs-action="pull" data-branch="${escapeGitHtml(branchName)}" title="Traer ${behind} commit(s) desde origin">↓${behind}</button>` : ''}
+            ${ahead > 0 ? `<button class="git-pr-action-btn btn-push" data-vcs-action="push" data-branch="${escapeGitHtml(branchName)}" title="Subir ${ahead} commit(s) a origin">↑${ahead}</button>` : ''}
+            <button class="git-pr-create-btn" id="antigravity-git-pr-drawer-trigger" title="Inspeccionar commits pendientes y crear Pull Request">+ Crear PR ▾</button>
+          </div>
         </div>
-        <div class="git-pr-none-right">
-          <span class="git-pr-sync-badge" title="Commits respecto al upstream">${escapeGitHtml(syncText)}</span>
-          ${github.webUrl ? `<a href="${github.webUrl}/pull/new/${encodeURIComponent(branchName)}" target="_blank" rel="noopener" class="git-pr-create-link">+ Crear PR</a>` : ''}
+        <div class="git-pr-commits-drawer" id="antigravity-git-pr-drawer" style="display: none;">
+          <div class="git-ci-checks-header">
+            <span>Commits locales pendientes (${pendingCommits.length})</span>
+            <span>${escapeGitHtml(branchName)} → main</span>
+          </div>
+          <div class="git-pr-commits-list">
+            ${pendingListHtml}
+          </div>
+          <div class="git-pr-drawer-footer">
+            <button class="git-pr-submit-btn" data-vcs-action="create-pr" data-branch="${escapeGitHtml(branchName)}" title="Subir rama y crear Pull Request">Push &amp; Crear PR</button>
+            ${github.webUrl ? `<a href="${escapeGitHtml(github.webUrl)}/pull/new/${encodeURIComponent(branchName)}" target="_blank" rel="noopener" class="git-pr-create-link">Abrir en GitHub ↗</a>` : ''}
+          </div>
         </div>
       </div>
     `.trim();
@@ -5805,23 +6214,23 @@ function renderPrCiCardHtml(pr, status = {}, github = {}) {
   const statusLabel = summary.status === 'SUCCESS'
     ? `✔ CI Passing (${summary.success}/${summary.total})`
     : summary.status === 'FAILURE'
-      ? `✖ CI Failed (${summary.failure}/${summary.total})`
-      : `⏳ CI In Progress (${summary.success}/${summary.total})`;
+      ? `✖ CI Failed (${summary.failure} error)`
+      : `⏳ CI Running (${summary.pending || 1})`;
 
   const checksListHtml = (pr.checks || []).map(c => {
-    const isSuccess = c.conclusion === 'SUCCESS';
-    const isFail = c.conclusion === 'FAILURE' || c.conclusion === 'TIMED_OUT';
-    const icon = isSuccess ? '✔' : isFail ? '✖' : '⏳';
-    const checkCls = isSuccess ? 'check-success' : isFail ? 'check-fail' : 'check-pending';
+    const isOk = c.conclusion === 'SUCCESS';
+    const isFail = c.conclusion === 'FAILURE' || c.conclusion === 'TIMED_OUT' || c.conclusion === 'CANCELLED';
+    const icon = isOk ? '✔' : isFail ? '✖' : '●';
+    const itemCls = isOk ? 'check-success' : isFail ? 'check-fail' : 'check-pending';
 
     return `
-      <div class="git-ci-check-item ${checkCls}">
+      <div class="git-ci-check-item ${itemCls}">
         <span class="git-ci-check-icon">${icon}</span>
         <div class="git-ci-check-info">
-          <span class="git-ci-check-name" title="${escapeGitHtml(c.name)}">${escapeGitHtml(c.name)}</span>
+          <span class="git-ci-check-name">${escapeGitHtml(c.name)}</span>
           ${c.workflowName ? `<span class="git-ci-check-wf">${escapeGitHtml(c.workflowName)}</span>` : ''}
         </div>
-        ${c.detailsUrl ? `<a href="${c.detailsUrl}" target="_blank" rel="noopener" class="git-ci-check-link">Logs ↗</a>` : ''}
+        ${c.detailsUrl ? `<a href="${escapeGitHtml(c.detailsUrl)}" target="_blank" rel="noopener" class="git-ci-check-link">Logs ↗</a>` : ''}
       </div>
     `;
   }).join('');
@@ -5831,8 +6240,8 @@ function renderPrCiCardHtml(pr, status = {}, github = {}) {
       <div class="git-pr-card-main">
         <div class="git-pr-header-col">
           <div class="git-pr-badge-row">
-            <span class="git-pr-state-badge state-${String(pr.state).toLowerCase()}">${escapeGitHtml(pr.state)}</span>
-            <a href="${pr.url}" target="_blank" rel="noopener" class="git-pr-num-link" title="Open Pull Request on GitHub">
+            <span class="git-pr-state-badge state-${escapeGitHtml(String(pr.state).toLowerCase())}">${escapeGitHtml(pr.state)}</span>
+            <a href="${escapeGitHtml(pr.url)}" target="_blank" rel="noopener" class="git-pr-num-link" title="Open Pull Request on GitHub">
               #${pr.number}
             </a>
             <span class="git-pr-branch-flow">${escapeGitHtml(pr.headRef)} → ${escapeGitHtml(pr.baseRef)}</span>
@@ -5841,6 +6250,8 @@ function renderPrCiCardHtml(pr, status = {}, github = {}) {
         </div>
 
         <div class="git-pr-ci-badge-wrap">
+          ${behind > 0 ? `<button class="git-pr-action-btn btn-pull" data-vcs-action="pull" data-branch="${escapeGitHtml(branchName)}" title="Pull ${behind} commit(s)">↓${behind}</button>` : ''}
+          ${ahead > 0 ? `<button class="git-pr-action-btn btn-push" data-vcs-action="push" data-branch="${escapeGitHtml(branchName)}" title="Push ${ahead} commit(s)">↑${ahead}</button>` : ''}
           <button class="git-ci-rollup-btn ${statusCls}" id="antigravity-git-ci-rollup-trigger" title="Ver checks de CI/CD">
             <span>${statusLabel}</span>
             <span class="git-ci-caret">▾</span>
@@ -5869,8 +6280,8 @@ function renderPrCiCardHtml(pr, status = {}, github = {}) {
  */
 
 const LANE_COLORS = [
-  '#38bdf8', // Sky Blue (Feature / Current branch)
-  '#f97316', // Orange (main / remote)
+  '#38bdf8', // Sky Blue (Main / Trunk)
+  '#f97316', // Orange
   '#a855f7', // Purple
   '#22c55e', // Emerald
   '#ec4899', // Pink
@@ -5879,11 +6290,20 @@ const LANE_COLORS = [
 
 /**
  * Returns color associated with a lane index.
+ * Self-contained palette so getLaneColor.toString() works cleanly in browser runtime.
  * @param {number} lane
  * @returns {string}
  */
 function getLaneColor(lane = 0) {
-  return LANE_COLORS[Math.abs(lane) % LANE_COLORS.length];
+  const palette = [
+    '#38bdf8',
+    '#f97316',
+    '#a855f7',
+    '#22c55e',
+    '#ec4899',
+    '#06b6d4'
+  ];
+  return palette[Math.abs(lane) % palette.length];
 }
 
 /**
@@ -5906,17 +6326,23 @@ function renderGitGraphSvg(commits = [], options = {}) {
   const fileRowHeight = options.fileRowHeight ?? 22;
   const laneWidth = options.laneWidth ?? 14;
   const startX = options.startX ?? (options.laneWidth ? options.laneWidth : 14);
-  const startY = options.startY ?? 13;
+  const startY = options.startY ?? Math.floor(rowHeight / 2);
 
   let maxLane = 0;
   for (const c of commits) {
     if (typeof c.lane === 'number' && c.lane > maxLane) {
       maxLane = c.lane;
     }
+    if (Array.isArray(c.routes)) {
+      for (const r of c.routes) {
+        if (typeof r.fromLane === 'number' && r.fromLane > maxLane) maxLane = r.fromLane;
+        if (typeof r.toLane === 'number' && r.toLane > maxLane) maxLane = r.toLane;
+      }
+    }
   }
 
   const hasExpanded = commits.some(c => !!c.expanded && Array.isArray(c.files) && c.files.length > 0);
-  const extraPad = hasExpanded ? 20 : 8;
+  const extraPad = hasExpanded ? 22 : 8;
   const svgWidth = Math.max(36, startX + (maxLane + 1) * laneWidth + extraPad);
 
   // Compute Y-center coordinates for each commit taking expanded files into account
@@ -5932,6 +6358,7 @@ function renderGitGraphSvg(commits = [], options = {}) {
     const cy = currentY + startY;
     commitCoords.push({
       cy,
+      rowTop: currentY,
       lane: commit.lane ?? 0,
       totalHeight: rowHeight + extraHeight
     });
@@ -5988,25 +6415,29 @@ function renderGitGraphSvg(commits = [], options = {}) {
     if (isExpanded && fileCount > 0) {
       const subOffset = Math.max(12, laneWidth * 0.85);
       const subX = cx + subOffset;
-      const openStartY = cy;
-      const openEndY = cy + 14;
-      const capsuleBottomY = cy + coord.totalHeight - 8;
+      const filesStartY = coord.rowTop + rowHeight;
+      const itemBottomY = coord.rowTop + coord.totalHeight;
+      const firstFileY = filesStartY + (fileRowHeight / 2);
+      const lastFileY = filesStartY + (fileCount - 1) * fileRowHeight + (fileRowHeight / 2);
+      const spineTopY = Math.min(firstFileY, filesStartY + 4);
+      const spineBottomY = Math.max(spineTopY, lastFileY + 4);
+      const closeTargetY = Math.min(itemBottomY - 1, spineBottomY + 7);
 
       // Opening bracket curve: --<
       pathsMarkup += `
-        <path d="M ${cx} ${openStartY} C ${cx + 4} ${openStartY + 4}, ${subX - 2} ${openStartY + 8}, ${subX} ${openEndY}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" class="git-capsule-open"/>
+        <path d="M ${cx} ${cy} C ${cx + 4} ${cy + 5}, ${subX - 2} ${spineTopY - 4}, ${subX} ${spineTopY}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" class="git-capsule-open"/>
       `;
 
       // Vertical spine connecting files
       pathsMarkup += `
-        <line x1="${subX}" y1="${openEndY}" x2="${subX}" y2="${capsuleBottomY}" stroke="${color}" stroke-width="1.4" stroke-dasharray="2,2" class="git-capsule-spine"/>
+        <line x1="${subX}" y1="${spineTopY}" x2="${subX}" y2="${spineBottomY}" stroke="${color}" stroke-width="1.4" stroke-dasharray="2,2" class="git-capsule-spine"/>
       `;
 
-      // File nodes (* * * *) with semantic status colors
+      // File nodes (* * * *) with semantic status colors aligned 1:1 with each .git-file-row center
       for (let f = 0; f < fileCount; f++) {
         const file = commit.files[f];
         const fileStatus = (typeof file === 'object' && file.status) ? file.status.toUpperCase() : 'M';
-        const fileY = cy + rowHeight + f * fileRowHeight + (fileRowHeight / 2);
+        const fileY = filesStartY + f * fileRowHeight + (fileRowHeight / 2);
 
         let fileColor = '#f59e0b'; // Amber (Modified)
         if (fileStatus === 'A') fileColor = '#22c55e'; // Emerald (Added)
@@ -6020,7 +6451,7 @@ function renderGitGraphSvg(commits = [], options = {}) {
 
       // Closing bracket curve: >--
       pathsMarkup += `
-        <path d="M ${subX} ${capsuleBottomY} C ${subX - 2} ${capsuleBottomY + 3}, ${cx + 4} ${cy + coord.totalHeight - 2}, ${cx} ${cy + coord.totalHeight}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" class="git-capsule-close"/>
+        <path d="M ${subX} ${spineBottomY} C ${subX - 2} ${spineBottomY + 3}, ${cx + 4} ${closeTargetY - 2}, ${cx} ${closeTargetY}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" class="git-capsule-close"/>
       `;
     }
 
@@ -6112,24 +6543,69 @@ function renderGitGraphPanelHtml(context = {}) {
   });
 
   const svgGraph = renderGitGraphSvg(commits, { rowHeight: 26, fileRowHeight: 22, laneWidth: 14, startX: 14 });
-  const prCiHtml = renderPrCiCardHtml(pullRequest, status, github);
+  const prCiHtml = renderPrCiCardHtml(pullRequest, status, github, commits);
 
-  // Generate branches drawer list items
-  const localBranchesHtml = localBranches.map(b => {
+  // Group local branches by similarity cluster with numeric pending sync badges
+  const clusterLabels = {
+    trunk: 'Trunk Principal',
+    vcs: 'VCS & Git Graph',
+    framework: 'Core Framework',
+    'ui-mods': 'UI Mods',
+    fixes: 'Fixes & Hotfixes',
+    'ci-governance': 'CI & Gobernanza',
+    docs: 'Documentación',
+    features: 'Features'
+  };
+  const clusterOrder = ['trunk', 'vcs', 'framework', 'ui-mods', 'fixes', 'ci-governance', 'docs', 'features'];
+  const groupedLocal = {};
+
+  for (const b of localBranches) {
+    const key = b.cluster || ((b.name === 'main' || b.name === 'master') ? 'trunk' : 'features');
+    if (!groupedLocal[key]) groupedLocal[key] = [];
+    groupedLocal[key].push(b);
+  }
+
+  const orderedClusterKeys = [
+    ...clusterOrder.filter(k => groupedLocal[k] && groupedLocal[k].length > 0),
+    ...Object.keys(groupedLocal).filter(k => !clusterOrder.includes(k) && groupedLocal[k].length > 0)
+  ];
+  const showClusterHeaders = orderedClusterKeys.length > 1 || localBranches.some(b => !!b.cluster);
+
+  const renderBranchRow = (b) => {
     const isCurrent = b.isCurrent || b.name === status.branch;
+    const ahead = b.ahead || 0;
+    const behind = b.behind || 0;
+    const dirtyFiles = b.dirtyFiles || 0;
+    const isMerged = !!b.isMerged && !b.isTrunk && b.name !== 'main' && b.name !== 'master';
+
     return `
-      <div class="git-branch-drawer-row ${isCurrent ? 'is-active-branch' : ''}" data-branch="${escapeGitHtml(b.name)}" data-type="local">
+      <div class="git-branch-drawer-row ${isCurrent ? 'is-active-branch' : ''}" data-branch="${escapeGitHtml(b.name)}" data-type="local" title="${isCurrent ? 'Rama activa' : `Clic para cambiar a ${escapeGitHtml(b.name)}`}">
         <span class="git-icon-dot">${isCurrent ? '●' : '○'}</span>
         <span class="git-branch-drawer-name">${escapeGitHtml(b.name)}</span>
+        <div class="git-branch-sync-badges">
+          ${dirtyFiles > 0 ? `<span class="git-branch-sync-badge badge-dirty" title="${dirtyFiles} archivo(s) sin commit">●${dirtyFiles}</span>` : ''}
+          ${ahead > 0 ? `<button class="git-branch-sync-badge badge-ahead" data-vcs-action="push" data-branch="${escapeGitHtml(b.name)}" title="Push: ${ahead} commit(s) pendientes">↑${ahead}</button>` : ''}
+          ${behind > 0 ? `<button class="git-branch-sync-badge badge-behind" data-vcs-action="pull" data-branch="${escapeGitHtml(b.name)}" title="Pull: ${behind} commit(s) pendientes">↓${behind}</button>` : ''}
+          ${isMerged ? '<span class="git-branch-sync-badge badge-merged" title="Integrada en main">✔</span>' : ''}
+        </div>
         ${b.hash ? `<span class="git-branch-drawer-hash">${escapeGitHtml(b.hash)}</span>` : ''}
         ${isCurrent ? '<span class="git-branch-current-badge">HEAD</span>' : ''}
       </div>
     `;
+  };
+
+  const localBranchesHtml = orderedClusterKeys.map(key => {
+    const items = groupedLocal[key] || [];
+    const header = showClusterHeaders
+      ? `<div class="git-branch-cluster-header">${escapeGitHtml(clusterLabels[key] || key)} (${items.length})</div>`
+      : '';
+    return `${header}${items.map(renderBranchRow).join('')}`;
   }).join('');
 
   const remoteBranchesHtml = remoteBranches.map(b => {
+    const checkoutName = b.shortName || String(b.name || '').replace(/^origin\//, '');
     return `
-      <div class="git-branch-drawer-row is-remote-branch" data-branch="${escapeGitHtml(b.name)}" data-type="remote">
+      <div class="git-branch-drawer-row is-remote-branch" data-branch="${escapeGitHtml(checkoutName)}" data-remote-ref="${escapeGitHtml(b.name)}" data-type="remote" title="Clic para hacer checkout de ${escapeGitHtml(checkoutName)}">
         <span class="git-icon-cloud">☁</span>
         <span class="git-branch-drawer-name">${escapeGitHtml(b.shortName || b.name)}</span>
         ${b.hash ? `<span class="git-branch-drawer-hash">${escapeGitHtml(b.hash)}</span>` : ''}
@@ -6137,19 +6613,21 @@ function renderGitGraphPanelHtml(context = {}) {
     `;
   }).join('');
 
-  // Generate commit list items
+  // Generate commit list items (unified accordion on row click, no redundant document pills)
   const commitRowsHtml = commits.map((c, idx) => {
     const isSelected = idx === 0;
     const isExpanded = !!c.expanded;
     const files = Array.isArray(c.files) ? c.files : [];
     const hasOrigin = (c.refs || []).some(r => r.includes('origin/'));
-    const commitType = hasOrigin ? 'remote' : 'local';
+    const commitType = (c.pushed !== undefined)
+      ? (c.pushed === false ? 'local' : 'remote')
+      : (hasOrigin ? 'remote' : 'local');
+    const isUnpushed = c.pushed === false;
 
     // Ref Badges (branch pills)
     const refsHtml = (c.refs || []).map(ref => {
       const isHead = ref.includes('HEAD');
       const isOrigin = ref.includes('origin/');
-      const isTag = ref.includes('tag:');
       const cleanRef = ref.replace('HEAD -> ', '').replace('tag: ', '');
 
       if (isOrigin) {
@@ -6157,6 +6635,10 @@ function renderGitGraphPanelHtml(context = {}) {
       }
       return `<span class="git-pill-branch ${isHead ? 'git-pill-head' : 'git-pill-local'}" title="${escapeGitHtml(ref)}"><span class="git-icon-dot">⦿</span>${escapeGitHtml(cleanRef)}</span>`;
     }).join('');
+
+    const pushCommitBtnHtml = isUnpushed
+      ? `<button class="git-commit-push-btn" data-vcs-action="push-commit" data-hash="${escapeGitHtml(c.hash)}" data-branch="${escapeGitHtml(status.branch)}" title="Push hasta este commit (${escapeGitHtml(c.shortHash || '')})">↑ Push</button>`
+      : '';
 
     // Inline file diff list
     const filesListHtml = files.map(f => {
@@ -6172,29 +6654,32 @@ function renderGitGraphPanelHtml(context = {}) {
       `;
     }).join('');
 
-    const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(c.hash) : '';
+    const commitUrl = github.isGitHub && typeof github.getCommitUrl === 'function'
+      ? github.getCommitUrl(c.hash)
+      : (github.isGitHub && github.webUrl ? `${github.webUrl}/commit/${c.hash}` : '');
     const author = c.author || { name: 'Unknown', email: '', avatarUrl: '' };
 
     return `
-      <div class="git-commit-item ${isExpanded ? 'is-expanded' : ''}" data-hash="${c.hash}" data-index="${idx}" data-commit-type="${commitType}">
-        <div class="git-commit-row ${isSelected ? 'selected' : ''}" 
-             data-hash="${c.hash}" 
-             data-index="${idx}" 
-             data-short-hash="${c.shortHash}" 
-             data-commit-url="${commitUrl}" 
-             data-email="${escapeGitHtml(author.email)}" 
-             data-author="${escapeGitHtml(author.name)}" 
-             data-avatar="${escapeGitHtml(author.avatarUrl)}" 
-             data-date="${escapeGitHtml(c.relativeDate || '')}" 
-             data-subject="${escapeGitHtml(c.subject)}" 
-             data-files-count="${files.length}" 
+      <div class="git-commit-item ${isExpanded ? 'is-expanded' : ''}" data-hash="${escapeGitHtml(c.hash)}" data-index="${idx}" data-commit-type="${commitType}">
+        <div class="git-commit-row ${isSelected ? 'selected' : ''}"
+             data-hash="${escapeGitHtml(c.hash)}"
+             data-index="${idx}"
+             data-short-hash="${escapeGitHtml(c.shortHash || '')}"
+             data-pushed="${isUnpushed ? 'false' : 'true'}"
+             data-commit-url="${escapeGitHtml(commitUrl)}"
+             data-email="${escapeGitHtml(author.email)}"
+             data-author="${escapeGitHtml(author.name)}"
+             data-avatar="${escapeGitHtml(author.avatarUrl)}"
+             data-date="${escapeGitHtml(c.relativeDate || '')}"
+             data-subject="${escapeGitHtml(c.subject)}"
+             data-files-count="${files.length}"
              tabindex="0">
           <div class="git-commit-main">
             <span class="git-commit-chevron ${files.length > 0 ? 'has-files' : ''}">${files.length > 0 ? (isExpanded ? '▾' : '▸') : '•'}</span>
             <span class="git-commit-subject" title="${escapeGitHtml(c.subject)}">${escapeGitHtml(c.subject)}</span>
             <div class="git-commit-badges">
               ${refsHtml}
-              ${files.length > 0 ? `<button class="git-pill-files" title="Clic para expandir/colapsar ${files.length} archivos">📄${files.length}</button>` : ''}
+              ${pushCommitBtnHtml}
             </div>
           </div>
         </div>
@@ -6205,8 +6690,22 @@ function renderGitGraphPanelHtml(context = {}) {
     `;
   }).join('');
 
+  const serializedState = JSON.stringify({
+    activeRepo: repoName,
+    status,
+    github: {
+      isGitHub: !!github.isGitHub,
+      fullName: github.fullName || '',
+      webUrl: github.webUrl || ''
+    },
+    pullRequest,
+    branches,
+    commits
+  }).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
+
   return `
     <div class="antigravity-git-panel" id="antigravity-git-panel-root">
+      <script type="application/json" id="antigravity-git-vcs-state">${serializedState}</script>
       <!-- VS Code Style Minimal Header -->
       <div class="git-panel-header">
         <div class="git-panel-title-wrap">
@@ -6222,6 +6721,9 @@ function renderGitGraphPanelHtml(context = {}) {
         </div>
       </div>
 
+      <!-- Status Toast Feedback Banner -->
+      <div class="git-vcs-toast" id="antigravity-git-vcs-toast" style="display: none;"></div>
+
       <!-- Pull Request & CI/CD Status Card -->
       ${prCiHtml}
 
@@ -6231,10 +6733,10 @@ function renderGitGraphPanelHtml(context = {}) {
           <button class="git-filter-pill active" data-branch-filter="all" title="Ver todos los commits">
             Todas (${commits.length})
           </button>
-          <button class="git-filter-pill" data-branch-filter="local" title="Ver solo ramas locales">
+          <button class="git-filter-pill" data-branch-filter="local" title="Ver ramas y commits locales pendientes">
             <span class="git-icon-dot">⦿</span> Locales (${localBranches.length})
           </button>
-          <button class="git-filter-pill" data-branch-filter="remote" title="Ver solo ramas remotas de GitHub">
+          <button class="git-filter-pill" data-branch-filter="remote" title="Ver ramas y commits sincronizados en GitHub">
             <span class="git-icon-cloud">☁</span> GitHub (${remoteBranches.length})
           </button>
         </div>
@@ -6258,10 +6760,10 @@ function renderGitGraphPanelHtml(context = {}) {
 
       <!-- Graph & Commits Viewport -->
       <div class="git-graph-container">
-        <div class="git-svg-column">
+        <div class="git-svg-column" id="antigravity-git-svg-column">
           ${svgGraph}
         </div>
-        <div class="git-commits-column">
+        <div class="git-commits-column" id="antigravity-git-commits-column">
           ${commitRowsHtml}
         </div>
       </div>
@@ -6280,7 +6782,9 @@ function renderGitGraphPanelHtml(context = {}) {
  */
 function renderInspectorCard(commit, github = {}) {
   const author = commit.author || { name: 'Unknown', email: '', avatarUrl: '' };
-  const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(commit.hash) : '';
+  const commitUrl = github.isGitHub && typeof github.getCommitUrl === 'function'
+    ? github.getCommitUrl(commit.hash)
+    : (github.isGitHub && github.webUrl ? `${github.webUrl}/commit/${commit.hash}` : '');
   const initials = (author.name || 'U').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
   const shortHash = commit.shortHash || (commit.hash ? commit.hash.slice(0, 7) : '');
   const filesCount = Array.isArray(commit.files) ? commit.files.length : 0;
@@ -6291,7 +6795,7 @@ function renderInspectorCard(commit, github = {}) {
       <div class="git-inspector-top">
         <div class="git-inspector-author-group">
           <div class="git-avatar-frame">
-            ${author.avatarUrl ? `<img class="git-inspector-avatar" src="${author.avatarUrl}" alt="${escapeGitHtml(author.name)}" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex';"/>` : ''}
+            ${author.avatarUrl ? `<img class="git-inspector-avatar" src="${escapeGitHtml(author.avatarUrl)}" alt="${escapeGitHtml(author.name)}" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex';"/>` : ''}
             <div class="git-inspector-avatar-fallback" style="${author.avatarUrl ? 'display:none;' : 'display:flex;'}">${escapeGitHtml(initials)}</div>
           </div>
           <div class="git-inspector-author-text">
@@ -6305,7 +6809,8 @@ function renderInspectorCard(commit, github = {}) {
 
         <div class="git-inspector-meta-group">
           <span class="git-inspector-hash-pill" title="Hash completo: ${escapeGitHtml(commit.hash)}">${escapeGitHtml(shortHash)}</span>
-          ${commitUrl ? `<a href="${commitUrl}" target="_blank" rel="noopener" class="git-inspector-btn-gh" title="Ver commit en GitHub">GitHub ↗</a>` : ''}
+          ${commit.pushed === false ? `<button class="git-commit-push-btn" data-vcs-action="push-commit" data-hash="${escapeGitHtml(commit.hash)}" title="Push hasta este commit">↑ Push hasta aquí</button>` : ''}
+          ${commitUrl ? `<a href="${escapeGitHtml(commitUrl)}" target="_blank" rel="noopener" class="git-inspector-btn-gh" title="Ver commit en GitHub">GitHub ↗</a>` : ''}
           <button class="git-inspector-btn-close" id="antigravity-git-inspector-close-btn" title="Cerrar inspector">✕</button>
         </div>
       </div>
@@ -6369,7 +6874,7 @@ class GitGraphMod extends AntigravityMod {
     });
 
     this.initialContext = options.initialContext || {};
-    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY GIT & GITHUB GRAPH MOD - VS CODE STYLE\r\n   Ultra-compact, lightweight DAG commit tree & inline file diff visualizer\r\n   ========================================================================= */\r\n\r\n/* Tab Button in Auxiliary Pane Header */\r\n.antigravity-git-tab-wrapper {\r\n  display: inline-flex;\r\n  align-items: center;\r\n}\r\n\r\n.antigravity-git-tab-btn {\r\n  height: 28px !important;\r\n  padding: 0 8px !important;\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #94a3b8 !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.antigravity-git-tab-btn:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  color: #f8fafc !important;\r\n}\r\n\r\n.antigravity-git-tab-btn.active {\r\n  background: #1e2438 !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n/* Full Auxiliary Panel Body */\r\n.antigravity-git-panel {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  background: #181a1f !important;\r\n  color: #e2e8f0 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, monospace, sans-serif !important;\r\n  overflow: hidden !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* VS Code Minimal Header Bar */\r\n.git-panel-header {\r\n  height: 32px !important;\r\n  min-height: 32px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  padding: 0 10px !important;\r\n  background: #1e222b !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.git-panel-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-header-caret {\r\n  font-size: 12px !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n.git-header-title {\r\n  font-size: 12px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-header-repo {\r\n  font-size: 11px !important;\r\n  color: #64748b !important;\r\n  max-width: 140px !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-branch-pill {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-header-actions {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pill-auto {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 3px !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-tool-btn {\r\n  background: transparent !important;\r\n  border: none !important;\r\n  color: #94a3b8 !important;\r\n  font-size: 12px !important;\r\n  cursor: pointer !important;\r\n  padding: 2px 4px !important;\r\n  border-radius: 4px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n}\r\n\r\n.git-tool-btn:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-tool-close:hover {\r\n  background: rgba(239, 68, 68, 0.2) !important;\r\n  color: #ef4444 !important;\r\n}\r\n\r\n/* Graph & Commits Viewport */\r\n.git-graph-container {\r\n  display: flex !important;\r\n  flex: 1 1 0% !important;\r\n  overflow-y: auto !important;\r\n  overflow-x: hidden !important;\r\n  position: relative !important;\r\n  scrollbar-width: thin !important;\r\n  scrollbar-color: rgba(255, 255, 255, 0.15) transparent !important;\r\n}\r\n\r\n.git-graph-container::-webkit-scrollbar {\r\n  width: 6px !important;\r\n}\r\n\r\n.git-graph-container::-webkit-scrollbar-thumb {\r\n  background: rgba(255, 255, 255, 0.15) !important;\r\n  border-radius: 3px !important;\r\n}\r\n\r\n.git-svg-column {\r\n  flex-shrink: 0 !important;\r\n  position: relative !important;\r\n}\r\n\r\n.git-graph-svg {\r\n  display: block !important;\r\n}\r\n\r\n.git-commits-column {\r\n  flex: 1 1 0% !important;\r\n  min-width: 0 !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n/* Individual Commit Item */\r\n.git-commit-item {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  width: 100% !important;\r\n}\r\n\r\n.git-commit-row {\r\n  height: 26px !important;\r\n  min-height: 26px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  padding: 0 8px 0 4px !important;\r\n  cursor: pointer !important;\r\n  border-radius: 0 !important;\r\n  transition: background 0.1s ease !important;\r\n  user-select: none !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-commit-row:hover {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.git-commit-row.selected {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n}\r\n\r\n.git-commit-main {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  min-width: 0 !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-commit-subject {\r\n  font-size: 12px !important;\r\n  color: #e2e8f0 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-commit-badges {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n/* Branch & Ref Badges (VS Code Pill Style) */\r\n.git-pill-branch {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 10px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  white-space: nowrap !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-pill-local {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.git-pill-head {\r\n  background: rgba(56, 189, 248, 0.22) !important;\r\n  color: #7dd3fc !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.5) !important;\r\n  box-shadow: 0 0 6px rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-pill-origin {\r\n  background: rgba(249, 115, 22, 0.15) !important;\r\n  color: #fb923c !important;\r\n  border: 1px solid rgba(249, 115, 22, 0.35) !important;\r\n}\r\n\r\n.git-pill-files {\r\n  font-size: 9px !important;\r\n  color: #64748b !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  padding: 1px 4px !important;\r\n  border-radius: 3px !important;\r\n}\r\n\r\n.git-icon-cloud {\r\n  font-size: 10px !important;\r\n}\r\n\r\n.git-icon-dot {\r\n  font-size: 9px !important;\r\n}\r\n\r\n.git-commit-chevron {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n  width: 12px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-commit-chevron.has-files {\r\n  color: #94a3b8 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n/* Expandable Inline File Diff List */\r\n.git-commit-files-container {\r\n  display: none !important;\r\n  flex-direction: column !important;\r\n  background: rgba(0, 0, 0, 0.3) !important;\r\n  border-left: 2px solid rgba(56, 189, 248, 0.35) !important;\r\n  margin-left: 14px !important;\r\n  padding: 2px 0 !important;\r\n}\r\n\r\n.git-commit-item.is-expanded > .git-commit-files-container {\r\n  display: flex !important;\r\n}\r\n\r\n.git-file-row {\r\n  height: 22px !important;\r\n  min-height: 22px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  padding: 0 10px 0 8px !important;\r\n  font-size: 11px !important;\r\n  gap: 8px !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-file-row:hover {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.git-file-ext {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 4px !important;\r\n  border-radius: 3px !important;\r\n  font-family: monospace !important;\r\n  letter-spacing: -0.02em !important;\r\n}\r\n\r\n.ext-js {\r\n  background: rgba(234, 179, 8, 0.18) !important;\r\n  color: #facc15 !important;\r\n  border: 1px solid rgba(234, 179, 8, 0.35) !important;\r\n}\r\n\r\n.ext-ts {\r\n  background: rgba(59, 130, 246, 0.18) !important;\r\n  color: #60a5fa !important;\r\n  border: 1px solid rgba(59, 130, 246, 0.35) !important;\r\n}\r\n\r\n.ext-json {\r\n  background: rgba(34, 197, 94, 0.18) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(34, 197, 94, 0.35) !important;\r\n}\r\n\r\n.ext-css {\r\n  background: rgba(6, 182, 212, 0.18) !important;\r\n  color: #22d3ee !important;\r\n  border: 1px solid rgba(6, 182, 212, 0.35) !important;\r\n}\r\n\r\n.ext-md {\r\n  background: rgba(168, 85, 247, 0.18) !important;\r\n  color: #c084fc !important;\r\n  border: 1px solid rgba(168, 85, 247, 0.35) !important;\r\n}\r\n\r\n.ext-default {\r\n  background: rgba(148, 163, 184, 0.18) !important;\r\n  color: #cbd5e1 !important;\r\n  border: 1px solid rgba(148, 163, 184, 0.3) !important;\r\n}\r\n\r\n.git-file-name {\r\n  color: #e2e8f0 !important;\r\n  font-weight: 500 !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-file-dir {\r\n  color: #64748b !important;\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-file-status {\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.status-modified {\r\n  color: #eab308 !important;\r\n}\r\n\r\n.status-added {\r\n  color: #22c55e !important;\r\n}\r\n\r\n.status-deleted {\r\n  color: #ef4444 !important;\r\n}\r\n\r\n\r\n/* =========================================================================\r\n   PULL REQUEST & CI/CD STATUS CARD STYLES\r\n   ========================================================================= */\r\n\r\n.git-pr-card {\r\n  padding: 8px 12px !important;\r\n  background: #13161f !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n  font-size: 11px !important;\r\n}\r\n\r\n.git-pr-none {\r\n  display: flex !important;\r\n  flex-direction: row !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  color: #64748b !important;\r\n  background: #11141c !important;\r\n  padding: 6px 12px !important;\r\n}\r\n\r\n.git-pr-none-left {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pr-icon {\r\n  font-size: 13px !important;\r\n  color: #38bdf8 !important;\r\n}\r\n\r\n.git-pr-none-right {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-pr-sync-badge {\r\n  font-size: 10px !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n.git-pr-create-link {\r\n  font-size: 10px !important;\r\n  color: #38bdf8 !important;\r\n  text-decoration: none !important;\r\n  font-weight: 500 !important;\r\n}\r\n\r\n.git-pr-create-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-pr-card-main {\r\n  display: flex !important;\r\n  align-items: flex-start !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.git-pr-header-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 3px !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-pr-badge-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pr-state-badge {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  letter-spacing: 0.5px !important;\r\n}\r\n\r\n.state-open {\r\n  background: rgba(34, 197, 94, 0.2) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(34, 197, 94, 0.4) !important;\r\n}\r\n\r\n.state-merged {\r\n  background: rgba(168, 85, 247, 0.2) !important;\r\n  color: #c084fc !important;\r\n  border: 1px solid rgba(168, 85, 247, 0.4) !important;\r\n}\r\n\r\n.state-closed {\r\n  background: rgba(239, 68, 68, 0.2) !important;\r\n  color: #f87171 !important;\r\n  border: 1px solid rgba(239, 68, 68, 0.4) !important;\r\n}\r\n\r\n.git-pr-num-link {\r\n  font-weight: 700 !important;\r\n  color: #60a5fa !important;\r\n  text-decoration: none !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-pr-num-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-pr-branch-flow {\r\n  color: #94a3b8 !important;\r\n  font-size: 10px !important;\r\n  font-family: monospace !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-pr-title {\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n/* CI/CD Rollup Button */\r\n.git-pr-ci-badge-wrap {\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-ci-rollup-btn {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  padding: 3px 8px !important;\r\n  border-radius: 5px !important;\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  cursor: pointer !important;\r\n  border: 1px solid transparent !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.ci-status-success {\r\n  background: rgba(34, 197, 94, 0.15) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.3) !important;\r\n}\r\n\r\n.ci-status-success:hover {\r\n  background: rgba(34, 197, 94, 0.25) !important;\r\n}\r\n\r\n.ci-status-pending {\r\n  background: rgba(234, 179, 8, 0.15) !important;\r\n  color: #facc15 !important;\r\n  border-color: rgba(234, 179, 8, 0.3) !important;\r\n}\r\n\r\n.ci-status-pending:hover {\r\n  background: rgba(234, 179, 8, 0.25) !important;\r\n}\r\n\r\n.ci-status-failure {\r\n  background: rgba(239, 68, 68, 0.15) !important;\r\n  color: #f87171 !important;\r\n  border-color: rgba(239, 68, 68, 0.3) !important;\r\n}\r\n\r\n.ci-status-failure:hover {\r\n  background: rgba(239, 68, 68, 0.25) !important;\r\n}\r\n\r\n.git-ci-caret {\r\n  font-size: 10px !important;\r\n  opacity: 0.7 !important;\r\n}\r\n\r\n/* CI Checks Accordion */\r\n.git-ci-checks-accordion {\r\n  margin-top: 4px !important;\r\n  padding: 6px 8px !important;\r\n  border-radius: 6px !important;\r\n  background: #0d1017 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.05) !important;\r\n}\r\n\r\n.git-ci-checks-header {\r\n  display: flex !important;\r\n  justify-content: space-between !important;\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  color: #94a3b8 !important;\r\n  margin-bottom: 6px !important;\r\n  text-transform: uppercase !important;\r\n  letter-spacing: 0.5px !important;\r\n}\r\n\r\n.git-ci-checks-count {\r\n  font-family: monospace !important;\r\n  color: #4ade80 !important;\r\n}\r\n\r\n.git-ci-checks-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.git-ci-check-item {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  padding: 3px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  font-size: 11px !important;\r\n}\r\n\r\n.git-ci-check-icon {\r\n  font-size: 11px !important;\r\n  width: 14px !important;\r\n  text-align: center !important;\r\n}\r\n\r\n.check-success .git-ci-check-icon {\r\n  color: #22c55e !important;\r\n}\r\n\r\n.check-fail .git-ci-check-icon {\r\n  color: #ef4444 !important;\r\n}\r\n\r\n.check-pending .git-ci-check-icon {\r\n  color: #eab308 !important;\r\n}\r\n\r\n.git-ci-check-info {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-ci-check-name {\r\n  color: #e2e8f0 !important;\r\n  font-weight: 500 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-ci-check-wf {\r\n  color: #64748b !important;\r\n  font-size: 9px !important;\r\n}\r\n\r\n.git-ci-check-link {\r\n  font-size: 10px !important;\r\n  color: #38bdf8 !important;\r\n  text-decoration: none !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-ci-check-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-ci-empty {\r\n  color: #64748b !important;\r\n  font-size: 10px !important;\r\n  padding: 4px !important;\r\n}\r\n\r\n/* Branches Filter Toolbar */\r\n.git-branches-filter-bar {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  padding: 4px 10px !important;\r\n  background: #11141c !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  font-size: 11px !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.git-branches-pills {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.git-filter-pill {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  color: #94a3b8 !important;\r\n  border: 1px solid transparent !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.git-filter-pill:hover {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-filter-pill.active {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.git-branches-drawer-btn {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: transparent !important;\r\n  color: #64748b !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n}\r\n\r\n.git-branches-drawer-btn:hover {\r\n  color: #f1f5f9 !important;\r\n  border-color: rgba(255, 255, 255, 0.15) !important;\r\n}\r\n\r\n/* Branches Drawer Dropdown */\r\n.git-branches-drawer {\r\n  background: #0d1017 !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  max-height: 180px !important;\r\n  overflow-y: auto !important;\r\n  padding: 6px 10px !important;\r\n}\r\n\r\n.git-branches-section-title {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  letter-spacing: 0.5px !important;\r\n  color: #64748b !important;\r\n  margin: 4px 0 2px !important;\r\n}\r\n\r\n.git-branches-list-wrap {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  margin-bottom: 6px !important;\r\n}\r\n\r\n.git-branch-drawer-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  padding: 3px 6px !important;\r\n  border-radius: 4px !important;\r\n  font-size: 11px !important;\r\n  color: #cbd5e1 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-branch-drawer-row:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n}\r\n\r\n.git-branch-drawer-row.is-active-branch {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #38bdf8 !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.git-branch-drawer-name {\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-branch-drawer-hash {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n}\r\n\r\n.git-branch-current-badge {\r\n  font-size: 8px !important;\r\n  font-weight: 700 !important;\r\n  padding: 0 4px !important;\r\n  border-radius: 3px !important;\r\n  background: #38bdf8 !important;\r\n  color: #0f172a !important;\r\n}\r\n\r\n.git-branch-empty {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n  padding: 2px 4px !important;\r\n}\r\n\r\n/* Redesigned High-Quality Commit Inspector */\r\n.git-inspector-mount {\r\n  position: sticky !important;\r\n  bottom: 0 !important;\r\n  z-index: 40 !important;\r\n  background: #11141c !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4) !important;\r\n  padding: 8px 12px !important;\r\n}\r\n\r\n.git-inspector-card {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-inspector-top {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.git-inspector-author-group {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-avatar-frame {\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 50% !important;\r\n  overflow: hidden !important;\r\n  flex-shrink: 0 !important;\r\n  position: relative !important;\r\n}\r\n\r\n.git-inspector-avatar {\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  object-fit: cover !important;\r\n  border-radius: 50% !important;\r\n}\r\n\r\n.git-inspector-avatar-fallback {\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  border-radius: 50% !important;\r\n  background: linear-gradient(135deg, #0284c7, #6366f1) !important;\r\n  color: #ffffff !important;\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  text-transform: uppercase !important;\r\n}\r\n\r\n.git-inspector-author-text {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  min-width: 0 !important;\r\n  line-height: 1.2 !important;\r\n}\r\n\r\n.git-inspector-name-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-inspector-author-name {\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-inspector-date {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n}\r\n\r\n.git-inspector-author-email {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n  font-family: monospace !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-inspector-meta-group {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-inspector-hash-pill {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #93c5fd !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n}\r\n\r\n.git-inspector-btn-gh {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n  text-decoration: none !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.git-inspector-btn-gh:hover {\r\n  background: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-inspector-btn-close {\r\n  font-size: 12px !important;\r\n  padding: 2px 5px !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n  color: #64748b !important;\r\n  cursor: pointer !important;\r\n  border-radius: 4px !important;\r\n  line-height: 1 !important;\r\n}\r\n\r\n.git-inspector-btn-close:hover {\r\n  color: #f1f5f9 !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-inspector-subject-line {\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  color: #e2e8f0 !important;\r\n  padding: 4px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(0, 0, 0, 0.25) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.04) !important;\r\n  line-height: 1.35 !important;\r\n  word-break: break-word !important;\r\n}\r\n\r\n.git-inspector-footer-stats {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-inspector-files-badge {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n}\r\n";
+    this.cachedCss = "/* =========================================================================\n   ANTIGRAVITY GIT & GITHUB GRAPH MOD - VS CODE STYLE\n   Ultra-compact, lightweight DAG commit tree & inline file diff visualizer\n   ========================================================================= */\n\n/* Tab Button in Auxiliary Pane Header */\n.antigravity-git-tab-wrapper {\n  display: inline-flex;\n  align-items: center;\n}\n\n.antigravity-git-tab-btn {\n  height: 28px !important;\n  padding: 0 8px !important;\n  font-size: 12px !important;\n  font-weight: 500 !important;\n  color: #94a3b8 !important;\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  transition: all 0.15s ease !important;\n  user-select: none !important;\n}\n\n.antigravity-git-tab-btn:hover {\n  background: rgba(255, 255, 255, 0.06) !important;\n  color: #f8fafc !important;\n}\n\n.antigravity-git-tab-btn.active {\n  background: #1e2438 !important;\n  color: #38bdf8 !important;\n  border-color: rgba(56, 189, 248, 0.25) !important;\n}\n\n/* Full Auxiliary Panel Body */\n.antigravity-git-panel {\n  display: flex !important;\n  flex-direction: column !important;\n  width: 100% !important;\n  height: 100% !important;\n  background: #181a1f !important;\n  color: #e2e8f0 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, monospace, sans-serif !important;\n  overflow: hidden !important;\n  box-sizing: border-box !important;\n}\n\n/* VS Code Minimal Header Bar */\n.git-panel-header {\n  height: 32px !important;\n  min-height: 32px !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  padding: 0 10px !important;\n  background: #1e222b !important;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;\n  user-select: none !important;\n}\n\n.git-panel-title-wrap {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  overflow: hidden !important;\n}\n\n.git-header-caret {\n  font-size: 12px !important;\n  color: #94a3b8 !important;\n}\n\n.git-header-title {\n  font-size: 12px !important;\n  font-weight: 600 !important;\n  color: #f1f5f9 !important;\n}\n\n.git-header-repo {\n  font-size: 11px !important;\n  color: #64748b !important;\n  max-width: 140px !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n}\n\n.git-branch-pill {\n  font-size: 10px !important;\n  font-weight: 600 !important;\n  padding: 1px 6px !important;\n  border-radius: 4px !important;\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\n  font-family: monospace !important;\n}\n\n.git-header-actions {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n}\n\n.git-pill-auto {\n  font-size: 10px !important;\n  color: #94a3b8 !important;\n  background: rgba(255, 255, 255, 0.05) !important;\n  padding: 1px 5px !important;\n  border-radius: 3px !important;\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\n}\n\n.git-tool-btn {\n  background: transparent !important;\n  border: none !important;\n  color: #94a3b8 !important;\n  font-size: 12px !important;\n  cursor: pointer !important;\n  padding: 2px 4px !important;\n  border-radius: 4px !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n}\n\n.git-tool-btn:hover {\n  background: rgba(255, 255, 255, 0.1) !important;\n  color: #f1f5f9 !important;\n}\n\n.git-tool-close:hover {\n  background: rgba(239, 68, 68, 0.2) !important;\n  color: #ef4444 !important;\n}\n\n/* Status Toast Banner */\n.git-vcs-toast {\n  padding: 4px 10px !important;\n  font-size: 10px !important;\n  font-family: monospace !important;\n  background: rgba(56, 189, 248, 0.12) !important;\n  color: #7dd3fc !important;\n  border-bottom: 1px solid rgba(56, 189, 248, 0.25) !important;\n}\n\n.git-vcs-toast.is-error {\n  background: rgba(239, 68, 68, 0.16) !important;\n  color: #fca5a5 !important;\n  border-bottom-color: rgba(239, 68, 68, 0.35) !important;\n}\n\n/* Graph & Commits Viewport */\n.git-graph-container {\n  display: flex !important;\n  flex: 1 1 0% !important;\n  overflow-y: auto !important;\n  overflow-x: hidden !important;\n  position: relative !important;\n  scrollbar-width: thin !important;\n  scrollbar-color: rgba(255, 255, 255, 0.15) transparent !important;\n}\n\n.git-graph-container::-webkit-scrollbar {\n  width: 6px !important;\n}\n\n.git-graph-container::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.15) !important;\n  border-radius: 3px !important;\n}\n\n.git-svg-column {\n  flex-shrink: 0 !important;\n  position: relative !important;\n}\n\n.git-graph-svg {\n  display: block !important;\n}\n\n.git-commits-column {\n  flex: 1 1 0% !important;\n  min-width: 0 !important;\n  display: flex !important;\n  flex-direction: column !important;\n}\n\n/* Individual Commit Item */\n.git-commit-item {\n  display: flex !important;\n  flex-direction: column !important;\n  width: 100% !important;\n}\n\n.git-commit-row {\n  height: 26px !important;\n  min-height: 26px !important;\n  box-sizing: border-box !important;\n  display: flex !important;\n  align-items: center !important;\n  padding: 0 8px 0 4px !important;\n  cursor: pointer !important;\n  border-radius: 0 !important;\n  transition: background 0.1s ease !important;\n  user-select: none !important;\n  overflow: hidden !important;\n}\n\n.git-commit-row:hover {\n  background: rgba(255, 255, 255, 0.04) !important;\n}\n\n.git-commit-row.selected {\n  background: rgba(56, 189, 248, 0.12) !important;\n}\n\n.git-commit-main {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  width: 100% !important;\n  min-width: 0 !important;\n  gap: 8px !important;\n}\n\n.git-commit-subject {\n  font-size: 12px !important;\n  color: #e2e8f0 !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n  flex: 1 1 0% !important;\n}\n\n.git-commit-badges {\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 4px !important;\n  flex-shrink: 0 !important;\n}\n\n/* Branch & Ref Badges (VS Code Pill Style) */\n.git-pill-branch {\n  font-size: 10px !important;\n  font-weight: 500 !important;\n  padding: 1px 6px !important;\n  border-radius: 10px !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 3px !important;\n  white-space: nowrap !important;\n  font-family: monospace !important;\n}\n\n.git-pill-local {\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\n}\n\n.git-pill-head {\n  background: rgba(56, 189, 248, 0.22) !important;\n  color: #7dd3fc !important;\n  border: 1px solid rgba(56, 189, 248, 0.5) !important;\n  box-shadow: 0 0 6px rgba(56, 189, 248, 0.25) !important;\n}\n\n.git-pill-origin {\n  background: rgba(249, 115, 22, 0.15) !important;\n  color: #fb923c !important;\n  border: 1px solid rgba(249, 115, 22, 0.35) !important;\n}\n\n/* Selective Commit Push Button */\n.git-commit-push-btn {\n  font-size: 9px !important;\n  font-weight: 600 !important;\n  font-family: monospace !important;\n  padding: 1px 5px !important;\n  border-radius: 4px !important;\n  background: rgba(34, 197, 94, 0.14) !important;\n  color: #4ade80 !important;\n  border: 1px solid rgba(34, 197, 94, 0.35) !important;\n  cursor: pointer !important;\n  white-space: nowrap !important;\n  transition: all 0.12s ease !important;\n}\n\n.git-commit-push-btn:hover {\n  background: rgba(34, 197, 94, 0.28) !important;\n  color: #dcfce7 !important;\n}\n\n.git-icon-cloud {\n  font-size: 10px !important;\n}\n\n.git-icon-dot {\n  font-size: 9px !important;\n}\n\n.git-commit-chevron {\n  font-size: 10px !important;\n  color: #64748b !important;\n  width: 12px !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n  flex-shrink: 0 !important;\n}\n\n.git-commit-chevron.has-files {\n  color: #94a3b8 !important;\n  cursor: pointer !important;\n}\n\n/* Expandable Inline File Diff List (strictly 22px * fileCount, 0 vertical padding for 1:1 SVG alignment) */\n.git-commit-files-container {\n  display: none !important;\n  flex-direction: column !important;\n  background: rgba(0, 0, 0, 0.3) !important;\n  border-left: 2px solid rgba(56, 189, 248, 0.35) !important;\n  margin-left: 14px !important;\n  padding: 0 !important;\n  box-sizing: border-box !important;\n}\n\n.git-commit-item.is-expanded > .git-commit-files-container {\n  display: flex !important;\n}\n\n.git-file-row {\n  height: 22px !important;\n  min-height: 22px !important;\n  box-sizing: border-box !important;\n  display: flex !important;\n  align-items: center !important;\n  padding: 0 10px 0 8px !important;\n  font-size: 11px !important;\n  gap: 8px !important;\n  overflow: hidden !important;\n}\n\n.git-file-row:hover {\n  background: rgba(255, 255, 255, 0.04) !important;\n}\n\n.git-file-ext {\n  font-size: 9px !important;\n  font-weight: 700 !important;\n  padding: 1px 4px !important;\n  border-radius: 3px !important;\n  font-family: monospace !important;\n  letter-spacing: -0.02em !important;\n}\n\n.ext-js {\n  background: rgba(234, 179, 8, 0.18) !important;\n  color: #facc15 !important;\n  border: 1px solid rgba(234, 179, 8, 0.35) !important;\n}\n\n.ext-ts {\n  background: rgba(59, 130, 246, 0.18) !important;\n  color: #60a5fa !important;\n  border: 1px solid rgba(59, 130, 246, 0.35) !important;\n}\n\n.ext-json {\n  background: rgba(34, 197, 94, 0.18) !important;\n  color: #4ade80 !important;\n  border: 1px solid rgba(34, 197, 94, 0.35) !important;\n}\n\n.ext-css {\n  background: rgba(6, 182, 212, 0.18) !important;\n  color: #22d3ee !important;\n  border: 1px solid rgba(6, 182, 212, 0.35) !important;\n}\n\n.ext-md {\n  background: rgba(168, 85, 247, 0.18) !important;\n  color: #c084fc !important;\n  border: 1px solid rgba(168, 85, 247, 0.35) !important;\n}\n\n.ext-html {\n  background: rgba(249, 115, 22, 0.18) !important;\n  color: #fb923c !important;\n  border: 1px solid rgba(249, 115, 22, 0.35) !important;\n}\n\n.ext-default {\n  background: rgba(148, 163, 184, 0.18) !important;\n  color: #cbd5e1 !important;\n  border: 1px solid rgba(148, 163, 184, 0.3) !important;\n}\n\n.git-file-name {\n  color: #e2e8f0 !important;\n  font-weight: 500 !important;\n  white-space: nowrap !important;\n}\n\n.git-file-dir {\n  color: #64748b !important;\n  font-family: monospace !important;\n  font-size: 10px !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n  flex: 1 1 0% !important;\n}\n\n.git-file-status {\n  font-size: 10px !important;\n  font-weight: 700 !important;\n  font-family: monospace !important;\n}\n\n.status-modified {\n  color: #eab308 !important;\n}\n\n.status-added {\n  color: #22c55e !important;\n}\n\n.status-deleted {\n  color: #ef4444 !important;\n}\n\n\n/* =========================================================================\n   PULL REQUEST & CI/CD STATUS CARD STYLES\n   ========================================================================= */\n\n.git-pr-card {\n  padding: 8px 12px !important;\n  background: #13161f !important;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 6px !important;\n  font-size: 11px !important;\n}\n\n.git-pr-none {\n  display: flex !important;\n  flex-direction: column !important;\n  align-items: stretch !important;\n  color: #64748b !important;\n  background: #11141c !important;\n  padding: 6px 12px !important;\n  gap: 6px !important;\n}\n\n.git-pr-none-main {\n  display: flex !important;\n  flex-direction: row !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  gap: 8px !important;\n  width: 100% !important;\n}\n\n.git-pr-none-left {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  min-width: 0 !important;\n  overflow: hidden !important;\n}\n\n.git-pr-none-text {\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n}\n\n.git-pr-icon {\n  font-size: 13px !important;\n  color: #38bdf8 !important;\n}\n\n.git-pr-none-right {\n  display: flex !important;\n  align-items: center !important;\n  gap: 5px !important;\n  flex-shrink: 0 !important;\n}\n\n.git-pr-sync-badge {\n  font-size: 10px !important;\n  padding: 1px 6px !important;\n  border-radius: 4px !important;\n  background: rgba(255, 255, 255, 0.05) !important;\n  color: #94a3b8 !important;\n}\n\n.git-pr-action-btn {\n  font-size: 9px !important;\n  font-weight: 700 !important;\n  font-family: monospace !important;\n  padding: 2px 5px !important;\n  border-radius: 4px !important;\n  cursor: pointer !important;\n  border: 1px solid transparent !important;\n}\n\n.git-pr-action-btn.btn-push {\n  background: rgba(34, 197, 94, 0.16) !important;\n  color: #4ade80 !important;\n  border-color: rgba(34, 197, 94, 0.35) !important;\n}\n\n.git-pr-action-btn.btn-pull {\n  background: rgba(249, 115, 22, 0.16) !important;\n  color: #fb923c !important;\n  border-color: rgba(249, 115, 22, 0.35) !important;\n}\n\n.git-pr-create-btn {\n  font-size: 10px !important;\n  font-weight: 600 !important;\n  padding: 2px 7px !important;\n  border-radius: 4px !important;\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\n  cursor: pointer !important;\n  white-space: nowrap !important;\n}\n\n.git-pr-create-btn:hover {\n  background: rgba(56, 189, 248, 0.25) !important;\n}\n\n.git-pr-create-link {\n  font-size: 10px !important;\n  color: #38bdf8 !important;\n  text-decoration: none !important;\n  font-weight: 500 !important;\n}\n\n.git-pr-create-link:hover {\n  text-decoration: underline !important;\n}\n\n.git-pr-commits-drawer {\n  padding: 6px 8px !important;\n  border-radius: 6px !important;\n  background: #0d1017 !important;\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\n}\n\n.git-pr-commits-list {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 3px !important;\n  max-height: 120px !important;\n  overflow-y: auto !important;\n  margin-bottom: 6px !important;\n}\n\n.git-pr-commit-row {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  padding: 2px 4px !important;\n  border-radius: 4px !important;\n  background: rgba(255, 255, 255, 0.02) !important;\n}\n\n.git-pr-commit-sha {\n  font-family: monospace !important;\n  font-size: 10px !important;\n  color: #93c5fd !important;\n  flex-shrink: 0 !important;\n}\n\n.git-pr-commit-msg {\n  font-size: 10px !important;\n  color: #cbd5e1 !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n  flex: 1 1 0% !important;\n}\n\n.git-pr-drawer-footer {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  gap: 8px !important;\n  padding-top: 4px !important;\n  border-top: 1px solid rgba(255, 255, 255, 0.06) !important;\n}\n\n.git-pr-submit-btn {\n  font-size: 10px !important;\n  font-weight: 600 !important;\n  padding: 3px 8px !important;\n  border-radius: 4px !important;\n  background: rgba(56, 189, 248, 0.2) !important;\n  color: #7dd3fc !important;\n  border: 1px solid rgba(56, 189, 248, 0.45) !important;\n  cursor: pointer !important;\n}\n\n.git-pr-submit-btn:hover {\n  background: rgba(56, 189, 248, 0.32) !important;\n}\n\n.git-pr-card-main {\n  display: flex !important;\n  align-items: flex-start !important;\n  justify-content: space-between !important;\n  gap: 10px !important;\n}\n\n.git-pr-header-col {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 3px !important;\n  min-width: 0 !important;\n  flex: 1 1 0% !important;\n}\n\n.git-pr-badge-row {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n}\n\n.git-pr-state-badge {\n  font-size: 9px !important;\n  font-weight: 700 !important;\n  text-transform: uppercase !important;\n  padding: 1px 5px !important;\n  border-radius: 4px !important;\n  letter-spacing: 0.5px !important;\n}\n\n.state-open {\n  background: rgba(34, 197, 94, 0.2) !important;\n  color: #4ade80 !important;\n  border: 1px solid rgba(34, 197, 94, 0.4) !important;\n}\n\n.state-merged {\n  background: rgba(168, 85, 247, 0.2) !important;\n  color: #c084fc !important;\n  border: 1px solid rgba(168, 85, 247, 0.4) !important;\n}\n\n.state-closed {\n  background: rgba(239, 68, 68, 0.2) !important;\n  color: #f87171 !important;\n  border: 1px solid rgba(239, 68, 68, 0.4) !important;\n}\n\n.git-pr-num-link {\n  font-weight: 700 !important;\n  color: #60a5fa !important;\n  text-decoration: none !important;\n  font-family: monospace !important;\n}\n\n.git-pr-num-link:hover {\n  text-decoration: underline !important;\n}\n\n.git-pr-branch-flow {\n  color: #94a3b8 !important;\n  font-size: 10px !important;\n  font-family: monospace !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n}\n\n.git-pr-title {\n  font-size: 11px !important;\n  font-weight: 600 !important;\n  color: #f1f5f9 !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n}\n\n/* CI/CD Rollup Button */\n.git-pr-ci-badge-wrap {\n  flex-shrink: 0 !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 4px !important;\n}\n\n.git-ci-rollup-btn {\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 5px !important;\n  padding: 3px 8px !important;\n  border-radius: 5px !important;\n  font-size: 10px !important;\n  font-weight: 600 !important;\n  cursor: pointer !important;\n  border: 1px solid transparent !important;\n  transition: all 0.15s ease !important;\n  user-select: none !important;\n}\n\n.ci-status-success {\n  background: rgba(34, 197, 94, 0.15) !important;\n  color: #4ade80 !important;\n  border-color: rgba(34, 197, 94, 0.3) !important;\n}\n\n.ci-status-success:hover {\n  background: rgba(34, 197, 94, 0.25) !important;\n}\n\n.ci-status-pending {\n  background: rgba(234, 179, 8, 0.15) !important;\n  color: #facc15 !important;\n  border-color: rgba(234, 179, 8, 0.3) !important;\n}\n\n.ci-status-pending:hover {\n  background: rgba(234, 179, 8, 0.25) !important;\n}\n\n.ci-status-failure {\n  background: rgba(239, 68, 68, 0.15) !important;\n  color: #f87171 !important;\n  border-color: rgba(239, 68, 68, 0.3) !important;\n}\n\n.ci-status-failure:hover {\n  background: rgba(239, 68, 68, 0.25) !important;\n}\n\n.git-ci-caret {\n  font-size: 10px !important;\n  opacity: 0.7 !important;\n}\n\n/* CI Checks Accordion */\n.git-ci-checks-accordion {\n  margin-top: 4px !important;\n  padding: 6px 8px !important;\n  border-radius: 6px !important;\n  background: #0d1017 !important;\n  border: 1px solid rgba(255, 255, 255, 0.05) !important;\n}\n\n.git-ci-checks-header {\n  display: flex !important;\n  justify-content: space-between !important;\n  font-size: 10px !important;\n  font-weight: 600 !important;\n  color: #94a3b8 !important;\n  margin-bottom: 6px !important;\n  text-transform: uppercase !important;\n  letter-spacing: 0.5px !important;\n}\n\n.git-ci-checks-count {\n  font-family: monospace !important;\n  color: #4ade80 !important;\n}\n\n.git-ci-checks-list {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 4px !important;\n}\n\n.git-ci-check-item {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  padding: 3px 6px !important;\n  border-radius: 4px !important;\n  background: rgba(255, 255, 255, 0.02) !important;\n  font-size: 11px !important;\n}\n\n.git-ci-check-icon {\n  font-size: 11px !important;\n  width: 14px !important;\n  text-align: center !important;\n}\n\n.check-success .git-ci-check-icon {\n  color: #22c55e !important;\n}\n\n.check-fail .git-ci-check-icon {\n  color: #ef4444 !important;\n}\n\n.check-pending .git-ci-check-icon {\n  color: #eab308 !important;\n}\n\n.git-ci-check-info {\n  display: flex !important;\n  flex-direction: column !important;\n  min-width: 0 !important;\n  flex: 1 1 0% !important;\n}\n\n.git-ci-check-name {\n  color: #e2e8f0 !important;\n  font-weight: 500 !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n}\n\n.git-ci-check-wf {\n  color: #64748b !important;\n  font-size: 9px !important;\n}\n\n.git-ci-check-link {\n  font-size: 10px !important;\n  color: #38bdf8 !important;\n  text-decoration: none !important;\n  font-family: monospace !important;\n}\n\n.git-ci-check-link:hover {\n  text-decoration: underline !important;\n}\n\n.git-ci-empty {\n  color: #64748b !important;\n  font-size: 10px !important;\n  padding: 4px !important;\n}\n\n/* Branches Filter Toolbar */\n.git-branches-filter-bar {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  padding: 4px 10px !important;\n  background: #11141c !important;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;\n  font-size: 11px !important;\n  user-select: none !important;\n}\n\n.git-branches-pills {\n  display: flex !important;\n  align-items: center !important;\n  gap: 4px !important;\n}\n\n.git-filter-pill {\n  font-size: 10px !important;\n  font-weight: 500 !important;\n  padding: 2px 7px !important;\n  border-radius: 4px !important;\n  background: rgba(255, 255, 255, 0.04) !important;\n  color: #94a3b8 !important;\n  border: 1px solid transparent !important;\n  cursor: pointer !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 4px !important;\n  transition: all 0.15s ease !important;\n}\n\n.git-filter-pill:hover {\n  background: rgba(255, 255, 255, 0.08) !important;\n  color: #f1f5f9 !important;\n}\n\n.git-filter-pill.active {\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border-color: rgba(56, 189, 248, 0.3) !important;\n}\n\n.git-branches-drawer-btn {\n  font-size: 10px !important;\n  font-weight: 500 !important;\n  padding: 2px 6px !important;\n  border-radius: 4px !important;\n  background: transparent !important;\n  color: #64748b !important;\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\n  cursor: pointer !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 3px !important;\n}\n\n.git-branches-drawer-btn:hover {\n  color: #f1f5f9 !important;\n  border-color: rgba(255, 255, 255, 0.15) !important;\n}\n\n/* Branches Drawer Dropdown */\n.git-branches-drawer {\n  background: #0d1017 !important;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\n  max-height: 220px !important;\n  overflow-y: auto !important;\n  padding: 6px 10px !important;\n}\n\n.git-branches-section-title {\n  font-size: 9px !important;\n  font-weight: 700 !important;\n  text-transform: uppercase !important;\n  letter-spacing: 0.5px !important;\n  color: #64748b !important;\n  margin: 4px 0 2px !important;\n}\n\n.git-branch-cluster-header {\n  font-size: 9px !important;\n  font-weight: 600 !important;\n  color: #94a3b8 !important;\n  padding: 4px 4px 1px !important;\n  border-top: 1px solid rgba(255, 255, 255, 0.04) !important;\n  margin-top: 2px !important;\n}\n\n.git-branches-list-wrap {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 2px !important;\n  margin-bottom: 6px !important;\n}\n\n.git-branch-drawer-row {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  padding: 3px 6px !important;\n  border-radius: 4px !important;\n  font-size: 11px !important;\n  color: #cbd5e1 !important;\n  cursor: pointer !important;\n}\n\n.git-branch-drawer-row:hover {\n  background: rgba(255, 255, 255, 0.06) !important;\n}\n\n.git-branch-drawer-row.is-active-branch {\n  background: rgba(56, 189, 248, 0.12) !important;\n  color: #38bdf8 !important;\n  font-weight: 600 !important;\n}\n\n.git-branch-drawer-name {\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n  flex: 1 1 0% !important;\n}\n\n.git-branch-sync-badges {\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 3px !important;\n  flex-shrink: 0 !important;\n}\n\n.git-branch-sync-badge {\n  font-family: monospace !important;\n  font-size: 9px !important;\n  font-weight: 700 !important;\n  padding: 1px 4px !important;\n  border-radius: 3px !important;\n  border: 1px solid transparent !important;\n  line-height: 1.2 !important;\n}\n\n.git-branch-sync-badge.badge-ahead {\n  background: rgba(34, 197, 94, 0.15) !important;\n  color: #4ade80 !important;\n  border-color: rgba(34, 197, 94, 0.35) !important;\n  cursor: pointer !important;\n}\n\n.git-branch-sync-badge.badge-behind {\n  background: rgba(249, 115, 22, 0.15) !important;\n  color: #fb923c !important;\n  border-color: rgba(249, 115, 22, 0.35) !important;\n  cursor: pointer !important;\n}\n\n.git-branch-sync-badge.badge-dirty {\n  background: rgba(234, 179, 8, 0.15) !important;\n  color: #facc15 !important;\n  border-color: rgba(234, 179, 8, 0.35) !important;\n}\n\n.git-branch-sync-badge.badge-merged {\n  background: rgba(168, 85, 247, 0.15) !important;\n  color: #c084fc !important;\n  border-color: rgba(168, 85, 247, 0.3) !important;\n}\n\n.git-branch-drawer-hash {\n  font-family: monospace !important;\n  font-size: 10px !important;\n  color: #64748b !important;\n}\n\n.git-branch-current-badge {\n  font-size: 8px !important;\n  font-weight: 700 !important;\n  padding: 0 4px !important;\n  border-radius: 3px !important;\n  background: #38bdf8 !important;\n  color: #0f172a !important;\n}\n\n.git-branch-empty {\n  font-size: 10px !important;\n  color: #64748b !important;\n  padding: 2px 4px !important;\n}\n\n/* Redesigned High-Quality Commit Inspector */\n.git-inspector-mount {\n  position: sticky !important;\n  bottom: 0 !important;\n  z-index: 40 !important;\n  background: #11141c !important;\n  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;\n  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4) !important;\n  padding: 8px 12px !important;\n}\n\n.git-inspector-card {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 6px !important;\n}\n\n.git-inspector-top {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  gap: 10px !important;\n}\n\n.git-inspector-author-group {\n  display: flex !important;\n  align-items: center !important;\n  gap: 8px !important;\n  min-width: 0 !important;\n  flex: 1 1 0% !important;\n}\n\n.git-avatar-frame {\n  width: 24px !important;\n  height: 24px !important;\n  border-radius: 50% !important;\n  overflow: hidden !important;\n  flex-shrink: 0 !important;\n  position: relative !important;\n}\n\n.git-inspector-avatar {\n  width: 100% !important;\n  height: 100% !important;\n  object-fit: cover !important;\n  border-radius: 50% !important;\n}\n\n.git-inspector-avatar-fallback {\n  width: 100% !important;\n  height: 100% !important;\n  border-radius: 50% !important;\n  background: linear-gradient(135deg, #0284c7, #6366f1) !important;\n  color: #ffffff !important;\n  font-size: 10px !important;\n  font-weight: 700 !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n  text-transform: uppercase !important;\n}\n\n.git-inspector-author-text {\n  display: flex !important;\n  flex-direction: column !important;\n  min-width: 0 !important;\n  line-height: 1.2 !important;\n}\n\n.git-inspector-name-row {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n}\n\n.git-inspector-author-name {\n  font-size: 11px !important;\n  font-weight: 600 !important;\n  color: #f1f5f9 !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n}\n\n.git-inspector-date {\n  font-size: 10px !important;\n  color: #64748b !important;\n}\n\n.git-inspector-author-email {\n  font-size: 10px !important;\n  color: #94a3b8 !important;\n  font-family: monospace !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n  white-space: nowrap !important;\n}\n\n.git-inspector-meta-group {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  flex-shrink: 0 !important;\n}\n\n.git-inspector-hash-pill {\n  font-family: monospace !important;\n  font-size: 10px !important;\n  padding: 2px 6px !important;\n  border-radius: 4px !important;\n  background: rgba(255, 255, 255, 0.08) !important;\n  color: #93c5fd !important;\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\n}\n\n.git-inspector-btn-gh {\n  font-size: 10px !important;\n  font-weight: 600 !important;\n  padding: 2px 7px !important;\n  border-radius: 4px !important;\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\n  text-decoration: none !important;\n  transition: all 0.15s ease !important;\n}\n\n.git-inspector-btn-gh:hover {\n  background: rgba(56, 189, 248, 0.25) !important;\n}\n\n.git-inspector-btn-close {\n  font-size: 12px !important;\n  padding: 2px 5px !important;\n  background: transparent !important;\n  border: none !important;\n  color: #64748b !important;\n  cursor: pointer !important;\n  border-radius: 4px !important;\n  line-height: 1 !important;\n}\n\n.git-inspector-btn-close:hover {\n  color: #f1f5f9 !important;\n  background: rgba(255, 255, 255, 0.08) !important;\n}\n\n.git-inspector-subject-line {\n  font-size: 11px !important;\n  font-weight: 500 !important;\n  color: #e2e8f0 !important;\n  padding: 4px 6px !important;\n  border-radius: 4px !important;\n  background: rgba(0, 0, 0, 0.25) !important;\n  border: 1px solid rgba(255, 255, 255, 0.04) !important;\n  line-height: 1.35 !important;\n  word-break: break-word !important;\n}\n\n.git-inspector-footer-stats {\n  display: flex !important;\n  align-items: center !important;\n  gap: 8px !important;\n}\n\n.git-inspector-files-badge {\n  font-size: 10px !important;\n  color: #94a3b8 !important;\n}\n";
   }
 
   /**
