@@ -477,6 +477,28 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
         <button class="agent-close-btn" id="antigravity-agent-close" title="Cerrar">✕</button>
       </div>
 
+      <!-- 1.1 CAVEMAN MODIFIER CARD -->
+      <div class="agent-card agent-modifier-card" id="antigravity-caveman-card">
+        <div class="agent-modifier-info">
+          <div class="agent-modifier-icon">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+            </svg>
+          </div>
+          <div class="agent-modifier-text">
+            <div class="agent-modifier-title-row">
+              <span class="agent-modifier-title">Modo Caveman</span>
+              <span class="agent-modifier-pill" id="antigravity-caveman-pill">OFF</span>
+            </div>
+            <div class="agent-modifier-subtitle">Compresion semantica (~70% ahorro de tokens)</div>
+          </div>
+        </div>
+        <label class="agent-modifier-switch">
+          <input type="checkbox" id="antigravity-caveman-toggle" onchange="window.__toggleCavemanMode(this.checked)">
+          <span class="agent-modifier-slider"></span>
+        </label>
+      </div>
+
       <!-- 2. SECCIÓN PRINCIPAL: 3 CARDS DIRECTAS CON PIN -->
       <div class="agent-primary-section agent-cards-list">
         ${defaultCardHtml}
