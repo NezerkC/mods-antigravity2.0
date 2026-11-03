@@ -13,10 +13,25 @@ export class GitService {
    * @param {string} [email='']
    * @returns {string}
    */
+  constructor() {
+    this.avatarCache = new Map();
+    this.metadataCache = new Map();
+  }
+
+  /**
+   * Computes Gravatar identicon URL based on author email with memoization.
+   * @param {string} [email='']
+   * @returns {string}
+   */
   computeAvatarUrl(email = '') {
     const clean = String(email).trim().toLowerCase();
+    if (this.avatarCache.has(clean)) {
+      return this.avatarCache.get(clean);
+    }
     const hash = crypto.createHash('md5').update(clean).digest('hex');
-    return `https://www.gravatar.com/avatar/${hash}?d=identicon&s=64`;
+    const url = `https://www.gravatar.com/avatar/${hash}?d=identicon&s=64`;
+    this.avatarCache.set(clean, url);
+    return url;
   }
 
   /**
@@ -64,15 +79,24 @@ export class GitService {
    */
   getGitHubMetadata(options = {}) {
     const repoPath = options.repoPath || process.cwd();
+    const now = Date.now();
+    const cached = this.metadataCache.get(repoPath);
+    if (cached && (now - cached.timestamp < 30000)) {
+      return cached.data;
+    }
     try {
       const remoteUrl = execSync('git remote get-url origin', {
         cwd: repoPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore']
       }).trim();
-      return this.parseGitHubRemote(remoteUrl);
+      const data = this.parseGitHubRemote(remoteUrl);
+      this.metadataCache.set(repoPath, { timestamp: now, data });
+      return data;
     } catch {
-      return { isGitHub: false };
+      const fallback = { isGitHub: false };
+      this.metadataCache.set(repoPath, { timestamp: now, data: fallback });
+      return fallback;
     }
   }
 
@@ -591,20 +615,48 @@ export class GitService {
     const repoPath = options.repoPath || process.cwd();
 
     try {
-      const branch = execSync('git rev-parse --abbrev-ref HEAD', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
-      }).trim();
-
-      const porcelain = execSync('git status --porcelain', {
+      const porcelain = execSync('git status --porcelain=v1 -b', {
         cwd: repoPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore']
       });
 
-      const changedFiles = porcelain
-        .split('\n')
+      const lines = porcelain.split('\n');
+      const header = lines[0] || '';
+      const fileLines = lines.slice(1);
+
+      let branch = 'HEAD';
+      let upstream = null;
+      let ahead = 0;
+      let behind = 0;
+
+      // Header format: ## <branch>[...<upstream> [ahead X, behind Y]]
+      if (header.startsWith('## ')) {
+        const cleanHeader = header.slice(3).trim();
+        if (cleanHeader.startsWith('HEAD (no branch)') || cleanHeader.startsWith('No commits yet on ')) {
+          branch = cleanHeader.startsWith('HEAD') ? 'HEAD' : cleanHeader.replace('No commits yet on ', '');
+        } else {
+          const bracketMatch = cleanHeader.match(/\[(.*?)\]/);
+          if (bracketMatch) {
+            const bracketContent = bracketMatch[1];
+            const aheadMatch = bracketContent.match(/ahead\s+(\d+)/);
+            if (aheadMatch) ahead = parseInt(aheadMatch[1], 10) || 0;
+            const behindMatch = bracketContent.match(/behind\s+(\d+)/);
+            if (behindMatch) behind = parseInt(behindMatch[1], 10) || 0;
+          }
+
+          const branchAndUpstream = cleanHeader.replace(/\s*\[.*?\]$/, '').trim();
+          if (branchAndUpstream.includes('...')) {
+            const [b, u] = branchAndUpstream.split('...');
+            branch = b.trim();
+            upstream = u ? u.trim() : null;
+          } else {
+            branch = branchAndUpstream;
+          }
+        }
+      }
+
+      const changedFiles = fileLines
         .map(line => line.trim())
         .filter(Boolean)
         .map(line => {
@@ -612,32 +664,6 @@ export class GitService {
           const file = line.slice(2).trim();
           return { code, file };
         });
-
-      let ahead = 0;
-      let behind = 0;
-      let upstream = null;
-      try {
-        upstream = execSync('git rev-parse --abbrev-ref @{u}', {
-          cwd: repoPath,
-          encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'ignore']
-        }).trim();
-      } catch {}
-
-      try {
-        const revCounts = execSync('git rev-list --left-right --count HEAD...@{u}', {
-          cwd: repoPath,
-          encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'ignore']
-        }).trim();
-        const parts = revCounts.split(/\s+/);
-        if (parts.length >= 2) {
-          ahead = parseInt(parts[0], 10) || 0;
-          behind = parseInt(parts[1], 10) || 0;
-        }
-      } catch {
-        // No upstream tracked
-      }
 
       return {
         isRepo: true,

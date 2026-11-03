@@ -43,14 +43,25 @@ class CdpPortResolver {
       return false;
     }
 
+    const now = Date.now();
+    if (this._probeCache && this._probeCache.port === port && (now - this._probeCache.timestamp < 1000)) {
+      return this._probeCache.result;
+    }
+
     try {
       const url = `http://${this.host}:${port}/json/version`;
       const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-      if (!res.ok) return false;
+      if (!res.ok) {
+        this._probeCache = { port, result: false, timestamp: now };
+        return false;
+      }
 
       const data = await res.json();
-      return typeof data === 'object' && data !== null && typeof data.webSocketDebuggerUrl === 'string';
+      const result = typeof data === 'object' && data !== null && typeof data.webSocketDebuggerUrl === 'string';
+      this._probeCache = { port, result, timestamp: now };
+      return result;
     } catch {
+      this._probeCache = { port, result: false, timestamp: now };
       return false;
     }
   }
@@ -2455,9 +2466,11 @@ class ModLoader {
         window.__antigravityResizeObserver = new ResizeObserver((entries) => {
           for (const entry of entries) {
             const container = entry.target;
-            const footer = container.closest('[class*="input-footer"]') || container.closest('.flex.items-center.justify-between') || container.parentElement || container;
             const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
-            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
+            const width = (entry.contentRect && entry.contentRect.width > 0)
+              ? entry.contentRect.width
+              : ((container.closest('[class*="input-footer"]') || container.parentElement || container).getBoundingClientRect?.().width || 500);
+            const isNarrow = width < 440 || window.innerWidth < 960;
             const shouldCompact = isForcedCompact || isNarrow;
 
             const tach = container.querySelector('.antigravity-tachometer-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-tachometer-badge') : null);
@@ -2486,8 +2499,9 @@ class ModLoader {
 
         let mountDebounce = null;
         window.__antigravityModObserver = new MutationObserver(() => {
-          if (mountDebounce) clearTimeout(mountDebounce);
+          if (mountDebounce) return;
           mountDebounce = setTimeout(() => {
+            mountDebounce = null;
             const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
             let missingSlot = false;
             for (const btn of triggers) {
@@ -2500,6 +2514,19 @@ class ModLoader {
               }
             }
 
+            if (!missingSlot) {
+              const auxBtn = document.querySelector('button[data-testid="aux-pane-new-tab-button"]') || document.querySelector('.aux-pane-new-tab-button');
+              if (auxBtn && !document.querySelector('.antigravity-slot-aux-pane-tabs, #antigravity-slot-aux-pane-tabs')) {
+                missingSlot = true;
+              }
+            }
+            if (!missingSlot) {
+              const sidebarSlot = document.querySelector('.shrink-0 > .bg-sidebar');
+              if (sidebarSlot && !document.querySelector('.antigravity-slot-sidebar-header, #antigravity-slot-sidebar-header')) {
+                missingSlot = true;
+              }
+            }
+
             if (missingSlot) {
               mountAllMods();
             } else if (typeof window.__syncAgentBadges === 'function') {
@@ -2509,6 +2536,10 @@ class ModLoader {
         });
 
         window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
+        return {
+          success: true,
+          selectedAgentsMap: localStorage.getItem('__antigravity_selected_agents_map')
+        };
       })();
     `;
   }
@@ -3200,10 +3231,25 @@ class GitService {
    * @param {string} [email='']
    * @returns {string}
    */
+  constructor() {
+    this.avatarCache = new Map();
+    this.metadataCache = new Map();
+  }
+
+  /**
+   * Computes Gravatar identicon URL based on author email with memoization.
+   * @param {string} [email='']
+   * @returns {string}
+   */
   computeAvatarUrl(email = '') {
     const clean = String(email).trim().toLowerCase();
+    if (this.avatarCache.has(clean)) {
+      return this.avatarCache.get(clean);
+    }
     const hash = crypto.createHash('md5').update(clean).digest('hex');
-    return `https://www.gravatar.com/avatar/${hash}?d=identicon&s=64`;
+    const url = `https://www.gravatar.com/avatar/${hash}?d=identicon&s=64`;
+    this.avatarCache.set(clean, url);
+    return url;
   }
 
   /**
@@ -3251,15 +3297,24 @@ class GitService {
    */
   getGitHubMetadata(options = {}) {
     const repoPath = options.repoPath || process.cwd();
+    const now = Date.now();
+    const cached = this.metadataCache.get(repoPath);
+    if (cached && (now - cached.timestamp < 30000)) {
+      return cached.data;
+    }
     try {
       const remoteUrl = execSync('git remote get-url origin', {
         cwd: repoPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore']
       }).trim();
-      return this.parseGitHubRemote(remoteUrl);
+      const data = this.parseGitHubRemote(remoteUrl);
+      this.metadataCache.set(repoPath, { timestamp: now, data });
+      return data;
     } catch {
-      return { isGitHub: false };
+      const fallback = { isGitHub: false };
+      this.metadataCache.set(repoPath, { timestamp: now, data: fallback });
+      return fallback;
     }
   }
 
@@ -3778,20 +3833,48 @@ class GitService {
     const repoPath = options.repoPath || process.cwd();
 
     try {
-      const branch = execSync('git rev-parse --abbrev-ref HEAD', {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
-      }).trim();
-
-      const porcelain = execSync('git status --porcelain', {
+      const porcelain = execSync('git status --porcelain=v1 -b', {
         cwd: repoPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore']
       });
 
-      const changedFiles = porcelain
-        .split('\n')
+      const lines = porcelain.split('\n');
+      const header = lines[0] || '';
+      const fileLines = lines.slice(1);
+
+      let branch = 'HEAD';
+      let upstream = null;
+      let ahead = 0;
+      let behind = 0;
+
+      // Header format: ## <branch>[...<upstream> [ahead X, behind Y]]
+      if (header.startsWith('## ')) {
+        const cleanHeader = header.slice(3).trim();
+        if (cleanHeader.startsWith('HEAD (no branch)') || cleanHeader.startsWith('No commits yet on ')) {
+          branch = cleanHeader.startsWith('HEAD') ? 'HEAD' : cleanHeader.replace('No commits yet on ', '');
+        } else {
+          const bracketMatch = cleanHeader.match(/\[(.*?)\]/);
+          if (bracketMatch) {
+            const bracketContent = bracketMatch[1];
+            const aheadMatch = bracketContent.match(/ahead\s+(\d+)/);
+            if (aheadMatch) ahead = parseInt(aheadMatch[1], 10) || 0;
+            const behindMatch = bracketContent.match(/behind\s+(\d+)/);
+            if (behindMatch) behind = parseInt(behindMatch[1], 10) || 0;
+          }
+
+          const branchAndUpstream = cleanHeader.replace(/\s*\[.*?\]$/, '').trim();
+          if (branchAndUpstream.includes('...')) {
+            const [b, u] = branchAndUpstream.split('...');
+            branch = b.trim();
+            upstream = u ? u.trim() : null;
+          } else {
+            branch = branchAndUpstream;
+          }
+        }
+      }
+
+      const changedFiles = fileLines
         .map(line => line.trim())
         .filter(Boolean)
         .map(line => {
@@ -3799,32 +3882,6 @@ class GitService {
           const file = line.slice(2).trim();
           return { code, file };
         });
-
-      let ahead = 0;
-      let behind = 0;
-      let upstream = null;
-      try {
-        upstream = execSync('git rev-parse --abbrev-ref @{u}', {
-          cwd: repoPath,
-          encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'ignore']
-        }).trim();
-      } catch {}
-
-      try {
-        const revCounts = execSync('git rev-list --left-right --count HEAD...@{u}', {
-          cwd: repoPath,
-          encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'ignore']
-        }).trim();
-        const parts = revCounts.split(/\s+/);
-        if (parts.length >= 2) {
-          ahead = parseInt(parts[0], 10) || 0;
-          behind = parseInt(parts[1], 10) || 0;
-        }
-      } catch {
-        // No upstream tracked
-      }
 
       return {
         isRepo: true,
@@ -4309,8 +4366,18 @@ class AgentSyncServer {
 
         if (req.method === 'POST' && req.url === '/active-agent') {
           let body = '';
-          req.on('data', chunk => { body += chunk; });
+          let exceeded = false;
+          req.on('data', chunk => {
+            body += chunk;
+            if (body.length > 65536) {
+              exceeded = true;
+              res.writeHead(413, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Payload too large' }));
+              req.destroy();
+            }
+          });
           req.on('end', () => {
+            if (exceeded || res.writableEnded) return;
             try {
               const payload = JSON.parse(body);
               if (payload.cascadeId && payload.agent) {
@@ -4328,8 +4395,18 @@ class AgentSyncServer {
 
         if (req.method === 'POST' && req.url === '/active-agent/modifier') {
           let body = '';
-          req.on('data', chunk => { body += chunk; });
+          let exceeded = false;
+          req.on('data', chunk => {
+            body += chunk;
+            if (body.length > 65536) {
+              exceeded = true;
+              res.writeHead(413, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Payload too large' }));
+              req.destroy();
+            }
+          });
           req.on('end', () => {
+            if (exceeded || res.writableEnded) return;
             try {
               const payload = JSON.parse(body);
               if (payload.cascadeId && (payload.modifiers || payload.modifier)) {
@@ -4463,6 +4540,9 @@ class AgentSyncServer {
       });
 
       this.server.listen(this.port, this.host, () => {
+        if (typeof this.server?.unref === 'function') {
+          this.server.unref();
+        }
         resolve(true);
       });
     });
@@ -4898,9 +4978,13 @@ class ModHost {
 
     // Sync selected agents from renderer localStorage to disk while preserving server effectiveMode
     try {
-      const mapRes = await cdpClient.evaluate("localStorage.getItem('__antigravity_selected_agents_map')");
-      if (mapRes && mapRes.value) {
-        const parsed = JSON.parse(mapRes.value);
+      let rawMap = evalRes?.value?.selectedAgentsMap;
+      if (!rawMap) {
+        const mapRes = await cdpClient.evaluate("localStorage.getItem('__antigravity_selected_agents_map')");
+        rawMap = mapRes?.value;
+      }
+      if (rawMap) {
+        const parsed = typeof rawMap === 'string' ? JSON.parse(rawMap) : rawMap;
         if (parsed && typeof parsed === 'object') {
           const current = this.syncServer.readActiveAgents();
           const merged = { ...current };

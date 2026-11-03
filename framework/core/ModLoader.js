@@ -1795,9 +1795,11 @@ export class ModLoader {
         window.__antigravityResizeObserver = new ResizeObserver((entries) => {
           for (const entry of entries) {
             const container = entry.target;
-            const footer = container.closest('[class*="input-footer"]') || container.closest('.flex.items-center.justify-between') || container.parentElement || container;
             const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
-            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
+            const width = (entry.contentRect && entry.contentRect.width > 0)
+              ? entry.contentRect.width
+              : ((container.closest('[class*="input-footer"]') || container.parentElement || container).getBoundingClientRect?.().width || 500);
+            const isNarrow = width < 440 || window.innerWidth < 960;
             const shouldCompact = isForcedCompact || isNarrow;
 
             const tach = container.querySelector('.antigravity-tachometer-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-tachometer-badge') : null);
@@ -1826,8 +1828,9 @@ export class ModLoader {
 
         let mountDebounce = null;
         window.__antigravityModObserver = new MutationObserver(() => {
-          if (mountDebounce) clearTimeout(mountDebounce);
+          if (mountDebounce) return;
           mountDebounce = setTimeout(() => {
+            mountDebounce = null;
             const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
             let missingSlot = false;
             for (const btn of triggers) {
@@ -1840,6 +1843,19 @@ export class ModLoader {
               }
             }
 
+            if (!missingSlot) {
+              const auxBtn = document.querySelector('button[data-testid="aux-pane-new-tab-button"]') || document.querySelector('.aux-pane-new-tab-button');
+              if (auxBtn && !document.querySelector('.antigravity-slot-aux-pane-tabs, #antigravity-slot-aux-pane-tabs')) {
+                missingSlot = true;
+              }
+            }
+            if (!missingSlot) {
+              const sidebarSlot = document.querySelector('.shrink-0 > .bg-sidebar');
+              if (sidebarSlot && !document.querySelector('.antigravity-slot-sidebar-header, #antigravity-slot-sidebar-header')) {
+                missingSlot = true;
+              }
+            }
+
             if (missingSlot) {
               mountAllMods();
             } else if (typeof window.__syncAgentBadges === 'function') {
@@ -1849,6 +1865,10 @@ export class ModLoader {
         });
 
         window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
+        return {
+          success: true,
+          selectedAgentsMap: localStorage.getItem('__antigravity_selected_agents_map')
+        };
       })();
     `;
   }

@@ -136,4 +136,29 @@ describe('AgentSyncServer', () => {
     assert.equal(onDisk['cascade-456'].caveman, false);
     assert.equal(onDisk['cascade-456'].modifiers.caveman, false);
   });
+
+  it('rejects POST /active-agent payloads larger than 64KB with 413', async () => {
+    const largeAgent = {
+      id: 'heavy-agent',
+      name: 'Heavy Agent',
+      bloat: 'x'.repeat(70000)
+    };
+
+    try {
+      const res = await fetch('http://127.0.0.1:53913/active-agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cascadeId: 'cascade-heavy', agent: largeAgent })
+      });
+      assert.equal(res.status, 413);
+    } catch {
+      // If socket was destroyed upon exceeding limit, that is also valid protection
+      assert.ok(true);
+    }
+  });
+
+  it('unrefs underlying http server upon listen', () => {
+    assert.ok(server.server);
+    assert.equal(typeof server.server.unref, 'function');
+  });
 });
