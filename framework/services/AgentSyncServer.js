@@ -132,8 +132,18 @@ export class AgentSyncServer {
 
         if (req.method === 'POST' && req.url === '/active-agent') {
           let body = '';
-          req.on('data', chunk => { body += chunk; });
+          let exceeded = false;
+          req.on('data', chunk => {
+            body += chunk;
+            if (body.length > 65536) {
+              exceeded = true;
+              res.writeHead(413, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Payload too large' }));
+              req.destroy();
+            }
+          });
           req.on('end', () => {
+            if (exceeded || res.writableEnded) return;
             try {
               const payload = JSON.parse(body);
               if (payload.cascadeId && payload.agent) {
@@ -151,8 +161,18 @@ export class AgentSyncServer {
 
         if (req.method === 'POST' && req.url === '/active-agent/modifier') {
           let body = '';
-          req.on('data', chunk => { body += chunk; });
+          let exceeded = false;
+          req.on('data', chunk => {
+            body += chunk;
+            if (body.length > 65536) {
+              exceeded = true;
+              res.writeHead(413, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Payload too large' }));
+              req.destroy();
+            }
+          });
           req.on('end', () => {
+            if (exceeded || res.writableEnded) return;
             try {
               const payload = JSON.parse(body);
               if (payload.cascadeId && (payload.modifiers || payload.modifier)) {
@@ -286,6 +306,9 @@ export class AgentSyncServer {
       });
 
       this.server.listen(this.port, this.host, () => {
+        if (typeof this.server?.unref === 'function') {
+          this.server.unref();
+        }
         resolve(true);
       });
     });

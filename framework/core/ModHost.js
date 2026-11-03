@@ -232,9 +232,13 @@ export class ModHost {
 
     // Sync selected agents from renderer localStorage to disk while preserving server effectiveMode
     try {
-      const mapRes = await cdpClient.evaluate("localStorage.getItem('__antigravity_selected_agents_map')");
-      if (mapRes && mapRes.value) {
-        const parsed = JSON.parse(mapRes.value);
+      let rawMap = evalRes?.value?.selectedAgentsMap;
+      if (!rawMap) {
+        const mapRes = await cdpClient.evaluate("localStorage.getItem('__antigravity_selected_agents_map')");
+        rawMap = mapRes?.value;
+      }
+      if (rawMap) {
+        const parsed = typeof rawMap === 'string' ? JSON.parse(rawMap) : rawMap;
         if (parsed && typeof parsed === 'object') {
           const current = this.syncServer.readActiveAgents();
           const merged = { ...current };

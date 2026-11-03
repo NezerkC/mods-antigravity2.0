@@ -127,3 +127,27 @@ test('GitService - getBranches categorizes local and remote branches', () => {
   assert.equal(typeof current.name, 'string');
   assert.ok(current.name.length > 0);
 });
+
+test('GitService - computeAvatarUrl memoizes hashes in avatarCache', () => {
+  const service = new GitService();
+  assert.equal(service.avatarCache.size, 0);
+
+  const url1 = service.computeAvatarUrl('test@example.com');
+  assert.equal(service.avatarCache.size, 1);
+  assert.equal(service.avatarCache.get('test@example.com'), url1);
+
+  const url2 = service.computeAvatarUrl('test@example.com');
+  assert.equal(url1, url2);
+  assert.equal(service.avatarCache.size, 1);
+});
+
+test('GitService - getGitHubMetadata caches results per repoPath', () => {
+  const service = new GitService();
+  assert.equal(service.metadataCache.size, 0);
+
+  const meta1 = service.getGitHubMetadata({ repoPath: process.cwd() });
+  assert.equal(service.metadataCache.size, 1);
+
+  const meta2 = service.getGitHubMetadata({ repoPath: process.cwd() });
+  assert.deepEqual(meta1, meta2);
+});

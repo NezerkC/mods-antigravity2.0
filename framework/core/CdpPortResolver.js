@@ -34,14 +34,25 @@ export class CdpPortResolver {
       return false;
     }
 
+    const now = Date.now();
+    if (this._probeCache && this._probeCache.port === port && (now - this._probeCache.timestamp < 1000)) {
+      return this._probeCache.result;
+    }
+
     try {
       const url = `http://${this.host}:${port}/json/version`;
       const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-      if (!res.ok) return false;
+      if (!res.ok) {
+        this._probeCache = { port, result: false, timestamp: now };
+        return false;
+      }
 
       const data = await res.json();
-      return typeof data === 'object' && data !== null && typeof data.webSocketDebuggerUrl === 'string';
+      const result = typeof data === 'object' && data !== null && typeof data.webSocketDebuggerUrl === 'string';
+      this._probeCache = { port, result, timestamp: now };
+      return result;
     } catch {
+      this._probeCache = { port, result: false, timestamp: now };
       return false;
     }
   }
