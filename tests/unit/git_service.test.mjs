@@ -91,6 +91,9 @@ test('GitService - getGitLog reads live repository commits', () => {
   assert.ok(head.subject);
   assert.ok(Array.isArray(head.files));
   assert.ok(typeof head.lane === 'number');
+  assert.ok(typeof head.syncStatus === 'string');
+  assert.ok(typeof head.isUnpushed === 'boolean');
+  assert.ok(typeof head.isUnpulled === 'boolean');
 });
 
 test('GitService - getGitStatus reads current repository status', () => {
@@ -100,6 +103,7 @@ test('GitService - getGitStatus reads current repository status', () => {
   const status = service.getGitStatus({ repoPath });
   assert.ok(status.isRepo);
   assert.ok(status.branch);
+  assert.ok('upstream' in status);
   assert.ok(typeof status.isClean === 'boolean');
   assert.ok(Array.isArray(status.changedFiles));
 });
@@ -120,5 +124,6 @@ test('GitService - getBranches categorizes local and remote branches', () => {
   assert.ok(branches.local.length > 0);
   const current = branches.local.find(b => b.isCurrent);
   assert.ok(current);
-  assert.ok(current.name && typeof current.name === 'string');
+  assert.equal(typeof current.name, 'string');
+  assert.ok(current.name.length > 0);
 });

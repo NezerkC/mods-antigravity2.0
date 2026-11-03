@@ -19,7 +19,9 @@ export function renderSvgIcon(name, size = 12, color = 'currentColor') {
  * Builds the HTML for the rich context breakdown popover.
  */
 export function renderPopoverHtml(metric) {
-  const icon = renderSvgIcon;
+  const icon = typeof renderSvgIcon === 'function'
+    ? renderSvgIcon
+    : (typeof window !== 'undefined' && typeof window.__renderSvgIcon === 'function' ? window.__renderSvgIcon : () => '');
   const FONT_SANS = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
   const FONT_MONO = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
 

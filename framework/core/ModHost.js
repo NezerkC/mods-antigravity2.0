@@ -60,23 +60,54 @@ export class ModHost {
    * @returns {Promise<string>}
    */
   async resolveRepoPath(cdpClient, explicitTranscriptPath) {
-    // 1. Try resolving via live CDP renderer tab query parameter or open file
+    // 1. Try resolving via live CDP renderer active tab, editor resource, or query parameter
     if (cdpClient) {
       try {
         const res = await cdpClient.evaluate(`
           (() => {
+            // 1. Check active editor tab or resource in VS Code / Antigravity DOM
+            const activeTab = document.querySelector('.tab.active, [aria-selected="true"].tab, .tab-label[aria-selected="true"]');
+            if (activeTab) {
+              const resource = activeTab.getAttribute('data-resource-name') ||
+                               activeTab.getAttribute('title') ||
+                               activeTab.getAttribute('aria-label');
+              if (resource) return resource;
+            }
+            // 2. Query editor tab query parameter
             const search = window.location.search || '';
             const match = search.match(/tab=file__file%3A%2F%2F%2F([^&]+)/i);
             if (match && match[1]) {
               return decodeURIComponent(match[1]);
             }
+            // 3. Document title fallback
+            if (document.title) {
+              return document.title;
+            }
             return null;
           })()
         `);
-        if (res && res.value) {
-          let currentDir = path.dirname(res.value);
+        if (res && res.value && typeof res.value === 'string') {
+          // Normalize clean path candidate
+          let candidate = res.value.trim();
+          if (candidate.startsWith('file:///')) {
+            candidate = decodeURIComponent(candidate.replace('file:///', ''));
+          }
+          if (candidate.includes(' — ')) {
+            const parts = candidate.split(' — ');
+            candidate = parts[parts.length - 1].trim();
+          } else if (candidate.includes(' - ')) {
+            const parts = candidate.split(' - ');
+            candidate = parts[0].trim();
+          }
+
+          let currentDir = fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()
+            ? candidate
+            : path.dirname(candidate);
+
           while (currentDir && currentDir !== path.dirname(currentDir)) {
             if (fs.existsSync(path.join(currentDir, '.git'))) {
+              if (this.syncServer) this.syncServer.repoPath = currentDir;
+              if (this.vcsOrchestrator) this.vcsOrchestrator.repoPath = currentDir;
               return currentDir;
             }
             currentDir = path.dirname(currentDir);
