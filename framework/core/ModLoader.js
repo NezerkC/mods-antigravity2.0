@@ -552,16 +552,22 @@ export class ModLoader {
         window.__renderReticleSvg = renderReticleSvg;
 
         window.__applyChatboxModsCompact = function() {
-          const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
+          const compactSetting = localStorage.getItem('__antigravity_compact_chatbox_mods');
           document.querySelectorAll('.antigravity-tachometer-badge').forEach(tach => {
             const footer = tach.closest('[class*="input-footer"]') || tach.closest('.flex.items-center.justify-between') || tach.parentElement;
-            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
-            tach.classList.toggle('compact', isForcedCompact || isNarrow);
+            const isNarrow = (footer && footer.offsetWidth < 380) || window.innerWidth < 800;
+            const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
+            if (tach.classList.contains('compact') !== shouldCompact) {
+              tach.classList.toggle('compact', shouldCompact);
+            }
           });
           document.querySelectorAll('.antigravity-agent-badge').forEach(agent => {
             const footer = agent.closest('[class*="input-footer"]') || agent.closest('.flex.items-center.justify-between') || agent.parentElement;
-            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
-            agent.classList.toggle('compact', isForcedCompact || isNarrow);
+            const isNarrow = (footer && footer.offsetWidth < 380) || window.innerWidth < 800;
+            const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
+            if (agent.classList.contains('compact') !== shouldCompact) {
+              agent.classList.toggle('compact', shouldCompact);
+            }
           });
         };
 
@@ -1754,7 +1760,7 @@ export class ModLoader {
             }
           }
 
-          // Restore saved agent selection across mounted badges (scoped per chat)
+          // Restore saved agent selection and caveman focus across mounted badges
           document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {
             const cId = window.__resolveCascadeId(badge);
             const agentToApply = window.__resolveAgentForCascade(cId);
@@ -1762,27 +1768,43 @@ export class ModLoader {
               badge.__lastCascadeId = cId;
               window.__applyAgentToBadge(badge, agentToApply);
             }
+            // Sync exterior reticle trigger in the same group immediately upon mount
+            const group = badge.closest('.antigravity-agent-selector-group');
+            const reticleBtn = group ? group.querySelector('.antigravity-caveman-reticle-trigger') : null;
+            if (reticleBtn) {
+              const isFocus = window.__resolveCavemanForCascade ? window.__resolveCavemanForCascade(cId) : false;
+              const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
+              const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
+              reticleBtn.classList.toggle('is-focus', isFocus);
+              reticleBtn.setAttribute('title', isFocus ? focusTitle : explicativoTitle);
+              const box = reticleBtn.querySelector('.caveman-reticle-box');
+              if (box && window.__renderReticleSvg) {
+                box.innerHTML = window.__renderReticleSvg(isFocus, 14);
+              }
+            }
           });
 
           // Apply current telemetry
           window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})});
 
-          // Observe all slot containers for responsive auto-collapse
+          // Observe only stable parent containers for responsive auto-collapse (avoid layout thrashing)
           document.querySelectorAll('.antigravity-slot-container').forEach(slot => {
-            if (window.__antigravityResizeObserver) {
-              window.__antigravityResizeObserver.observe(slot);
-              if (slot.parentElement) {
-                window.__antigravityResizeObserver.observe(slot.parentElement);
-              }
+            const footer = slot.closest('[class*="input-footer"]') || slot.closest('.flex.items-center.justify-between') || slot.parentElement;
+            if (window.__antigravityResizeObserver && footer) {
+              window.__antigravityResizeObserver.observe(footer);
             }
-            const footer = slot.closest('[class*="input-footer"]') || slot.closest('.flex.items-center.justify-between') || slot.parentElement || slot;
-            const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
-            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
-            const shouldCompact = isForcedCompact || isNarrow;
+            const compactSetting = localStorage.getItem('__antigravity_compact_chatbox_mods');
+            const width = footer ? footer.offsetWidth : window.innerWidth;
+            const isNarrow = width < 380 || window.innerWidth < 800;
+            const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
             const tach = slot.querySelector('.antigravity-tachometer-badge');
-            if (tach) tach.classList.toggle('compact', shouldCompact);
+            if (tach && tach.classList.contains('compact') !== shouldCompact) {
+              tach.classList.toggle('compact', shouldCompact);
+            }
             const agent = slot.querySelector('.antigravity-agent-badge');
-            if (agent) agent.classList.toggle('compact', shouldCompact);
+            if (agent && agent.classList.contains('compact') !== shouldCompact) {
+              agent.classList.toggle('compact', shouldCompact);
+            }
           });
         }
 
@@ -1795,20 +1817,24 @@ export class ModLoader {
         window.__antigravityResizeObserver = new ResizeObserver((entries) => {
           for (const entry of entries) {
             const container = entry.target;
-            const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
+            const compactSetting = localStorage.getItem('__antigravity_compact_chatbox_mods');
             const width = (entry.contentRect && entry.contentRect.width > 0)
               ? entry.contentRect.width
-              : ((container.closest('[class*="input-footer"]') || container.parentElement || container).getBoundingClientRect?.().width || 500);
-            const isNarrow = width < 440 || window.innerWidth < 960;
-            const shouldCompact = isForcedCompact || isNarrow;
+              : (container.getBoundingClientRect?.().width || 500);
+
+            // Hysteresis threshold to prevent vibration: 380px collapse, 430px expand
+            const isCurrentlyCompact = Boolean(container.querySelector('.antigravity-tachometer-badge.compact'));
+            const threshold = isCurrentlyCompact ? 430 : 380;
+            const isNarrow = width < threshold || window.innerWidth < 800;
+            const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
 
             const tach = container.querySelector('.antigravity-tachometer-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-tachometer-badge') : null);
-            if (tach) {
+            if (tach && tach.classList.contains('compact') !== shouldCompact) {
               tach.classList.toggle('compact', shouldCompact);
             }
 
             const agent = container.querySelector('.antigravity-agent-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-agent-badge') : null);
-            if (agent) {
+            if (agent && agent.classList.contains('compact') !== shouldCompact) {
               agent.classList.toggle('compact', shouldCompact);
             }
           }

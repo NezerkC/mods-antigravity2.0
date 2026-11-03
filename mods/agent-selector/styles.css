@@ -676,7 +676,7 @@
   color: #94a3b8 !important;
   cursor: pointer !important;
   outline: none !important;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease !important;
   position: relative !important;
   flex-shrink: 0 !important;
 }

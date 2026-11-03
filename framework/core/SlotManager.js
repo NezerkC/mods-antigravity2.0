@@ -29,6 +29,10 @@ export class SlotManager {
       ['aux-pane-tab', {
         selector: 'button[data-testid="aux-pane-new-tab-button"]',
         strategy: 'before'
+      }],
+      ['chat-input-actions', {
+        selector: 'button[aria-label="Record voice memo"]',
+        strategy: 'before'
       }]
     ]);
   }

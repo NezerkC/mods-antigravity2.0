@@ -72,7 +72,18 @@ async function build() {
     .replace(/const __dirname = .*?;/, '')
     .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(gitGraphCss)};`);
 
-  // 6. Assemble Standalone Bundle
+    // 6. Read Voice Assistant Mod sources
+  const voiceButtonHtml = cleanModuleCode('mods/voice-assistant/components/VoiceButtonHtml.js');
+  const textSanitizer = cleanModuleCode('mods/voice-assistant/services/TextSanitizer.js');
+  const actionNarratorService = cleanModuleCode('mods/voice-assistant/services/ActionNarratorService.js');
+  const voiceAssistantCss = fs.readFileSync(path.resolve('mods/voice-assistant/styles.css'), 'utf-8');
+
+  const voiceAssistantIndex = cleanModuleCode('mods/voice-assistant/index.js')
+    .replace(/const __filename = .*?;/, '')
+    .replace(/const __dirname = .*?;/, '')
+    .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(voiceAssistantCss)};`);
+
+  // 7. Assemble Standalone Bundle
   const bundle = `// Antigravity Mod Framework Runtime Host (Bundle)
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -139,6 +150,15 @@ ${gitGraphPanelHtml}
 
 ${gitGraphIndex}
 
+// ===================== Voice Assistant Mod =====================
+${textSanitizer}
+
+${actionNarratorService}
+
+${voiceButtonHtml}
+
+${voiceAssistantIndex}
+
 // ======================= Entrypoint Execution =======================
 async function main() {
   try {
@@ -158,6 +178,7 @@ async function main() {
     };
 
     host.registerMod(new GitGraphMod({ initialContext: initialVcs }));
+    host.registerMod(new VoiceAssistantMod());
     await host.dispatch();
   } catch (err) {
     // Fail silently in background hook context
