@@ -1,0 +1,8 @@
+{
+  "id": "voice-assistant",
+  "name": "Voice Assistant",
+  "version": "1.0.0",
+  "description": "Voice Assistant with Text-to-Speech (TTS) live activity narrator and chat reader",
+  "slot": "chat-input-actions",
+  "priority": 40
+}

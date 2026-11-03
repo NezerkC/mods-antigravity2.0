@@ -17,6 +17,11 @@ test('SlotManager - provides default slot definitions', () => {
   assert.ok(auxPaneSlot);
   assert.equal(auxPaneSlot.selector, 'button[data-testid="aux-pane-new-tab-button"]');
   assert.equal(auxPaneSlot.strategy, 'before');
+
+  const chatInputSlot = manager.getSlot('chat-input-actions');
+  assert.ok(chatInputSlot);
+  assert.equal(chatInputSlot.selector, 'button[aria-label="Record voice memo"]');
+  assert.equal(chatInputSlot.strategy, 'before');
 });
 
 test('SlotManager - registers custom slot', () => {
@@ -41,6 +46,7 @@ test('SlotManager - generates slot container element id', () => {
   const manager = new SlotManager();
   assert.equal(manager.getContainerId('header-actions'), 'antigravity-slot-header-actions');
   assert.equal(manager.getContainerId('aux-pane-tab'), 'antigravity-slot-aux-pane-tab');
+  assert.equal(manager.getContainerId('chat-input-actions'), 'antigravity-slot-chat-input-actions');
 });
 
 test('SlotManager - generates mounting snippet for slot and mod targeting all matching conversation anchors', () => {

@@ -325,6 +325,10 @@ class SlotManager {
       ['aux-pane-tab', {
         selector: 'button[data-testid="aux-pane-new-tab-button"]',
         strategy: 'before'
+      }],
+      ['chat-input-actions', {
+        selector: 'button[aria-label="Record voice memo"]',
+        strategy: 'before'
       }]
     ]);
   }
@@ -7294,6 +7298,288 @@ class GitGraphMod extends AntigravityMod {
 }
 
 
+// ===================== Voice Assistant Mod =====================
+/**
+ * Sanitizes Markdown, code blocks, URLs, and developer artifacts into
+ * clean, natural conversational text suitable for Text-to-Speech (TTS) synthesis.
+ */
+class TextSanitizer {
+  /**
+   * Cleans text for speech synthesis.
+   * @param {string} [rawText='']
+   * @param {number} [maxChars=800]
+   * @returns {string}
+   */
+  static sanitizeForSpeech(rawText = '', maxChars = 800) {
+    if (!rawText || typeof rawText !== 'string') {
+      return '';
+    }
+
+    let text = rawText;
+
+    // 1. Remove fenced code blocks (e.g., ```js ... ```)
+    text = text.replace(/```[\s\S]*?```/g, ' [bloque de código omitido] ');
+
+    // 2. Remove markdown images: ![alt](url)
+    text = text.replace(/!\[.*?\]\(.*?\)/g, '');
+
+    // 3. Convert markdown links: [label](url) -> label
+    text = text.replace(/\[(.*?)\]\(.*?\)/g, '$1');
+
+    // 4. Remove standalone URLs (http/https/ftp)
+    text = text.replace(/https?:\/\/\S+/gi, '');
+
+    // 5. Remove HTML tags
+    text = text.replace(/<[^>]+>/g, '');
+
+    // 6. Convert inline code `foo` -> foo
+    text = text.replace(/`([^`]+)`/g, '$1');
+
+    // 7. Strip markdown header markers, blockquotes, bullets, horizontal rules
+    text = text.replace(/^\s*#{1,6}\s+/gm, '');
+    text = text.replace(/^\s*>\s*/gm, '');
+    text = text.replace(/^\s*[-*+]\s+/gm, '');
+    text = text.replace(/^\s*\d+\.\s+/gm, '');
+    text = text.replace(/^---$/gm, '');
+
+    // 8. Strip bold/italic/strike markers (**foo**, *foo*, ~~foo~~)
+    text = text.replace(/[*_~]{1,3}/g, '');
+
+    // 9. Normalize whitespace and newlines
+    text = text.replace(/\s+/g, ' ').trim();
+
+    // 10. Truncate safely if too long
+    if (text.length > maxChars) {
+      text = text.slice(0, maxChars).trim() + '...';
+    }
+
+    return text;
+  }
+}
+
+
+/**
+ * Translates raw Antigravity agent steps, tool executions, thoughts, and
+ * subagent interactions into concise, natural Spanish voice cues.
+ */
+class ActionNarratorService {
+  /**
+   * Translates a raw action, step title, or event description into a spoken Spanish phrase.
+   * @param {string} [action='']
+   * @param {Object} [meta={}]
+   * @param {string} [meta.type] Event type ('thought'|'tool'|'subagent_dispatch'|'subagent_return')
+   * @param {string} [meta.role] Subagent role if applicable
+   * @returns {string|null} The phrase to speak, or null if ignored.
+   */
+  static translateAction(action = '', meta = {}) {
+    const raw = String(action || '').trim();
+
+    // 1. Explicit Subagent Events
+    if (meta.type === 'subagent_return' || /subagent.*(return|completed|responded|finish)/i.test(raw)) {
+      return 'Recepcionando respuestas de subagentes';
+    }
+
+    if (meta.type === 'subagent_dispatch' || /invoke_subagent|launching subagent|delegat/i.test(raw)) {
+      const role = meta.role || ActionNarratorService.extractRole(raw);
+      return role ? `Delegando tarea a subagente ${role}` : 'Delegando tarea a subagente';
+    }
+
+    if (!raw) {
+      return null;
+    }
+
+    // 2. Working Thought Steps
+    if (/^thought for \d+s/i.test(raw) || /^thinking/i.test(raw)) {
+      return 'Pensando...';
+    }
+
+    // 3. Multi-action summaries
+    if (/explored files,\s*ran commands/i.test(raw)) {
+      return 'Explorando archivos y ejecutando comandos...';
+    }
+
+    // 4. File Operations
+    const readMatch = raw.match(/read (?:file\s+)?([^\s>]+)/i);
+    if (readMatch) {
+      const fileName = ActionNarratorService.extractBasename(readMatch[1]);
+      return fileName ? `Leyendo archivo ${fileName}...` : 'Leyendo archivo...';
+    }
+
+    const editMatch = raw.match(/(?:edit|modify) (?:file\s+)?([^\s>]+)/i);
+    if (editMatch) {
+      const fileName = ActionNarratorService.extractBasename(editMatch[1]);
+      return fileName ? `Modificando archivo ${fileName}...` : 'Modificando archivo...';
+    }
+
+    const writeMatch = raw.match(/(?:write|create) (?:file\s+)?([^\s>]+)/i);
+    if (writeMatch) {
+      const fileName = ActionNarratorService.extractBasename(writeMatch[1]);
+      return fileName ? `Creando archivo ${fileName}...` : 'Creando archivo...';
+    }
+
+    // 5. Command Operations
+    if (/^ran check git status/i.test(raw)) {
+      return 'Verificando estado de Git...';
+    }
+
+    if (/^ran list project (files|directories)/i.test(raw)) {
+      return 'Listando archivos del proyecto...';
+    }
+
+    if (/^ran inspect/i.test(raw)) {
+      return 'Inspeccionando archivos del sistema...';
+    }
+
+    if (/^ran commands/i.test(raw) || /^ran /i.test(raw) || /^run command/i.test(raw)) {
+      return 'Ejecutando comandos...';
+    }
+
+    // 6. Generic Analysis
+    if (/^analyzed /i.test(raw)) {
+      return 'Analizando contexto...';
+    }
+
+    return null;
+  }
+
+  /**
+   * Extracts clean filename from path or string.
+   * @param {string} [filePath='']
+   * @returns {string}
+   */
+  static extractBasename(filePath = '') {
+    if (!filePath) return '';
+    const clean = filePath.replace(/[`'"]/g, '').split(/[/\\]/).pop();
+    return clean || '';
+  }
+
+  /**
+   * Attempts to extract a subagent role name from a prompt or string.
+   * @param {string} [text='']
+   * @returns {string}
+   */
+  static extractRole(text = '') {
+    const match = text.match(/(?:to|subagent|role)\s+["']?([A-Za-z0-9_-]+)["']?/i);
+    return match ? match[1] : '';
+  }
+}
+
+
+/**
+ * Renders the HTML markup for the Chatbox Voice Assistant action button.
+ * Follows Antigravity's native chatbox action icon button design tokens.
+ *
+ * @param {Object} [options]
+ * @param {'idle'|'speaking'|'muted'} [options.state='idle']
+ * @param {boolean} [options.enabled=true]
+ * @returns {string}
+ */
+function renderVoiceButtonHtml(options = {}) {
+  const state = options.state || 'idle';
+  const isMuted = options.enabled === false;
+  const stateClass = isMuted ? 'state-muted' : (state === 'speaking' ? 'state-speaking' : 'state-idle');
+
+  // Speaker icon with dynamic soundwave paths
+  const iconSvg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 text-secondary-foreground voice-icon ${stateClass}">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+      <path class="wave wave-1" d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+      <path class="wave wave-2" d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+      ${isMuted ? '<line x1="23" y1="1" x2="1" y2="23" class="mute-slash"></line>' : ''}
+    </svg>
+  `.trim();
+
+  return `
+    <div id="antigravity-voice-assistant-wrapper" class="antigravity-voice-assistant-wrapper">
+      <button
+        type="button"
+        id="antigravity-voice-assistant-btn"
+        class="antigravity-voice-assistant-btn flex items-center rounded-full transition-colors cursor-pointer w-7 h-7 justify-center p-1.5 bg-transparent hover:bg-secondary ${stateClass}"
+        aria-label="Asistente de Voz (TTS)"
+        title="Asistente de Voz (TTS) - Click para activar o pausar narración"
+        data-mod-action="toggle-voice"
+        data-voice-state="${state}"
+        tabindex="0"
+      >
+        ${iconSvg}
+      </button>
+    </div>
+  `.trim();
+}
+
+
+
+
+
+
+
+
+
+
+
+
+{ TextSanitizer, ActionNarratorService };
+
+class VoiceAssistantMod extends AntigravityMod {
+  constructor(options = {}) {
+    super({
+      id: 'voice-assistant',
+      name: 'Voice Assistant',
+      version: '1.0.0',
+      slot: 'chat-input-actions',
+      priority: 40
+    });
+
+    this.narratorService = options.narratorService || ActionNarratorService;
+    this.sanitizer = options.sanitizer || TextSanitizer;
+
+    this.cachedCss = "/* Voice Assistant Mod Styles */\n.antigravity-slot-chat-input-actions {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  margin-right: 2px;\n}\n\n.antigravity-voice-assistant-wrapper {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  position: relative;\n}\n\n.antigravity-voice-assistant-btn {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  width: 1.75rem;\n  height: 1.75rem;\n  padding: 0.375rem;\n  border-radius: 9999px;\n  background: transparent;\n  color: var(--secondary-foreground, #ececec);\n  border: none;\n  cursor: pointer;\n  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;\n  user-select: none;\n  outline: none;\n}\n\n.antigravity-voice-assistant-btn:hover {\n  background-color: var(--secondary, rgba(255, 255, 255, 0.08));\n}\n\n.antigravity-voice-assistant-btn:focus-visible {\n  outline: 2px solid var(--ring, #3b82f6);\n  outline-offset: 1px;\n}\n\n.antigravity-voice-assistant-btn.state-muted {\n  opacity: 0.45;\n}\n\n.antigravity-voice-assistant-btn.state-speaking {\n  color: #38bdf8;\n  background-color: rgba(56, 189, 248, 0.12);\n}\n\n.antigravity-voice-assistant-btn.state-speaking .wave-1 {\n  animation: voiceWavePulse 1.2s infinite ease-in-out;\n}\n\n.antigravity-voice-assistant-btn.state-speaking .wave-2 {\n  animation: voiceWavePulse 1.2s infinite ease-in-out 0.3s;\n}\n\n@keyframes voiceWavePulse {\n  0%, 100% {\n    opacity: 0.3;\n    transform: scale(0.95);\n    transform-origin: center;\n  }\n  50% {\n    opacity: 1;\n    transform: scale(1.1);\n    transform-origin: center;\n  }\n}\n";
+  }
+
+  get id() {
+    return this.manifest.id;
+  }
+
+  get name() {
+    return this.manifest.name;
+  }
+
+  get slot() {
+    return this.manifest.slot;
+  }
+
+  get priority() {
+    return this.manifest.priority;
+  }
+
+  /**
+   * Renders the voice assistant button markup and scoped stylesheet.
+   * @param {Object} [context={}]
+   * @returns {{ html: string, css: string }}
+   */
+  render(context = {}) {
+    const state = context.voiceState || 'idle';
+    const enabled = context.voiceEnabled !== false;
+
+    return {
+      html: renderVoiceButtonHtml({ state, enabled }),
+      css: this.cachedCss
+    };
+  }
+
+  /**
+   * Optional update handler called on state transitions.
+   * @param {Object} context
+   */
+  onUpdate(context = {}) {}
+
+  /**
+   * Cleanup handler.
+   */
+  onDestroy() {}
+}
+
+
 // ======================= Entrypoint Execution =======================
 async function main() {
   try {
@@ -7313,6 +7599,7 @@ async function main() {
     };
 
     host.registerMod(new GitGraphMod({ initialContext: initialVcs }));
+    host.registerMod(new VoiceAssistantMod());
     await host.dispatch();
   } catch (err) {
     // Fail silently in background hook context
