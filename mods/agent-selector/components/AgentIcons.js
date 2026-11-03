@@ -58,3 +58,37 @@ export function renderAgentSvg(agentId, size = 16, strokeWidth = 2, extraClass =
     </svg>
   `.trim();
 }
+
+/**
+ * Renders the circular reticle target SVG representing Focus vs Explicativo.
+ * Focus (Concentracion): Concentric rings converging into a solid core with crosshair ticks.
+ * Explicativo (Dispersion): Concentric open rings radiating outwards with an open center.
+ * @param {boolean} isFocus
+ * @param {number} [size=14]
+ * @param {number} [strokeWidth=1.4]
+ * @param {string} [extraClass='']
+ * @returns {string} SVG markup
+ */
+export function renderReticleSvg(isFocus = false, size = 14, strokeWidth = 1.4, extraClass = '') {
+  const className = `reticle-icon ${isFocus ? 'reticle-focus' : 'reticle-explicativo'} ${extraClass}`.trim();
+  if (isFocus) {
+    return `
+      <svg class="${className}" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" style="display: inline-block; vertical-align: middle; flex-shrink: 0;">
+        <circle cx="12" cy="12" r="9" stroke-opacity="0.35" stroke-dasharray="2 2"/>
+        <circle cx="12" cy="12" r="5.5" stroke-opacity="0.8"/>
+        <circle cx="12" cy="12" r="2" fill="currentColor"/>
+        <line x1="12" y1="1" x2="12" y2="4"/>
+        <line x1="12" y1="20" x2="12" y2="23"/>
+        <line x1="1" y1="12" x2="4" y2="12"/>
+        <line x1="20" y1="12" x2="23" y2="12"/>
+      </svg>
+    `.trim();
+  }
+  return `
+    <svg class="${className}" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" style="display: inline-block; vertical-align: middle; flex-shrink: 0;">
+      <circle cx="12" cy="12" r="4" stroke-opacity="0.6"/>
+      <circle cx="12" cy="12" r="7.5" stroke-opacity="0.4" stroke-dasharray="3 3"/>
+      <circle cx="12" cy="12" r="10.5" stroke-opacity="0.25" stroke-dasharray="1 3"/>
+    </svg>
+  `.trim();
+}

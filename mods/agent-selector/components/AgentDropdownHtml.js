@@ -477,6 +477,30 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
         <button class="agent-close-btn" id="antigravity-agent-close" title="Cerrar">✕</button>
       </div>
 
+      <!-- 1.1 CAVEMAN MODIFIER CARD (FOCUS / EXPLICATIVO) -->
+      <div class="agent-card agent-modifier-card" id="antigravity-caveman-card">
+        <div class="agent-modifier-info">
+          <div class="agent-modifier-icon">
+            <svg class="reticle-card-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="12" cy="12" r="9" stroke-opacity="0.35" stroke-dasharray="2 2"/>
+              <circle cx="12" cy="12" r="5.5" stroke-opacity="0.8"/>
+              <circle cx="12" cy="12" r="2" fill="currentColor"/>
+            </svg>
+          </div>
+          <div class="agent-modifier-text">
+            <div class="agent-modifier-title-row">
+              <span class="agent-modifier-title">Modo Focus (Caveman)</span>
+              <span class="agent-modifier-pill" id="antigravity-caveman-pill">EXPLICATIVO</span>
+            </div>
+            <div class="agent-modifier-subtitle">Alternar entre Focus y Explicativo</div>
+          </div>
+        </div>
+        <label class="agent-modifier-switch">
+          <input type="checkbox" id="antigravity-caveman-toggle" onchange="window.__toggleCavemanMode(this.checked)">
+          <span class="agent-modifier-slider"></span>
+        </label>
+      </div>
+
       <!-- 2. SECCIÓN PRINCIPAL: 3 CARDS DIRECTAS CON PIN -->
       <div class="agent-primary-section agent-cards-list">
         ${defaultCardHtml}

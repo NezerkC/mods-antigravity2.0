@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AntigravityMod } from '../../framework/sdk/AntigravityMod.js';
 import { AgentDiscoveryService } from '../../framework/services/AgentDiscoveryService.js';
-import { renderAgentSvg } from './components/AgentIcons.js';
+import { renderAgentSvg, renderReticleSvg } from './components/AgentIcons.js';
 import { renderAgentDropdownHtml, getAgentColor } from './components/AgentDropdownHtml.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -41,26 +41,41 @@ export class AgentSelectorMod extends AntigravityMod {
     const iconSvg = `<span id="antigravity-active-agent-icon" class="antigravity-active-agent-icon" style="display: inline-flex; align-items: center; pointer-events: none;">${renderAgentSvg(initialAgentId, 14)}</span>`;
     const discoveredAgents = context.dynamicAgents || this.discoveryService.discoverAgents();
     const dropdownHtml = renderAgentDropdownHtml(initialAgentId, discoveredAgents);
+    const initialReticleSvg = renderReticleSvg(false, 14);
 
     const html = `
-      <div 
-        id="antigravity-agent-badge" 
-        class="antigravity-agent-badge" 
-        title="Modo Activo: ${initialAgentName}" 
-        style="border-color: ${initialColor}55; box-shadow: 0 0 8px ${initialColor}22;"
-        tabindex="0"
-      >
-        <span 
-          id="antigravity-active-agent-dot" 
-          class="agent-badge-dot antigravity-active-agent-dot" 
-          style="background: ${initialColor}; box-shadow: 0 0 6px ${initialColor}; pointer-events: none;"
-        ></span>
-        ${iconSvg}
-        <span id="antigravity-active-agent-name" class="agent-label antigravity-active-agent-name" style="pointer-events: none;">${initialAgentName}</span>
-        <span class="agent-caret" style="pointer-events: none;">▼</span>
-        <template class="antigravity-agent-dropdown-template">
-          ${dropdownHtml}
-        </template>
+      <div class="antigravity-agent-selector-group" style="display: inline-flex; align-items: center; gap: 5px;">
+        <div 
+          id="antigravity-agent-badge" 
+          class="antigravity-agent-badge" 
+          title="Modo Activo: ${initialAgentName}" 
+          style="border-color: ${initialColor}55; box-shadow: 0 0 8px ${initialColor}22;"
+          tabindex="0"
+        >
+          <span 
+            id="antigravity-active-agent-dot" 
+            class="agent-badge-dot antigravity-active-agent-dot" 
+            style="background: ${initialColor}; box-shadow: 0 0 6px ${initialColor}; pointer-events: none;"
+          ></span>
+          ${iconSvg}
+          <span id="antigravity-active-agent-name" class="agent-label antigravity-active-agent-name" style="pointer-events: none;">${initialAgentName}</span>
+          <span class="agent-caret" style="pointer-events: none;">▼</span>
+          <template class="antigravity-agent-dropdown-template">
+            ${dropdownHtml}
+          </template>
+        </div>
+
+        <button
+          id="antigravity-caveman-reticle-trigger"
+          class="antigravity-caveman-reticle-trigger"
+          type="button"
+          title="Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus"
+          tabindex="0"
+        >
+          <span id="antigravity-caveman-reticle-box" class="caveman-reticle-box">
+            ${initialReticleSvg}
+          </span>
+        </button>
       </div>
     `.trim();
 

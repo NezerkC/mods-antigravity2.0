@@ -61,24 +61,69 @@ export function renderGitGraphPanelHtml(context = {}) {
   }
 
   const svgGraph = renderGitGraphSvg(commits, { rowHeight: 26, fileRowHeight: 22, laneWidth: 14, startX: 14 });
-  const prCiHtml = renderPrCiCardHtml(pullRequest, status, github);
+  const prCiHtml = renderPrCiCardHtml(pullRequest, status, github, commits);
 
-  // Generate branches drawer list items
-  const localBranchesHtml = localBranches.map(b => {
+  // Group local branches by similarity cluster with numeric pending sync badges
+  const clusterLabels = {
+    trunk: 'Trunk Principal',
+    vcs: 'VCS & Git Graph',
+    framework: 'Core Framework',
+    'ui-mods': 'UI Mods',
+    fixes: 'Fixes & Hotfixes',
+    'ci-governance': 'CI & Gobernanza',
+    docs: 'Documentación',
+    features: 'Features'
+  };
+  const clusterOrder = ['trunk', 'vcs', 'framework', 'ui-mods', 'fixes', 'ci-governance', 'docs', 'features'];
+  const groupedLocal = {};
+
+  for (const b of localBranches) {
+    const key = b.cluster || ((b.name === 'main' || b.name === 'master') ? 'trunk' : 'features');
+    if (!groupedLocal[key]) groupedLocal[key] = [];
+    groupedLocal[key].push(b);
+  }
+
+  const orderedClusterKeys = [
+    ...clusterOrder.filter(k => groupedLocal[k] && groupedLocal[k].length > 0),
+    ...Object.keys(groupedLocal).filter(k => !clusterOrder.includes(k) && groupedLocal[k].length > 0)
+  ];
+  const showClusterHeaders = orderedClusterKeys.length > 1 || localBranches.some(b => !!b.cluster);
+
+  const renderBranchRow = (b) => {
     const isCurrent = b.isCurrent || b.name === status.branch;
+    const ahead = b.ahead || 0;
+    const behind = b.behind || 0;
+    const dirtyFiles = b.dirtyFiles || 0;
+    const isMerged = !!b.isMerged && !b.isTrunk && b.name !== 'main' && b.name !== 'master';
+
     return `
-      <div class="git-branch-drawer-row ${isCurrent ? 'is-active-branch' : ''}" data-branch="${escapeGitHtml(b.name)}" data-type="local">
+      <div class="git-branch-drawer-row ${isCurrent ? 'is-active-branch' : ''}" data-branch="${escapeGitHtml(b.name)}" data-type="local" title="${isCurrent ? 'Rama activa' : `Clic para cambiar a ${escapeGitHtml(b.name)}`}">
         <span class="git-icon-dot">${isCurrent ? '●' : '○'}</span>
         <span class="git-branch-drawer-name">${escapeGitHtml(b.name)}</span>
+        <div class="git-branch-sync-badges">
+          ${dirtyFiles > 0 ? `<span class="git-branch-sync-badge badge-dirty" title="${dirtyFiles} archivo(s) sin commit">●${dirtyFiles}</span>` : ''}
+          ${ahead > 0 ? `<button class="git-branch-sync-badge badge-ahead" data-vcs-action="push" data-branch="${escapeGitHtml(b.name)}" title="Push: ${ahead} commit(s) pendientes">↑${ahead}</button>` : ''}
+          ${behind > 0 ? `<button class="git-branch-sync-badge badge-behind" data-vcs-action="pull" data-branch="${escapeGitHtml(b.name)}" title="Pull: ${behind} commit(s) pendientes">↓${behind}</button>` : ''}
+          ${isMerged ? '<span class="git-branch-sync-badge badge-merged" title="Integrada en main">✔</span>' : ''}
+        </div>
         ${b.hash ? `<span class="git-branch-drawer-hash">${escapeGitHtml(b.hash)}</span>` : ''}
         ${isCurrent ? '<span class="git-branch-current-badge">HEAD</span>' : ''}
       </div>
     `;
+  };
+
+  const localBranchesHtml = orderedClusterKeys.map(key => {
+    const items = groupedLocal[key] || [];
+    const header = showClusterHeaders
+      ? `<div class="git-branch-cluster-header">${escapeGitHtml(clusterLabels[key] || key)} (${items.length})</div>`
+      : '';
+    return `${header}${items.map(renderBranchRow).join('')}`;
   }).join('');
 
   const remoteBranchesHtml = remoteBranches.map(b => {
+    const checkoutName = b.shortName || String(b.name || '').replace(/^origin\//, '');
     return `
-      <div class="git-branch-drawer-row is-remote-branch" data-branch="${escapeGitHtml(b.name)}" data-type="remote">
+      <div class="git-branch-drawer-row is-remote-branch" data-branch="${escapeGitHtml(checkoutName)}" data-remote-ref="${escapeGitHtml(b.name)}" data-type="remote" title="Clic para hacer checkout de ${escapeGitHtml(checkoutName)}">
         <span class="git-icon-cloud">☁</span>
         <span class="git-branch-drawer-name">${escapeGitHtml(b.shortName || b.name)}</span>
         ${b.hash ? `<span class="git-branch-drawer-hash">${escapeGitHtml(b.hash)}</span>` : ''}
@@ -86,14 +131,16 @@ export function renderGitGraphPanelHtml(context = {}) {
     `;
   }).join('');
 
-  // Generate commit list items
+  // Generate commit list items (unified accordion on row click, no redundant document pills)
   const commitRowsHtml = commits.map((c, idx) => {
     const isSelected = idx === 0;
     const isExpanded = !!c.expanded;
     const files = Array.isArray(c.files) ? c.files : [];
     const hasOrigin = (c.refs || []).some(r => r.includes('origin/'));
-    const commitType = hasOrigin ? 'remote' : 'local';
-    const isUnpushed = c.syncStatus === 'ahead' || !!c.isUnpushed;
+    const commitType = (c.pushed !== undefined)
+      ? (c.pushed === false ? 'local' : 'remote')
+      : (hasOrigin ? 'remote' : 'local');
+    const isUnpushed = c.pushed === false || c.syncStatus === 'ahead' || !!c.isUnpushed;
     const isUnpulled = c.syncStatus === 'behind' || !!c.isUnpulled;
     let syncPillHtml = '';
     if (isUnpushed) {
@@ -106,7 +153,6 @@ export function renderGitGraphPanelHtml(context = {}) {
     const refsHtml = (c.refs || []).map(ref => {
       const isHead = ref.includes('HEAD');
       const isOrigin = ref.includes('origin/');
-      const isTag = ref.includes('tag:');
       const cleanRef = ref.replace('HEAD -> ', '').replace('tag: ', '');
 
       if (isOrigin) {
@@ -114,6 +160,10 @@ export function renderGitGraphPanelHtml(context = {}) {
       }
       return `<span class="git-pill-branch ${isHead ? 'git-pill-head' : 'git-pill-local'}" title="${escapeGitHtml(ref)}"><span class="git-icon-dot">⦿</span>${escapeGitHtml(cleanRef)}</span>`;
     }).join('');
+
+    const pushCommitBtnHtml = isUnpushed
+      ? `<button class="git-commit-push-btn" data-vcs-action="push-commit" data-hash="${escapeGitHtml(c.hash)}" data-branch="${escapeGitHtml(status.branch)}" title="Push hasta este commit (${escapeGitHtml(c.shortHash || '')})">↑ Push</button>`
+      : '';
 
     // Inline file diff list
     const filesListHtml = files.map(f => {
@@ -129,29 +179,32 @@ export function renderGitGraphPanelHtml(context = {}) {
       `;
     }).join('');
 
-    const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(c.hash) : '';
+    const commitUrl = github.isGitHub && typeof github.getCommitUrl === 'function'
+      ? github.getCommitUrl(c.hash)
+      : (github.isGitHub && github.webUrl ? `${github.webUrl}/commit/${c.hash}` : '');
     const author = c.author || { name: 'Unknown', email: '', avatarUrl: '' };
 
     return `
-      <div class="git-commit-item ${isExpanded ? 'is-expanded' : ''}" data-hash="${c.hash}" data-index="${idx}" data-commit-type="${commitType}">
-        <div class="git-commit-row ${isSelected ? 'selected' : ''}" 
-             data-hash="${c.hash}" 
-             data-index="${idx}" 
-             data-short-hash="${c.shortHash}" 
-             data-commit-url="${commitUrl}" 
-             data-email="${escapeGitHtml(author.email)}" 
-             data-author="${escapeGitHtml(author.name)}" 
-             data-avatar="${escapeGitHtml(author.avatarUrl)}" 
-             data-date="${escapeGitHtml(c.relativeDate || '')}" 
-             data-subject="${escapeGitHtml(c.subject)}" 
-             data-files-count="${files.length}" 
+      <div class="git-commit-item ${isExpanded ? 'is-expanded' : ''}" data-hash="${escapeGitHtml(c.hash)}" data-index="${idx}" data-commit-type="${commitType}">
+        <div class="git-commit-row ${isSelected ? 'selected' : ''}"
+             data-hash="${escapeGitHtml(c.hash)}"
+             data-index="${idx}"
+             data-short-hash="${escapeGitHtml(c.shortHash || '')}"
+             data-pushed="${isUnpushed ? 'false' : 'true'}"
+             data-commit-url="${escapeGitHtml(commitUrl)}"
+             data-email="${escapeGitHtml(author.email)}"
+             data-author="${escapeGitHtml(author.name)}"
+             data-avatar="${escapeGitHtml(author.avatarUrl)}"
+             data-date="${escapeGitHtml(c.relativeDate || '')}"
+             data-subject="${escapeGitHtml(c.subject)}"
+             data-files-count="${files.length}"
              tabindex="0">
           <div class="git-commit-main">
             <span class="git-commit-chevron ${files.length > 0 ? 'has-files' : ''}">${files.length > 0 ? (isExpanded ? '▾' : '▸') : '•'}</span>
             <span class="git-commit-subject" title="${escapeGitHtml(c.subject)}">${escapeGitHtml(c.subject)}</span>
             <div class="git-commit-badges">
               ${refsHtml}${syncPillHtml}
-              ${files.length > 0 ? `<button class="git-pill-files" title="Clic para expandir/colapsar ${files.length} archivos">📄${files.length}</button>` : ''}
+              ${pushCommitBtnHtml}
             </div>
           </div>
         </div>
@@ -162,8 +215,22 @@ export function renderGitGraphPanelHtml(context = {}) {
     `;
   }).join('');
 
+  const serializedState = JSON.stringify({
+    activeRepo: repoName,
+    status,
+    github: {
+      isGitHub: !!github.isGitHub,
+      fullName: github.fullName || '',
+      webUrl: github.webUrl || ''
+    },
+    pullRequest,
+    branches,
+    commits
+  }).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
+
   return `
     <div class="antigravity-git-panel" id="antigravity-git-panel-root">
+      <script type="application/json" id="antigravity-git-vcs-state">${serializedState}</script>
       <!-- VS Code Style Minimal Header -->
       <div class="git-panel-header">
         <div class="git-panel-title-wrap">
@@ -180,6 +247,9 @@ export function renderGitGraphPanelHtml(context = {}) {
         </div>
       </div>
 
+      <!-- Status Toast Feedback Banner -->
+      <div class="git-vcs-toast" id="antigravity-git-vcs-toast" style="display: none;"></div>
+
       <!-- Pull Request & CI/CD Status Card -->
       ${prCiHtml}
 
@@ -189,10 +259,10 @@ export function renderGitGraphPanelHtml(context = {}) {
           <button class="git-filter-pill active" data-branch-filter="all" title="Ver todos los commits">
             Todas (${commits.length})
           </button>
-          <button class="git-filter-pill" data-branch-filter="local" title="Ver solo ramas locales">
+          <button class="git-filter-pill" data-branch-filter="local" title="Ver ramas y commits locales pendientes">
             <span class="git-icon-dot">⦿</span> Locales (${localBranches.length})
           </button>
-          <button class="git-filter-pill" data-branch-filter="remote" title="Ver solo ramas remotas de GitHub">
+          <button class="git-filter-pill" data-branch-filter="remote" title="Ver ramas y commits sincronizados en GitHub">
             <span class="git-icon-cloud">☁</span> GitHub (${remoteBranches.length})
           </button>
         </div>
@@ -216,10 +286,10 @@ export function renderGitGraphPanelHtml(context = {}) {
 
       <!-- Graph & Commits Viewport -->
       <div class="git-graph-container">
-        <div class="git-svg-column">
+        <div class="git-svg-column" id="antigravity-git-svg-column">
           ${svgGraph}
         </div>
-        <div class="git-commits-column">
+        <div class="git-commits-column" id="antigravity-git-commits-column">
           ${commitRowsHtml}
         </div>
       </div>
@@ -238,7 +308,9 @@ export function renderGitGraphPanelHtml(context = {}) {
  */
 export function renderInspectorCard(commit, github = {}) {
   const author = commit.author || { name: 'Unknown', email: '', avatarUrl: '' };
-  const commitUrl = github.isGitHub && github.getCommitUrl ? github.getCommitUrl(commit.hash) : '';
+  const commitUrl = github.isGitHub && typeof github.getCommitUrl === 'function'
+    ? github.getCommitUrl(commit.hash)
+    : (github.isGitHub && github.webUrl ? `${github.webUrl}/commit/${commit.hash}` : '');
   const initials = (author.name || 'U').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
   const shortHash = commit.shortHash || (commit.hash ? commit.hash.slice(0, 7) : '');
   const filesCount = Array.isArray(commit.files) ? commit.files.length : 0;
@@ -256,7 +328,7 @@ export function renderInspectorCard(commit, github = {}) {
       <div class="git-inspector-top">
         <div class="git-inspector-author-group">
           <div class="git-avatar-frame">
-            ${author.avatarUrl ? `<img class="git-inspector-avatar" src="${author.avatarUrl}" alt="${escapeGitHtml(author.name)}" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex';"/>` : ''}
+            ${author.avatarUrl ? `<img class="git-inspector-avatar" src="${escapeGitHtml(author.avatarUrl)}" alt="${escapeGitHtml(author.name)}" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex';"/>` : ''}
             <div class="git-inspector-avatar-fallback" style="${author.avatarUrl ? 'display:none;' : 'display:flex;'}">${escapeGitHtml(initials)}</div>
           </div>
           <div class="git-inspector-author-text">
@@ -271,7 +343,8 @@ export function renderInspectorCard(commit, github = {}) {
         <div class="git-inspector-meta-group">
           ${syncInspectorBadge}
           <span class="git-inspector-hash-pill" title="Hash completo: ${escapeGitHtml(commit.hash)}">${escapeGitHtml(shortHash)}</span>
-          ${commitUrl ? `<a href="${commitUrl}" target="_blank" rel="noopener" class="git-inspector-btn-gh" title="Ver commit en GitHub">GitHub ↗</a>` : ''}
+          ${commit.pushed === false ? `<button class="git-commit-push-btn" data-vcs-action="push-commit" data-hash="${escapeGitHtml(commit.hash)}" title="Push hasta este commit">↑ Push hasta aquí</button>` : ''}
+          ${commitUrl ? `<a href="${escapeGitHtml(commitUrl)}" target="_blank" rel="noopener" class="git-inspector-btn-gh" title="Ver commit en GitHub">GitHub ↗</a>` : ''}
           <button class="git-inspector-btn-close" id="antigravity-git-inspector-close-btn" title="Cerrar inspector">✕</button>
         </div>
       </div>
@@ -287,7 +360,7 @@ export function renderInspectorCard(commit, github = {}) {
   `.trim();
 }
 
-function getExtClass(ext = '') {
+export function getExtClass(ext = '') {
   const e = String(ext).toUpperCase();
   if (e === 'JS' || e === 'MJS' || e === 'CJS') return 'ext-js';
   if (e === 'TS' || e === 'TSX') return 'ext-ts';

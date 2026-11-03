@@ -191,6 +191,109 @@ test('GitGraphPanelHtml - renders commits collapsed by default with toggle all b
   assert.ok(panelHtml.includes('git-commit-chevron'));
 });
 
+test('GitGraphPanelHtml & styles - removes redundant .git-pill-files document count pills', () => {
+  const mod = new GitGraphMod();
+  const rendered = mod.render({
+    commits: [
+      {
+        hash: 'c1234567',
+        shortHash: 'c123456',
+        pushed: false,
+        subject: 'feat(vcs): unified accordion row',
+        refs: ['HEAD -> feat/vcs'],
+        files: [
+          { status: 'M', path: 'a.js', fileName: 'a.js', dir: '', ext: 'JS' },
+          { status: 'A', path: 'b.js', fileName: 'b.js', dir: '', ext: 'JS' }
+        ]
+      }
+    ]
+  });
+
+  assert.ok(!rendered.html.includes('git-pill-files'), 'Document count pills must not be rendered in commit rows');
+  assert.ok(!rendered.css.includes('.git-pill-files'), 'Unused .git-pill-files CSS rule must be removed');
+});
+
+test('renderGitGraphSvg - renders inline --< * * * * >-- inspection capsule and unpushed ring', () => {
+  const commits = [
+    {
+      hash: 'head1',
+      lane: 0,
+      pushed: true,
+      expanded: true,
+      refs: ['HEAD -> main'],
+      routes: [{ fromLane: 0, toLane: 0, type: 'straight' }],
+      files: [
+        { status: 'A', path: 'added.js' },
+        { status: 'M', path: 'mod.js' },
+        { status: 'D', path: 'del.js' }
+      ]
+    },
+    {
+      hash: 'unpushed2',
+      lane: 1,
+      pushed: false,
+      expanded: false,
+      refs: [],
+      routes: [],
+      files: []
+    }
+  ];
+
+  const svg = renderGitGraphSvg(commits, { rowHeight: 26, fileRowHeight: 22, laneWidth: 14, startX: 14 });
+  assert.ok(svg.includes('class="git-capsule-open"'));
+  assert.ok(svg.includes('class="git-capsule-spine"'));
+  assert.ok(svg.includes('class="git-file-node"'));
+  assert.ok(svg.includes('class="git-capsule-close"'));
+  assert.ok(svg.includes('#22c55e'));
+  assert.ok(svg.includes('#f59e0b'));
+  assert.ok(svg.includes('#ef4444'));
+  assert.ok(svg.includes('class="git-node-unpushed-ring"'));
+});
+
+test('GitGraphPanelHtml - embeds hydrated VCS JSON state, branch sync badges, selective push, and PR drawer', () => {
+  const panelHtml = renderGitGraphPanelHtml({
+    status: { branch: 'feat/mods-vcs', isClean: false, ahead: 2, behind: 1 },
+    github: { isGitHub: true, fullName: 'NezerkC/mods', webUrl: 'https://github.com/NezerkC/mods' },
+    branches: {
+      local: [
+        { name: 'main', isCurrent: false, isTrunk: true, cluster: 'trunk', ahead: 0, behind: 1, hash: '1111111' },
+        { name: 'feat/mods-vcs', isCurrent: true, cluster: 'vcs', ahead: 2, behind: 0, dirtyFiles: 3, hash: '2222222' },
+        { name: 'fix/old-bug', isCurrent: false, cluster: 'fixes', isMerged: true, hash: '3333333' }
+      ],
+      remote: [{ name: 'origin/main', shortName: 'main', hash: '1111111' }]
+    },
+    commits: [
+      {
+        hash: '2222222abcdef',
+        shortHash: '2222222',
+        pushed: false,
+        subject: 'feat(vcs): pending local commit',
+        refs: ['HEAD -> feat/mods-vcs'],
+        files: [{ status: 'M', path: 'x.js', fileName: 'x.js', dir: '', ext: 'JS' }]
+      }
+    ]
+  });
+
+  // Embedded JSON state script tag for client hydration
+  const stateMatch = panelHtml.match(/<script type="application\/json" id="antigravity-git-vcs-state">([\s\S]*?)<\/script>/);
+  assert.ok(stateMatch, 'Panel HTML must embed #antigravity-git-vcs-state JSON script');
+  const parsed = JSON.parse(stateMatch[1]);
+  assert.equal(parsed.commits.length, 1);
+  assert.equal(parsed.commits[0].hash, '2222222abcdef');
+
+  // Branch clusters and pending badges
+  assert.ok(panelHtml.includes('git-branch-cluster-header'));
+  assert.ok(panelHtml.includes('↑2'));
+  assert.ok(panelHtml.includes('↓1'));
+  assert.ok(panelHtml.includes('●3'));
+  assert.ok(panelHtml.includes('badge-merged'));
+
+  // Selective commit push & PR drawer
+  assert.ok(panelHtml.includes('data-vcs-action="push-commit"'));
+  assert.ok(panelHtml.includes('id="antigravity-git-pr-drawer"'));
+  assert.ok(panelHtml.includes('id="antigravity-git-svg-column"'));
+});
+
 test('GitGraphPanelHtml - renders sync badges and unpushed/unpulled indicators', () => {
   const panelHtml = renderGitGraphPanelHtml({
     status: { branch: 'feat/sync-test', ahead: 2, behind: 1, isClean: false },

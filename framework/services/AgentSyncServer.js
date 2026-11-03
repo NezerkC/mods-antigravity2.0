@@ -2,6 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execSync } from 'node:child_process';
 import { VcsOrchestrator } from './VcsOrchestrator.js';
 
 /**
@@ -64,13 +65,48 @@ export class AgentSyncServer {
 
   /**
    * Updates an agent entry for a specific conversation cascadeId.
+   * Preserves existing modifiers (like caveman) unless explicitly specified.
    * @param {string} cascadeId
    * @param {Object} agent
    */
   updateAgentForCascade(cascadeId, agent) {
     if (!cascadeId) return;
     const current = this.readActiveAgents();
-    current[cascadeId] = agent;
+    const existing = current[cascadeId] || {};
+    const existingModifiers = existing.modifiers || {};
+    const modifiers = agent.modifiers || existingModifiers;
+    const caveman = (agent.caveman !== undefined)
+      ? !!agent.caveman
+      : ((modifiers.caveman !== undefined) ? !!modifiers.caveman : (existing.caveman ?? false));
+
+    current[cascadeId] = {
+      ...agent,
+      modifiers: { ...existingModifiers, ...modifiers, caveman },
+      caveman
+    };
+    this.writeActiveAgents(current);
+  }
+
+  /**
+   * Updates modifier flags (such as caveman mode) for a specific cascadeId.
+   * @param {string} cascadeId
+   * @param {Object} modifiers
+   */
+  updateModifiersForCascade(cascadeId, modifiers = {}) {
+    if (!cascadeId) return;
+    const current = this.readActiveAgents();
+    const existing = current[cascadeId] || {};
+    const existingModifiers = existing.modifiers || {};
+    const nextModifiers = { ...existingModifiers, ...modifiers };
+    const caveman = (modifiers.caveman !== undefined)
+      ? !!modifiers.caveman
+      : (existing.caveman ?? false);
+
+    current[cascadeId] = {
+      ...existing,
+      modifiers: nextModifiers,
+      caveman
+    };
     this.writeActiveAgents(current);
   }
 
@@ -102,6 +138,25 @@ export class AgentSyncServer {
               const payload = JSON.parse(body);
               if (payload.cascadeId && payload.agent) {
                 this.updateAgentForCascade(payload.cascadeId, payload.agent);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, cascadeId: payload.cascadeId }));
+                return;
+              }
+            } catch {}
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid payload' }));
+          });
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/active-agent/modifier') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            try {
+              const payload = JSON.parse(body);
+              if (payload.cascadeId && (payload.modifiers || payload.modifier)) {
+                this.updateModifiersForCascade(payload.cascadeId, payload.modifiers || { [payload.modifier]: payload.value });
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: true, cascadeId: payload.cascadeId }));
                 return;
@@ -153,6 +208,66 @@ export class AgentSyncServer {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err.message }));
           }
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/vcs/action') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            try {
+              const payload = JSON.parse(body || '{}');
+              const { action, branch, targetSha } = payload;
+              if (!action) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing action parameter' }));
+                return;
+              }
+
+              let result = {};
+              if (action === 'checkout') {
+                if (!branch) {
+                  res.writeHead(400, { 'Content-Type': 'application/json' });
+                  res.end(JSON.stringify({ error: 'Missing branch for checkout' }));
+                  return;
+                }
+                execSync(`git checkout ${branch}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                result = { success: true, action: 'checkout', branch };
+              } else if (action === 'pull') {
+                const targetBranch = branch || 'main';
+                execSync(`git pull origin ${targetBranch}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                result = { success: true, action: 'pull', branch: targetBranch };
+              } else if (action === 'push') {
+                const targetBranch = branch || 'main';
+                const refspec = targetSha ? `${targetSha}:refs/heads/${targetBranch}` : targetBranch;
+                execSync(`git push origin ${refspec}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                result = { success: true, action: 'push', branch: targetBranch, refspec };
+              } else if (action === 'create-pr') {
+                try {
+                  const prOut = execSync(`gh pr create --fill`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                  result = { success: true, action: 'create-pr', output: prOut.trim() };
+                } catch (e) {
+                  try {
+                    const remoteUrl = execSync('git remote get-url origin', { cwd: this.repoPath, encoding: 'utf-8' }).trim();
+                    const cleanRemote = remoteUrl.replace(/\.git$/, '').replace(/^git@github\.com:/, 'https://github.com/');
+                    result = { success: false, fallbackUrl: `${cleanRemote}/compare`, error: e.message };
+                  } catch {
+                    result = { success: false, error: e.message };
+                  }
+                }
+              } else {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: `Unsupported action: ${action}` }));
+                return;
+              }
+
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify(result));
+            } catch (err) {
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: err.message }));
+            }
+          });
           return;
         }
 

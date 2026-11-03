@@ -2,6 +2,10 @@ import { SlotManager } from './SlotManager.js';
 import { StyleIsolator } from '../sdk/StyleIsolator.js';
 import { renderPopoverHtml, renderSvgIcon } from '../../mods/context-tachometer/components/PopoverHtml.js';
 import { renderModsManagerPanelHtml } from '../../mods/mods-manager/components/ModsManagerHtml.js';
+import { getLaneColor, renderGitGraphSvg } from '../../mods/git-graph/components/GitGraphSvg.js';
+import { renderPrCiCardHtml } from '../../mods/git-graph/components/PrCiCardHtml.js';
+import { renderGitGraphPanelHtml, escapeGitHtml, getExtClass } from '../../mods/git-graph/components/GitGraphPanelHtml.js';
+import { renderReticleSvg } from '../../mods/agent-selector/components/AgentIcons.js';
 import { formatResetTime, resolveNativeQuotaForModel } from '../services/TelemetryService.js';
 
 /**
@@ -312,6 +316,18 @@ export class ModLoader {
             portal.style.left = clampedLeft + 'px';
             portal.classList.add('open');
 
+            // Sync Caveman toggle state for this cascade
+            if (window.__resolveCavemanForCascade) {
+              const isCaveman = window.__resolveCavemanForCascade(cascadeId);
+              const cavemanToggle = portal.querySelector('#antigravity-caveman-toggle');
+              const cavemanPill = portal.querySelector('#antigravity-caveman-pill');
+              if (cavemanToggle) cavemanToggle.checked = isCaveman;
+              if (cavemanPill) {
+                cavemanPill.textContent = isCaveman ? 'FOCUS' : 'EXPLICATIVO';
+                cavemanPill.classList.toggle('active', isCaveman);
+              }
+            }
+
             const closeBtn = portal.querySelector('#antigravity-agent-close');
             if (closeBtn) {
               closeBtn.onclick = () => {
@@ -322,6 +338,92 @@ export class ModLoader {
               };
             }
           }
+        };
+
+        window.__resolveCavemanForCascade = function(cascadeId) {
+          if (window.__antigravityCavemanModes && cascadeId && window.__antigravityCavemanModes[cascadeId] !== undefined) {
+            return !!window.__antigravityCavemanModes[cascadeId];
+          }
+          try {
+            const map = JSON.parse(localStorage.getItem('__antigravity_caveman_map') || '{}');
+            if (cascadeId && map[cascadeId] !== undefined) {
+              return !!map[cascadeId];
+            }
+            return localStorage.getItem('__antigravity_caveman_mode') === 'true';
+          } catch (e) {}
+          return false;
+        };
+
+        window.__toggleCavemanMode = function(explicitValue, targetEl) {
+          const portal = document.getElementById('antigravity-agent-dropdown-portal');
+          const currentBadge = (targetEl && targetEl.closest('.antigravity-agent-selector-group')?.querySelector('.antigravity-agent-badge')) ||
+            (portal && portal.__currentBadge && portal.__currentBadge.isConnected ? portal.__currentBadge : null) ||
+            document.querySelector('.antigravity-agent-badge');
+          const cascadeId = (portal && portal.__currentCascadeId) ||
+            window.__resolveCascadeId(currentBadge) ||
+            null;
+
+          const currentVal = window.__resolveCavemanForCascade(cascadeId);
+          const nextVal = (typeof explicitValue === 'boolean') ? explicitValue : !currentVal;
+
+          window.__antigravityCavemanModes = window.__antigravityCavemanModes || {};
+          if (cascadeId) {
+            window.__antigravityCavemanModes[cascadeId] = nextVal;
+          }
+
+          try {
+            localStorage.setItem('__antigravity_caveman_mode', nextVal ? 'true' : 'false');
+            const map = JSON.parse(localStorage.getItem('__antigravity_caveman_map') || '{}');
+            if (cascadeId) {
+              map[cascadeId] = nextVal;
+              localStorage.setItem('__antigravity_caveman_map', JSON.stringify(map));
+            }
+          } catch (e) {}
+
+          // Update portal UI elements if open
+          if (portal) {
+            const toggle = portal.querySelector('#antigravity-caveman-toggle');
+            if (toggle) toggle.checked = nextVal;
+            const pill = portal.querySelector('#antigravity-caveman-pill');
+            if (pill) {
+              pill.textContent = nextVal ? 'FOCUS' : 'EXPLICATIVO';
+              pill.classList.toggle('active', nextVal);
+            }
+          }
+
+          // Update exterior reticle triggers across panels
+          const reticleSvg = window.__renderReticleSvg ? window.__renderReticleSvg(nextVal, 14) : '';
+          const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
+          const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
+
+          document.querySelectorAll('.antigravity-caveman-reticle-trigger').forEach(triggerEl => {
+            const parent = triggerEl.parentElement;
+            const group = parent ? parent.closest('.antigravity-agent-selector-group') : null;
+            const b = group ? group.querySelector('.antigravity-agent-badge') : null;
+            const bCascadeId = b ? window.__resolveCascadeId(b) : null;
+            if (!cascadeId || !bCascadeId || bCascadeId === cascadeId) {
+              triggerEl.classList.toggle('is-focus', nextVal);
+              triggerEl.setAttribute('title', nextVal ? focusTitle : explicativoTitle);
+              const box = triggerEl.querySelector('.caveman-reticle-box');
+              if (box && reticleSvg) {
+                box.innerHTML = reticleSvg;
+              }
+            }
+          });
+
+          // Non-blocking sync to local bridge server (active_agents.json)
+          try {
+            if (cascadeId) {
+              fetch('http://127.0.0.1:53912/active-agent/modifier', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  cascadeId: cascadeId,
+                  modifiers: { caveman: nextVal }
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
         };
 
         window.__selectAntigravityAgent = function(agentId, agentName, agentColor, agentFilePath) {
@@ -446,6 +548,22 @@ export class ModLoader {
         window.__resolveNativeQuotaForModel = ${resolveNativeQuotaForModel.toString()};
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
         window.__renderModsManagerPanelHtml = ${renderModsManagerPanelHtml.toString()};
+        const renderReticleSvg = ${renderReticleSvg.toString()};
+        window.__renderReticleSvg = renderReticleSvg;
+
+        window.__applyChatboxModsCompact = function() {
+          const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
+          document.querySelectorAll('.antigravity-tachometer-badge').forEach(tach => {
+            const footer = tach.closest('[class*="input-footer"]') || tach.closest('.flex.items-center.justify-between') || tach.parentElement;
+            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
+            tach.classList.toggle('compact', isForcedCompact || isNarrow);
+          });
+          document.querySelectorAll('.antigravity-agent-badge').forEach(agent => {
+            const footer = agent.closest('[class*="input-footer"]') || agent.closest('.flex.items-center.justify-between') || agent.parentElement;
+            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
+            agent.classList.toggle('compact', isForcedCompact || isNarrow);
+          });
+        };
 
         window.__applyModsVisibility = function() {
           const tachEnabled = localStorage.getItem('__antigravity_mod_enabled_context-tachometer') !== 'false';
@@ -531,6 +649,28 @@ export class ModLoader {
               };
             }
 
+            const compactChatboxEnabled = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
+            const compactChatboxInput = portal.querySelector('#mod-toggle-compact-chatbox');
+            const compactChatboxPill = portal.querySelector('#compact-chatbox-status-pill');
+            if (compactChatboxInput) {
+              compactChatboxInput.checked = compactChatboxEnabled;
+              if (compactChatboxPill) {
+                compactChatboxPill.textContent = compactChatboxEnabled ? 'Minimizado' : 'Normal';
+                compactChatboxPill.className = 'mod-status-pill ' + (compactChatboxEnabled ? 'compact' : '');
+              }
+              compactChatboxInput.onchange = (ev) => {
+                const isChecked = ev.target.checked;
+                localStorage.setItem('__antigravity_compact_chatbox_mods', isChecked ? 'true' : 'false');
+                if (compactChatboxPill) {
+                  compactChatboxPill.textContent = isChecked ? 'Minimizado' : 'Normal';
+                  compactChatboxPill.className = 'mod-status-pill ' + (isChecked ? 'compact' : '');
+                }
+                if (typeof window.__applyChatboxModsCompact === 'function') {
+                  window.__applyChatboxModsCompact();
+                }
+              };
+            }
+
             const gitGraphEnabled = localStorage.getItem('__antigravity_mod_enabled_git-graph') !== 'false';
             const gitGraphInput = portal.querySelector('#mod-toggle-git-graph');
             if (gitGraphInput) {
@@ -578,33 +718,316 @@ export class ModLoader {
           }
         };
 
+
+        const getLaneColor = ${getLaneColor.toString()};
+        const renderGitGraphSvg = ${renderGitGraphSvg.toString()};
+        const escapeGitHtml = ${escapeGitHtml.toString()};
+        const getExtClass = ${getExtClass.toString()};
+        const renderPrCiCardHtml = ${renderPrCiCardHtml.toString()};
+        const renderGitGraphPanelHtml = ${renderGitGraphPanelHtml.toString()};
+        window.__antigravityRenderGitSvg = renderGitGraphSvg;
+        window.__antigravityRenderGitPanel = renderGitGraphPanelHtml;
+
+        window.__antigravityProjectFilteredCommits = function(commits, filterType) {
+          if (!Array.isArray(commits)) return [];
+          if (!filterType || filterType === 'all') return commits;
+
+          const filtered = commits.filter(function(c) {
+            const hasOrigin = Array.isArray(c.refs) && c.refs.some(function(r) { return r.indexOf('origin/') !== -1; });
+            const cType = (c.pushed !== undefined) ? (c.pushed === false ? 'local' : 'remote') : (hasOrigin ? 'remote' : 'local');
+            return cType === filterType;
+          });
+
+          const visibleSet = {};
+          for (let i = 0; i < filtered.length; i++) {
+            if (filtered[i] && filtered[i].hash) visibleSet[filtered[i].hash] = true;
+          }
+
+          let activeLanes = [];
+          const projected = [];
+
+          for (let i = 0; i < filtered.length; i++) {
+            const commit = filtered[i];
+            const hash = commit.hash;
+            const isTrunk = !!commit.isTrunk;
+            let cLane = activeLanes.indexOf(hash);
+
+            if (cLane === -1) {
+              if (isTrunk) {
+                if (activeLanes.length === 0) {
+                  activeLanes.push(hash);
+                } else if (activeLanes[0] === null) {
+                  activeLanes[0] = hash;
+                } else {
+                  const prev0 = activeLanes[0];
+                  let freeIdx = -1;
+                  for (let k = 1; k < activeLanes.length; k++) {
+                    if (activeLanes[k] === null) { freeIdx = k; break; }
+                  }
+                  if (freeIdx !== -1) activeLanes[freeIdx] = prev0;
+                  else activeLanes.push(prev0);
+                  activeLanes[0] = hash;
+                }
+                cLane = 0;
+              } else {
+                if (activeLanes.length === 0) activeLanes.push(null);
+                let freeIdx = -1;
+                for (let k = 1; k < activeLanes.length; k++) {
+                  if (activeLanes[k] === null) { freeIdx = k; break; }
+                }
+                if (freeIdx !== -1) {
+                  cLane = freeIdx;
+                  activeLanes[cLane] = hash;
+                } else {
+                  cLane = activeLanes.length;
+                  activeLanes.push(hash);
+                }
+              }
+            }
+
+            const preLanes = activeLanes.slice();
+            const routes = [];
+            const visibleParents = (Array.isArray(commit.parents) ? commit.parents : []).filter(function(p) {
+              return !!visibleSet[p];
+            });
+            const nextLanes = preLanes.slice();
+
+            for (let l = 0; l < preLanes.length; l++) {
+              if (preLanes[l] !== null && l !== cLane && preLanes[l] !== hash) {
+                routes.push({ fromLane: l, toLane: l, type: 'straight', colorLane: l });
+              }
+            }
+
+            for (let l = 0; l < nextLanes.length; l++) {
+              if (nextLanes[l] === hash && l !== cLane) {
+                routes.push({ fromLane: l, toLane: cLane, type: 'merge-in', colorLane: l });
+                nextLanes[l] = null;
+              }
+            }
+
+            if (visibleParents.length === 0) {
+              nextLanes[cLane] = null;
+            } else {
+              const p0 = visibleParents[0];
+              const existingP0 = nextLanes.indexOf(p0);
+              if (existingP0 !== -1 && existingP0 !== cLane) {
+                routes.push({ fromLane: cLane, toLane: existingP0, type: 'branch-join', colorLane: cLane });
+                nextLanes[cLane] = null;
+              } else {
+                nextLanes[cLane] = p0;
+                routes.push({ fromLane: cLane, toLane: cLane, type: 'straight', colorLane: cLane });
+              }
+              for (let pIdx = 1; pIdx < visibleParents.length; pIdx++) {
+                const pHash = visibleParents[pIdx];
+                let pLane = nextLanes.indexOf(pHash);
+                if (pLane === -1) {
+                  let freeSlot = -1;
+                  for (let k = 1; k < nextLanes.length; k++) {
+                    if (nextLanes[k] === null) { freeSlot = k; break; }
+                  }
+                  if (freeSlot !== -1) {
+                    pLane = freeSlot;
+                    nextLanes[pLane] = pHash;
+                  } else {
+                    pLane = nextLanes.length;
+                    nextLanes.push(pHash);
+                  }
+                }
+                routes.push({ fromLane: cLane, toLane: pLane, type: 'merge-branch', colorLane: pLane });
+              }
+            }
+
+            while (nextLanes.length > 1 && nextLanes[nextLanes.length - 1] === null) {
+              nextLanes.pop();
+            }
+            activeLanes = nextLanes;
+
+            projected.push(Object.assign({}, commit, {
+              lane: cLane,
+              routes: routes
+            }));
+          }
+
+          return projected;
+        };
+
+        window.__antigravityRefreshGitSvg = function(hostEl) {
+          if (!hostEl || !window.__antigravityVcsData || !Array.isArray(window.__antigravityVcsData.commits)) return;
+          const activePill = hostEl.querySelector('.git-filter-pill.active');
+          const filterType = activePill ? (activePill.getAttribute('data-branch-filter') || 'all') : 'all';
+          const projected = window.__antigravityProjectFilteredCommits(window.__antigravityVcsData.commits, filterType);
+          const svgCol = hostEl.querySelector('#antigravity-git-svg-column') || hostEl.querySelector('.git-svg-column');
+          if (svgCol && typeof window.__antigravityRenderGitSvg === 'function') {
+            svgCol.innerHTML = window.__antigravityRenderGitSvg(projected, {
+              rowHeight: 26,
+              fileRowHeight: 22,
+              laneWidth: 14,
+              startX: 14
+            });
+          }
+        };
+
+        window.__antigravityUpdateVcsData = function(data) {
+          if (!data || typeof data !== 'object') return;
+          const prevMap = {};
+          if (window.__antigravityVcsData && Array.isArray(window.__antigravityVcsData.commits)) {
+            window.__antigravityVcsData.commits.forEach(function(c) {
+              if (c && c.hash) prevMap[c.hash] = !!c.expanded;
+            });
+          }
+          if (Array.isArray(data.commits)) {
+            data.commits.forEach(function(c) {
+              if (c && c.hash && prevMap[c.hash] !== undefined) {
+                c.expanded = prevMap[c.hash];
+              } else if (c && c.expanded === undefined) {
+                c.expanded = false;
+              }
+            });
+          }
+          window.__antigravityVcsData = data;
+
+          if (typeof window.__antigravityRenderGitPanel === 'function') {
+            const html = window.__antigravityRenderGitPanel(data);
+            const tpl = document.getElementById('antigravity-git-panel-template');
+            if (tpl) tpl.innerHTML = html;
+            const hostEl = document.getElementById('antigravity-git-panel-host');
+            if (hostEl && hostEl.style.display !== 'none') {
+              hostEl.__skipInitialStateParse = true;
+              hostEl.innerHTML = html;
+              window.__bindGitPanelEvents(hostEl);
+            }
+          }
+        };
+
+        window.__antigravityShowGitToast = function(hostEl, msg, isError) {
+          if (!hostEl) return;
+          const toast = hostEl.querySelector('#antigravity-git-vcs-toast');
+          if (!toast) return;
+          toast.textContent = msg;
+          toast.classList.toggle('is-error', !!isError);
+          toast.style.display = 'block';
+          clearTimeout(toast.__timer);
+          toast.__timer = setTimeout(function() {
+            toast.style.display = 'none';
+          }, isError ? 5000 : 2800);
+        };
+
+        window.__antigravityRunVcsAction = async function(hostEl, payload) {
+          if (!payload || !payload.action) return;
+          const labelMap = {
+            checkout: 'Cambiando a rama ' + (payload.branch || '') + '...',
+            pull: 'Sincronizando (git pull) ' + (payload.branch || '') + '...',
+            push: payload.targetSha ? ('Subiendo commits hasta ' + String(payload.targetSha).slice(0, 7) + '...') : ('Subiendo rama ' + (payload.branch || '') + '...'),
+            'create-pr': 'Preparando Pull Request para ' + (payload.branch || '') + '...'
+          };
+          window.__antigravityShowGitToast(hostEl, labelMap[payload.action] || ('Ejecutando ' + payload.action + '...'), false);
+
+          try {
+            if (payload.action === 'create-pr' && payload.branch) {
+              await fetch('http://127.0.0.1:53912/vcs/action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'push', branch: payload.branch })
+              }).catch(function() {});
+            }
+
+            const res = await fetch('http://127.0.0.1:53912/vcs/action', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            const result = await res.json();
+
+            if (!res.ok || (result && result.error && !result.fallbackUrl)) {
+              window.__antigravityShowGitToast(hostEl, 'Error: ' + ((result && result.error) || res.statusText), true);
+              return;
+            }
+
+            if (result && result.fallbackUrl) {
+              window.open(result.fallbackUrl, '_blank');
+            } else if (result && result.output && result.output.indexOf('http') === 0) {
+              window.open(result.output, '_blank');
+            }
+
+            const ovRes = await fetch('http://127.0.0.1:53912/vcs/overview');
+            if (ovRes.ok) {
+              const freshData = await ovRes.json();
+              window.__antigravityUpdateVcsData(freshData);
+              const newHost = document.getElementById('antigravity-git-panel-host') || hostEl;
+              window.__antigravityShowGitToast(newHost, 'Accion completada: ' + payload.action, false);
+            }
+          } catch (err) {
+            window.__antigravityShowGitToast(hostEl, 'Servidor VCS local no disponible (daemon inactivo)', true);
+          }
+        };
+
         window.__bindGitPanelEvents = function(hostEl) {
           if (!hostEl) return;
 
-          // Commit row click and file expansion
-          hostEl.querySelectorAll('.git-commit-row').forEach(row => {
-            row.addEventListener('click', (ev) => {
-              hostEl.querySelectorAll('.git-commit-row.selected').forEach(r => r.classList.remove('selected'));
+          // Hydrate window.__antigravityVcsData from embedded JSON script tag on initial mount
+          if (!hostEl.__skipInitialStateParse) {
+            const stateScript = hostEl.querySelector('#antigravity-git-vcs-state');
+            if (stateScript && stateScript.textContent) {
+              try {
+                window.__antigravityVcsData = JSON.parse(stateScript.textContent);
+              } catch (e) {}
+            }
+          }
+          hostEl.__skipInitialStateParse = false;
+
+          function bindVcsActionButtons(root) {
+            root.querySelectorAll('[data-vcs-action]').forEach(function(actionBtn) {
+              actionBtn.onclick = function(ev) {
+                ev.stopPropagation();
+                ev.preventDefault();
+                const rawAction = actionBtn.getAttribute('data-vcs-action');
+                const currentBranch = (window.__antigravityVcsData && window.__antigravityVcsData.status && window.__antigravityVcsData.status.branch) || 'main';
+                const branch = actionBtn.getAttribute('data-branch') || currentBranch;
+                const targetHash = actionBtn.getAttribute('data-hash') || '';
+                if (rawAction === 'push-commit' && targetHash) {
+                  window.__antigravityRunVcsAction(hostEl, { action: 'push', branch: branch, targetSha: targetHash });
+                } else if (rawAction) {
+                  window.__antigravityRunVcsAction(hostEl, { action: rawAction, branch: branch });
+                }
+              };
+            });
+          }
+
+          bindVcsActionButtons(hostEl);
+
+          // Unified commit row click: select inspector + toggle inline file accordion + re-render --< * * * * >-- SVG capsule
+          hostEl.querySelectorAll('.git-commit-row').forEach(function(row) {
+            row.addEventListener('click', function(ev) {
+              if (ev.target && ev.target.closest && ev.target.closest('[data-vcs-action]')) {
+                return;
+              }
+
+              hostEl.querySelectorAll('.git-commit-row.selected').forEach(function(r) { r.classList.remove('selected'); });
               row.classList.add('selected');
 
+              const hash = row.getAttribute('data-hash');
               const item = row.closest('.git-commit-item');
-              const isPillClick = ev.target.closest('.git-pill-files') || ev.target.closest('.git-commit-chevron');
 
-              if (item && isPillClick) {
-                ev.stopPropagation();
+              if (item) {
                 const filesContainer = item.querySelector('.git-commit-files-container');
                 const chevron = item.querySelector('.git-commit-chevron');
-                if (filesContainer) {
-                  const isNowOpen = filesContainer.style.display !== 'none';
-                  filesContainer.style.display = isNowOpen ? 'none' : 'flex';
-                  item.classList.toggle('is-expanded', !isNowOpen);
-                  if (chevron && chevron.classList.contains('has-files')) {
-                    chevron.textContent = isNowOpen ? '▸' : '▾';
+                if (filesContainer && chevron && chevron.classList.contains('has-files')) {
+                  const isNowOpen = item.classList.contains('is-expanded') || filesContainer.style.display === 'flex';
+                  const nextExpanded = !isNowOpen;
+                  filesContainer.style.display = nextExpanded ? 'flex' : 'none';
+                  item.classList.toggle('is-expanded', nextExpanded);
+                  chevron.textContent = nextExpanded ? '▾' : '▸';
+
+                  if (window.__antigravityVcsData && Array.isArray(window.__antigravityVcsData.commits)) {
+                    const targetCommit = window.__antigravityVcsData.commits.find(function(x) { return x.hash === hash; });
+                    if (targetCommit) {
+                      targetCommit.expanded = nextExpanded;
+                    }
                   }
+                  window.__antigravityRefreshGitSvg(hostEl);
                 }
               }
 
-              const hash = row.getAttribute('data-hash');
               const inspector = hostEl.querySelector('#antigravity-git-inspector');
               if (inspector && hash) {
                 const authorName = row.getAttribute('data-author') || 'Unknown';
@@ -614,42 +1037,38 @@ export class ModLoader {
                 const shortHash = row.getAttribute('data-short-hash') || hash.slice(0, 7);
                 const subject = row.getAttribute('data-subject') || '';
                 const relativeDate = row.getAttribute('data-date') || '';
+                const isUnpushed = row.getAttribute('data-pushed') === 'false';
                 const filesCount = parseInt(row.getAttribute('data-files-count') || '0', 10);
 
-                function esc(str) {
-                  return String(str || '')
-                    .replace(/&/g, '&amp;')
-                    .replace(/</g, '&lt;')
-                    .replace(/>/g, '&gt;')
-                    .replace(/"/g, '&quot;')
-                    .replace(/'/g, '&#039;');
-                }
-
-                const safeAuthor = esc(authorName);
-                const safeEmail = authorEmail ? ('&lt;' + esc(authorEmail) + '&gt;') : '';
-                const safeSubject = esc(subject);
-                const safeShortHash = esc(shortHash);
-                const initials = (authorName || 'U').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
+                const safeAuthor = escapeGitHtml(authorName);
+                const safeEmail = authorEmail ? ('&lt;' + escapeGitHtml(authorEmail) + '&gt;') : '';
+                const safeSubject = escapeGitHtml(subject);
+                const safeShortHash = escapeGitHtml(shortHash);
+                const initials = (authorName || 'U').split(' ').map(function(w) { return w[0]; }).slice(0, 2).join('').toUpperCase();
                 const linkHtml = commitUrl
-                  ? '<a href="' + esc(commitUrl) + '" target="_blank" rel="noopener" class="git-inspector-btn-gh" title="Ver commit en GitHub">GitHub ↗</a>'
+                  ? '<a href="' + escapeGitHtml(commitUrl) + '" target="_blank" rel="noopener" class="git-inspector-btn-gh" title="Ver commit en GitHub">GitHub ↗</a>'
+                  : '';
+                const pushHtml = isUnpushed
+                  ? '<button class="git-commit-push-btn" data-vcs-action="push-commit" data-hash="' + escapeGitHtml(hash) + '" title="Push hasta este commit">↑ Push hasta aquí</button>'
                   : '';
 
                 inspector.innerHTML = '<div class="git-inspector-card">' +
                   '<div class="git-inspector-top">' +
                   '<div class="git-inspector-author-group">' +
                   '<div class="git-avatar-frame">' +
-                  '<div class="git-inspector-avatar-fallback">' + esc(initials) + '</div>' +
-                  (avatarUrl ? '<img class="git-inspector-avatar" src="' + avatarUrl + '" alt="' + safeAuthor + '" onerror="this.remove()"/>' : '') +
+                  '<div class="git-inspector-avatar-fallback">' + escapeGitHtml(initials) + '</div>' +
+                  (avatarUrl ? '<img class="git-inspector-avatar" src="' + escapeGitHtml(avatarUrl) + '" alt="' + safeAuthor + '" onerror="this.remove()"/>' : '') +
                   '</div>' +
                   '<div class="git-inspector-author-text">' +
                   '<div class="git-inspector-name-row">' +
                   '<span class="git-inspector-author-name">' + safeAuthor + '</span>' +
-                  (relativeDate ? '<span class="git-inspector-date">' + esc(relativeDate) + '</span>' : '') +
+                  (relativeDate ? '<span class="git-inspector-date">' + escapeGitHtml(relativeDate) + '</span>' : '') +
                   '</div>' +
                   (safeEmail ? '<span class="git-inspector-author-email">' + safeEmail + '</span>' : '') +
                   '</div></div>' +
                   '<div class="git-inspector-meta-group">' +
-                  '<span class="git-inspector-hash-pill" title="Hash: ' + esc(hash) + '">' + safeShortHash + '</span>' +
+                  '<span class="git-inspector-hash-pill" title="Hash: ' + escapeGitHtml(hash) + '">' + safeShortHash + '</span>' +
+                  pushHtml +
                   linkHtml +
                   '<button class="git-inspector-btn-close" id="antigravity-git-inspector-close-btn" title="Cerrar inspector">✕</button>' +
                   '</div></div>' +
@@ -658,9 +1077,11 @@ export class ModLoader {
                   '</div>';
                 inspector.style.display = 'block';
 
+                bindVcsActionButtons(inspector);
+
                 const inspClose = inspector.querySelector('#antigravity-git-inspector-close-btn');
                 if (inspClose) {
-                  inspClose.onclick = (eClose) => {
+                  inspClose.onclick = function(eClose) {
                     eClose.stopPropagation();
                     inspector.style.display = 'none';
                   };
@@ -669,36 +1090,42 @@ export class ModLoader {
             });
           });
 
-          // Expand/Collapse all files toggle button
+          // Expand/Collapse all files toggle button + reactive SVG re-render
           const toggleAllBtn = hostEl.querySelector('#antigravity-git-toggle-all-btn');
           if (toggleAllBtn) {
             let allExpanded = false;
-            toggleAllBtn.onclick = (e) => {
+            toggleAllBtn.onclick = function(e) {
               e.stopPropagation();
               allExpanded = !allExpanded;
-              hostEl.querySelectorAll('.git-commit-item').forEach(item => {
+              hostEl.querySelectorAll('.git-commit-item').forEach(function(item) {
                 const filesContainer = item.querySelector('.git-commit-files-container');
                 const chevron = item.querySelector('.git-commit-chevron');
-                if (filesContainer) {
+                const hasFiles = chevron && chevron.classList.contains('has-files');
+                if (filesContainer && hasFiles) {
                   filesContainer.style.display = allExpanded ? 'flex' : 'none';
                   item.classList.toggle('is-expanded', allExpanded);
-                  if (chevron && chevron.classList.contains('has-files')) {
-                    chevron.textContent = allExpanded ? '▾' : '▸';
-                  }
+                  chevron.textContent = allExpanded ? '▾' : '▸';
                 }
               });
+              if (window.__antigravityVcsData && Array.isArray(window.__antigravityVcsData.commits)) {
+                window.__antigravityVcsData.commits.forEach(function(c) {
+                  const hasFiles = Array.isArray(c.files) && c.files.length > 0;
+                  c.expanded = hasFiles ? allExpanded : false;
+                });
+              }
+              window.__antigravityRefreshGitSvg(hostEl);
             };
           }
 
-          // Branch filter pills (Todas / Locales / GitHub)
-          hostEl.querySelectorAll('.git-filter-pill').forEach(pill => {
-            pill.onclick = (e) => {
+          // Branch filter pills (Todas / Locales / GitHub) with synchronized SVG re-projection
+          hostEl.querySelectorAll('.git-filter-pill').forEach(function(pill) {
+            pill.onclick = function(e) {
               e.stopPropagation();
-              hostEl.querySelectorAll('.git-filter-pill.active').forEach(p => p.classList.remove('active'));
+              hostEl.querySelectorAll('.git-filter-pill.active').forEach(function(p) { p.classList.remove('active'); });
               pill.classList.add('active');
 
               const filterType = pill.getAttribute('data-branch-filter') || 'all';
-              hostEl.querySelectorAll('.git-commit-item').forEach(item => {
+              hostEl.querySelectorAll('.git-commit-item').forEach(function(item) {
                 const type = item.getAttribute('data-commit-type');
                 if (filterType === 'all') {
                   item.style.display = '';
@@ -708,14 +1135,15 @@ export class ModLoader {
                   item.style.display = type === 'remote' ? '' : 'none';
                 }
               });
+              window.__antigravityRefreshGitSvg(hostEl);
             };
           });
 
-          // Branches Drawer dropdown toggle
+          // Branches Drawer dropdown toggle & branch checkout rows
           const drawerBtn = hostEl.querySelector('#antigravity-git-branches-drawer-btn');
           const drawer = hostEl.querySelector('#antigravity-git-branches-drawer');
           if (drawerBtn && drawer) {
-            drawerBtn.onclick = (e) => {
+            drawerBtn.onclick = function(e) {
               e.stopPropagation();
               const isHidden = drawer.style.display === 'none';
               drawer.style.display = isHidden ? 'block' : 'none';
@@ -724,10 +1152,33 @@ export class ModLoader {
             };
           }
 
+          hostEl.querySelectorAll('.git-branch-drawer-row').forEach(function(branchRow) {
+            branchRow.onclick = function(e) {
+              if (e.target && e.target.closest && e.target.closest('[data-vcs-action]')) return;
+              e.stopPropagation();
+              if (branchRow.classList.contains('is-active-branch')) return;
+              const targetBranch = branchRow.getAttribute('data-branch');
+              if (targetBranch) {
+                window.__antigravityRunVcsAction(hostEl, { action: 'checkout', branch: targetBranch });
+              }
+            };
+          });
+
+          // PR creation & pending commits drawer toggle
+          const prDrawerTrigger = hostEl.querySelector('#antigravity-git-pr-drawer-trigger');
+          const prDrawer = hostEl.querySelector('#antigravity-git-pr-drawer');
+          if (prDrawerTrigger && prDrawer) {
+            prDrawerTrigger.onclick = function(e) {
+              e.stopPropagation();
+              const isHidden = prDrawer.style.display === 'none';
+              prDrawer.style.display = isHidden ? 'block' : 'none';
+            };
+          }
+
           const ciTrigger = hostEl.querySelector('#antigravity-git-ci-rollup-trigger');
           const ciAccordion = hostEl.querySelector('#antigravity-git-ci-accordion');
           if (ciTrigger && ciAccordion) {
-            ciTrigger.onclick = (e) => {
+            ciTrigger.onclick = function(e) {
               e.stopPropagation();
               const isHidden = ciAccordion.style.display === 'none';
               ciAccordion.style.display = isHidden ? 'block' : 'none';
@@ -738,11 +1189,11 @@ export class ModLoader {
 
           const refreshBtn = hostEl.querySelector('#antigravity-git-refresh-btn');
           if (refreshBtn) {
-            refreshBtn.onclick = async (e) => {
+            refreshBtn.onclick = async function(e) {
               if (e) e.stopPropagation();
               refreshBtn.style.transform = 'rotate(360deg)';
               refreshBtn.style.transition = 'transform 0.5s ease';
-              setTimeout(() => { refreshBtn.style.transform = ''; }, 500);
+              setTimeout(function() { refreshBtn.style.transform = ''; }, 500);
 
               try {
                 const res = await fetch('http://127.0.0.1:53912/vcs/overview');
@@ -753,7 +1204,7 @@ export class ModLoader {
                     return;
                   }
                 }
-              } catch {}
+              } catch (err) {}
 
               if (window.__antigravityMountAll) {
                 window.__antigravityMountAll();
@@ -763,7 +1214,7 @@ export class ModLoader {
 
           const closeBtn = hostEl.querySelector('#antigravity-git-close-btn');
           if (closeBtn) {
-            closeBtn.onclick = (e) => {
+            closeBtn.onclick = function(e) {
               e.stopPropagation();
               window.__toggleGitGraphPanel();
             };
@@ -784,9 +1235,10 @@ export class ModLoader {
           const trigger = btn || document.querySelector('#antigravity-git-tab-trigger');
           let auxContainer = trigger ? (trigger.closest('.h-full.w-full.flex.flex-col') || trigger.closest('.flex.flex-col')) : null;
           if (!auxContainer) {
-            auxContainer = document.querySelector('[data-testid="aux-pane-new-tab-button"]')?.closest('.flex.flex-col');
+            const newTabBtn = document.querySelector('[data-testid="aux-pane-new-tab-button"]');
+            auxContainer = newTabBtn ? newTabBtn.closest('.flex.flex-col') : null;
           }
-          let auxBody = auxContainer ? auxContainer.querySelector('.flex-grow.overflow-hidden') : null;
+          const auxBody = auxContainer ? auxContainer.querySelector('.flex-grow.overflow-hidden') : null;
 
           let hostEl = document.getElementById('antigravity-git-panel-host');
           if (!hostEl) {
@@ -811,15 +1263,27 @@ export class ModLoader {
             hostEl.style.cssText = 'position:fixed; right:0; top:40px; bottom:24px; width:420px; display:' + (isCurrentActive ? 'none' : 'flex') + '; flex-direction:column; overflow:hidden; z-index:99999; background:#0f111a; box-shadow:-12px 0 30px rgba(0,0,0,0.7); border-left:1px solid #1e2438;';
           }
 
-          if (isCurrentActive) {
-            // panel closed
-          } else {
-            const template = document.getElementById('antigravity-git-panel-template');
-            if (template) {
-              hostEl.innerHTML = template.innerHTML;
+          if (!isCurrentActive) {
+            if (window.__antigravityVcsData && typeof window.__antigravityRenderGitPanel === 'function') {
+              hostEl.__skipInitialStateParse = true;
+              hostEl.innerHTML = window.__antigravityRenderGitPanel(window.__antigravityVcsData);
+            } else {
+              const template = document.getElementById('antigravity-git-panel-template');
+              if (template) {
+                hostEl.innerHTML = template.innerHTML;
+              }
             }
             hostEl.style.display = 'flex';
             window.__bindGitPanelEvents(hostEl);
+
+            fetch('http://127.0.0.1:53912/vcs/overview')
+              .then(function(r) { return r.ok ? r.json() : null; })
+              .then(function(liveData) {
+                if (liveData && window.__antigravityUpdateVcsData) {
+                  window.__antigravityUpdateVcsData(liveData);
+                }
+              })
+              .catch(function() {});
           }
         };
 
@@ -865,6 +1329,10 @@ export class ModLoader {
           if (!isCurrentOpen) {
             badge.classList.add('open');
             portal.__currentBadge = badge;
+
+            if (typeof window.__scrapeNativeModelQuota === 'function') {
+              window.__scrapeNativeModelQuota();
+            }
 
             // Resolve active conversation metric for this badge
             const cascadeEl = badge.closest('[data-cascade-id]');
@@ -959,6 +1427,21 @@ export class ModLoader {
               if (currentAgentId !== agentToApply.id || currentEffMode !== nextEffMode || badge.__lastCascadeId !== cId) {
                 badge.__lastCascadeId = cId;
                 window.__applyAgentToBadge(badge, agentToApply);
+              }
+            }
+
+            // Sync exterior reticle trigger in the same group
+            const group = badge.closest('.antigravity-agent-selector-group');
+            const reticleBtn = group ? group.querySelector('.antigravity-caveman-reticle-trigger') : null;
+            if (reticleBtn) {
+              const isFocus = window.__resolveCavemanForCascade ? window.__resolveCavemanForCascade(cId) : false;
+              const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
+              const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
+              reticleBtn.classList.toggle('is-focus', isFocus);
+              reticleBtn.setAttribute('title', isFocus ? focusTitle : explicativoTitle);
+              const box = reticleBtn.querySelector('.caveman-reticle-box');
+              if (box && window.__renderReticleSvg) {
+                box.innerHTML = window.__renderReticleSvg(isFocus, 14);
               }
             }
           });
@@ -1111,6 +1594,14 @@ export class ModLoader {
               if (text && window.__handleAutoPromptContextUpdate) {
                 window.__handleAutoPromptContextUpdate(text, sendBtn);
               }
+            }
+
+            const reticleBtn = e.target.closest('.antigravity-caveman-reticle-trigger');
+            if (reticleBtn) {
+              e.preventDefault();
+              e.stopPropagation();
+              window.__toggleCavemanMode(undefined, reticleBtn);
+              return;
             }
 
             const isAgentBadge = e.target.closest('.antigravity-agent-badge');
@@ -1285,11 +1776,13 @@ export class ModLoader {
               }
             }
             const footer = slot.closest('[class*="input-footer"]') || slot.closest('.flex.items-center.justify-between') || slot.parentElement || slot;
+            const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
             const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
+            const shouldCompact = isForcedCompact || isNarrow;
             const tach = slot.querySelector('.antigravity-tachometer-badge');
-            if (tach) tach.classList.toggle('compact', isNarrow);
+            if (tach) tach.classList.toggle('compact', shouldCompact);
             const agent = slot.querySelector('.antigravity-agent-badge');
-            if (agent) agent.classList.toggle('compact', isNarrow);
+            if (agent) agent.classList.toggle('compact', shouldCompact);
           });
         }
 
@@ -1303,16 +1796,18 @@ export class ModLoader {
           for (const entry of entries) {
             const container = entry.target;
             const footer = container.closest('[class*="input-footer"]') || container.closest('.flex.items-center.justify-between') || container.parentElement || container;
+            const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
             const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
+            const shouldCompact = isForcedCompact || isNarrow;
 
             const tach = container.querySelector('.antigravity-tachometer-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-tachometer-badge') : null);
             if (tach) {
-              tach.classList.toggle('compact', isNarrow);
+              tach.classList.toggle('compact', shouldCompact);
             }
 
             const agent = container.querySelector('.antigravity-agent-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-agent-badge') : null);
             if (agent) {
-              agent.classList.toggle('compact', isNarrow);
+              agent.classList.toggle('compact', shouldCompact);
             }
           }
         });
@@ -1331,27 +1826,26 @@ export class ModLoader {
 
         let mountDebounce = null;
         window.__antigravityModObserver = new MutationObserver(() => {
-          if (typeof window.__scrapeNativeModelQuota === 'function') {
-            window.__scrapeNativeModelQuota();
-          }
-          const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
-          let missingSlot = false;
-          for (const btn of triggers) {
-            const parent = btn.parentElement;
-            if (!parent) continue;
-            const row = parent.closest('.flex.items-center') || parent;
-            if (!row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')) {
-              missingSlot = true;
-              break;
+          if (mountDebounce) clearTimeout(mountDebounce);
+          mountDebounce = setTimeout(() => {
+            const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
+            let missingSlot = false;
+            for (const btn of triggers) {
+              const parent = btn.parentElement;
+              if (!parent) continue;
+              const row = parent.closest('.flex.items-center') || parent;
+              if (!row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')) {
+                missingSlot = true;
+                break;
+              }
             }
-          }
 
-          if (missingSlot) {
-            if (mountDebounce) clearTimeout(mountDebounce);
-            mountDebounce = setTimeout(mountAllMods, 80);
-          } else if (typeof window.__syncAgentBadges === 'function') {
-            window.__syncAgentBadges();
-          }
+            if (missingSlot) {
+              mountAllMods();
+            } else if (typeof window.__syncAgentBadges === 'function') {
+              window.__syncAgentBadges();
+            }
+          }, 150);
         });
 
         window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
