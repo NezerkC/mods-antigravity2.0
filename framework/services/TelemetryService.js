@@ -17,6 +17,7 @@ export class TelemetryService {
     this.brainDir = options.brainDir || path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
     this.tokenLimit = options.tokenLimit ?? 1_000_000;
     this.charsPerToken = options.charsPerToken ?? 3.8;
+    this.parseCache = new Map();
   }
 
   /**
@@ -129,9 +130,16 @@ export class TelemetryService {
         return this.getEmptySnapshot();
       }
 
+      const stat = fs.statSync(filePath);
+      const totalBytes = stat.size;
+      const mtimeMs = stat.mtimeMs;
+      const cached = this.parseCache.get(filePath);
+      if (cached && cached.mtimeMs === mtimeMs && cached.size === totalBytes) {
+        return JSON.parse(JSON.stringify(cached.snapshot));
+      }
+
       const content = fs.readFileSync(filePath, 'utf-8');
       const lines = content.split('\n');
-      const totalBytes = fs.statSync(filePath).size;
 
       const raw = {
         userChars: 0,
@@ -308,7 +316,7 @@ export class TelemetryService {
 
       const modelQuota = this.resolveModelQuota(detectedModel, stepEntries, chatModels);
 
-      return {
+      const snapshotResult = {
         estTokens,
         pct,
         displayTokens,
@@ -328,6 +336,8 @@ export class TelemetryService {
           other: { tokens: otherTokens, pct: catPct(otherTokens) }
         }
       };
+      this.parseCache.set(filePath, { mtimeMs, size: totalBytes, snapshot: snapshotResult });
+      return snapshotResult;
     } catch {
       return this.getEmptySnapshot();
     }

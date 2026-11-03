@@ -1987,6 +1987,10 @@ class ModLoader {
             badge.classList.add('open');
             portal.__currentBadge = badge;
 
+            if (typeof window.__scrapeNativeModelQuota === 'function') {
+              window.__scrapeNativeModelQuota();
+            }
+
             // Resolve active conversation metric for this badge
             const cascadeEl = badge.closest('[data-cascade-id]');
             const cascadeId = cascadeEl ? cascadeEl.getAttribute('data-cascade-id') : null;
@@ -2430,27 +2434,26 @@ class ModLoader {
 
         let mountDebounce = null;
         window.__antigravityModObserver = new MutationObserver(() => {
-          if (typeof window.__scrapeNativeModelQuota === 'function') {
-            window.__scrapeNativeModelQuota();
-          }
-          const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
-          let missingSlot = false;
-          for (const btn of triggers) {
-            const parent = btn.parentElement;
-            if (!parent) continue;
-            const row = parent.closest('.flex.items-center') || parent;
-            if (!row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')) {
-              missingSlot = true;
-              break;
+          if (mountDebounce) clearTimeout(mountDebounce);
+          mountDebounce = setTimeout(() => {
+            const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
+            let missingSlot = false;
+            for (const btn of triggers) {
+              const parent = btn.parentElement;
+              if (!parent) continue;
+              const row = parent.closest('.flex.items-center') || parent;
+              if (!row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')) {
+                missingSlot = true;
+                break;
+              }
             }
-          }
 
-          if (missingSlot) {
-            if (mountDebounce) clearTimeout(mountDebounce);
-            mountDebounce = setTimeout(mountAllMods, 80);
-          } else if (typeof window.__syncAgentBadges === 'function') {
-            window.__syncAgentBadges();
-          }
+            if (missingSlot) {
+              mountAllMods();
+            } else if (typeof window.__syncAgentBadges === 'function') {
+              window.__syncAgentBadges();
+            }
+          }, 150);
         });
 
         window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
@@ -2478,6 +2481,7 @@ class TelemetryService {
     this.brainDir = options.brainDir || path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
     this.tokenLimit = options.tokenLimit ?? 1_000_000;
     this.charsPerToken = options.charsPerToken ?? 3.8;
+    this.parseCache = new Map();
   }
 
   /**
@@ -2590,9 +2594,16 @@ class TelemetryService {
         return this.getEmptySnapshot();
       }
 
+      const stat = fs.statSync(filePath);
+      const totalBytes = stat.size;
+      const mtimeMs = stat.mtimeMs;
+      const cached = this.parseCache.get(filePath);
+      if (cached && cached.mtimeMs === mtimeMs && cached.size === totalBytes) {
+        return JSON.parse(JSON.stringify(cached.snapshot));
+      }
+
       const content = fs.readFileSync(filePath, 'utf-8');
       const lines = content.split('\n');
-      const totalBytes = fs.statSync(filePath).size;
 
       const raw = {
         userChars: 0,
@@ -2769,7 +2780,7 @@ class TelemetryService {
 
       const modelQuota = this.resolveModelQuota(detectedModel, stepEntries, chatModels);
 
-      return {
+      const snapshotResult = {
         estTokens,
         pct,
         displayTokens,
@@ -2789,6 +2800,8 @@ class TelemetryService {
           other: { tokens: otherTokens, pct: catPct(otherTokens) }
         }
       };
+      this.parseCache.set(filePath, { mtimeMs, size: totalBytes, snapshot: snapshotResult });
+      return snapshotResult;
     } catch {
       return this.getEmptySnapshot();
     }
@@ -4583,25 +4596,17 @@ class ModHost {
 
     const repoPath = await this.resolveRepoPath(cdpClient, explicitPath);
 
-    let vcsOverview = {};
-    try {
-      vcsOverview = this.vcsOrchestrator.getRepositoryOverview({ repoPath });
-    } catch (err) {
-      try {
-        const gitLog = this.gitService.getGitLog({ repoPath, limit: 40 });
-        const gitStatus = this.gitService.getGitStatus({ repoPath });
-        const github = this.gitService.getGitHubMetadata({ repoPath });
-        const branches = this.gitService.getBranches({ repoPath });
-        vcsOverview = {
-          commits: gitLog,
-          gitLog,
-          status: gitStatus,
-          branches,
-          github,
-          activeRepo: github.fullName || path.basename(repoPath)
-        };
-      } catch {}
-    }
+    // Lazy VCS: Do not synchronously run heavy git/gh commands during main dispatch.
+    // The GitGraph UI tab will load full data on-demand via the local HTTP bridge (/vcs/overview).
+    const vcsOverview = {
+      isRepo: true,
+      repoPath,
+      activeRepo: path.basename(repoPath),
+      status: { branch: '', isClean: true, changedFiles: [], ahead: 0, behind: 0 },
+      github: { isGitHub: false },
+      branches: { local: [], remote: [] },
+      commits: []
+    };
 
     const activeAgents = this.syncServer.readActiveAgents();
 
@@ -6910,11 +6915,15 @@ async function main() {
     host.registerMod(new AgentSelectorMod());
     host.registerMod(new ModsManagerMod());
 
-    let initialVcs = {};
-    try {
-      const vcs = new VcsOrchestrator();
-      initialVcs = vcs.getRepositoryOverview();
-    } catch {}
+    // Lazy VCS: Avoid running 20+ git/gh processes synchronously on every hook execution.
+    // Full VCS overview will be fetched on demand by GitGraph via the local HTTP bridge.
+    const initialVcs = {
+      isRepo: true,
+      commits: [],
+      status: { branch: '', isClean: true, changedFiles: [], ahead: 0, behind: 0 },
+      github: { isGitHub: false },
+      branches: { local: [], remote: [] }
+    };
 
     host.registerMod(new GitGraphMod({ initialContext: initialVcs }));
     await host.dispatch();

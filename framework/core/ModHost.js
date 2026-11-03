@@ -174,25 +174,17 @@ export class ModHost {
 
     const repoPath = await this.resolveRepoPath(cdpClient, explicitPath);
 
-    let vcsOverview = {};
-    try {
-      vcsOverview = this.vcsOrchestrator.getRepositoryOverview({ repoPath });
-    } catch (err) {
-      try {
-        const gitLog = this.gitService.getGitLog({ repoPath, limit: 40 });
-        const gitStatus = this.gitService.getGitStatus({ repoPath });
-        const github = this.gitService.getGitHubMetadata({ repoPath });
-        const branches = this.gitService.getBranches({ repoPath });
-        vcsOverview = {
-          commits: gitLog,
-          gitLog,
-          status: gitStatus,
-          branches,
-          github,
-          activeRepo: github.fullName || path.basename(repoPath)
-        };
-      } catch {}
-    }
+    // Lazy VCS: Do not synchronously run heavy git/gh commands during main dispatch.
+    // The GitGraph UI tab will load full data on-demand via the local HTTP bridge (/vcs/overview).
+    const vcsOverview = {
+      isRepo: true,
+      repoPath,
+      activeRepo: path.basename(repoPath),
+      status: { branch: '', isClean: true, changedFiles: [], ahead: 0, behind: 0 },
+      github: { isGitHub: false },
+      branches: { local: [], remote: [] },
+      commits: []
+    };
 
     const activeAgents = this.syncServer.readActiveAgents();
 

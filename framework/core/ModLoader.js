@@ -1327,6 +1327,10 @@ export class ModLoader {
             badge.classList.add('open');
             portal.__currentBadge = badge;
 
+            if (typeof window.__scrapeNativeModelQuota === 'function') {
+              window.__scrapeNativeModelQuota();
+            }
+
             // Resolve active conversation metric for this badge
             const cascadeEl = badge.closest('[data-cascade-id]');
             const cascadeId = cascadeEl ? cascadeEl.getAttribute('data-cascade-id') : null;
@@ -1770,27 +1774,26 @@ export class ModLoader {
 
         let mountDebounce = null;
         window.__antigravityModObserver = new MutationObserver(() => {
-          if (typeof window.__scrapeNativeModelQuota === 'function') {
-            window.__scrapeNativeModelQuota();
-          }
-          const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
-          let missingSlot = false;
-          for (const btn of triggers) {
-            const parent = btn.parentElement;
-            if (!parent) continue;
-            const row = parent.closest('.flex.items-center') || parent;
-            if (!row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')) {
-              missingSlot = true;
-              break;
+          if (mountDebounce) clearTimeout(mountDebounce);
+          mountDebounce = setTimeout(() => {
+            const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
+            let missingSlot = false;
+            for (const btn of triggers) {
+              const parent = btn.parentElement;
+              if (!parent) continue;
+              const row = parent.closest('.flex.items-center') || parent;
+              if (!row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')) {
+                missingSlot = true;
+                break;
+              }
             }
-          }
 
-          if (missingSlot) {
-            if (mountDebounce) clearTimeout(mountDebounce);
-            mountDebounce = setTimeout(mountAllMods, 80);
-          } else if (typeof window.__syncAgentBadges === 'function') {
-            window.__syncAgentBadges();
-          }
+            if (missingSlot) {
+              mountAllMods();
+            } else if (typeof window.__syncAgentBadges === 'function') {
+              window.__syncAgentBadges();
+            }
+          }, 150);
         });
 
         window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });

@@ -147,11 +147,15 @@ async function main() {
     host.registerMod(new AgentSelectorMod());
     host.registerMod(new ModsManagerMod());
 
-    let initialVcs = {};
-    try {
-      const vcs = new VcsOrchestrator();
-      initialVcs = vcs.getRepositoryOverview();
-    } catch {}
+    // Lazy VCS: Avoid running 20+ git/gh processes synchronously on every hook execution.
+    // Full VCS overview will be fetched on demand by GitGraph via the local HTTP bridge.
+    const initialVcs = {
+      isRepo: true,
+      commits: [],
+      status: { branch: '', isClean: true, changedFiles: [], ahead: 0, behind: 0 },
+      github: { isGitHub: false },
+      branches: { local: [], remote: [] }
+    };
 
     host.registerMod(new GitGraphMod({ initialContext: initialVcs }));
     await host.dispatch();
