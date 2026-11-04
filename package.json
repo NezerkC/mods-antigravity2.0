@@ -1,7 +1,7 @@
 {
   "name": "mods-antigravity2.0",
   "version": "2.0.0",
-  "description": "Extensible UI Mod Framework and Specialists for Google Antigravity 2.0",
+  "description": "Extensible UI Mod Framework and Specialist Suite for Google Antigravity 2.0",
   "type": "module",
   "main": "framework/index.js",
   "scripts": {
@@ -23,5 +23,23 @@
     "probe:cdp": "node tools/probe.js cdp"
   },
   "author": "Victor Manuel Martinez Munoz",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NezerkC/mods-antigravity2.0.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NezerkC/mods-antigravity2.0/issues"
+  },
+  "homepage": "https://github.com/NezerkC/mods-antigravity2.0#readme",
+  "keywords": [
+    "antigravity",
+    "google-antigravity",
+    "antigravity-2",
+    "electron",
+    "cdp",
+    "mod-framework",
+    "ui-mods",
+    "devtools-protocol"
+  ]
 }
