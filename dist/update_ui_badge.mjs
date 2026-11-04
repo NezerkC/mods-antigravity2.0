@@ -8,6 +8,9 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 // ======================== Core & SDK ========================
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 
 
 
@@ -185,6 +188,9 @@ class CdpPortResolver {
 }
 
 
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 /**
  * Client for interacting with the Electron Chrome DevTools Protocol (CDP) WebSocket bridge.
  */
@@ -293,6 +299,9 @@ class CdpWebSocketClient {
   }
 }
 
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
 
 /**
  * Manages target UI slots in the Antigravity 2.0 DOM and generates
@@ -508,6 +517,9 @@ class SlotManager {
 }
 
 
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 /**
  * Scopes and isolates raw CSS rules to prevent injected mod styles
  * from conflicting with Antigravity host UI.
@@ -612,6 +624,9 @@ class StyleIsolator {
 }
 
 
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 /**
  * Base class for all Antigravity desktop UI mods.
  * Enforces metadata manifest and standard lifecycle contracts.
@@ -673,6 +688,9 @@ class AntigravityMod {
   onDestroy() {}
 }
 
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
 
 
 
@@ -792,6 +810,79 @@ class ModLoader {
           if (urlPathId) return urlPathId;
           const searchMatch = (window.location.search || '').match(/[?&](?:focused|conversationId)=([0-9a-fA-F-]+)/);
           return searchMatch ? searchMatch[1] : null;
+        };
+
+        window.__normalizeFileUriToPath = function(uri) {
+          if (!uri || typeof uri !== 'string') return '';
+          let clean = uri.trim();
+          try {
+            if (clean.indexOf('file://') === 0) {
+              clean = decodeURIComponent(clean.replace(/^file:\\/\\/\\/?/, ''));
+            } else if (clean.indexOf('%') !== -1) {
+              clean = decodeURIComponent(clean);
+            }
+            if (/^\\/([a-zA-Z]:)/.test(clean)) {
+              clean = clean.slice(1);
+            }
+          } catch (e) {}
+          return clean;
+        };
+
+        window.__resolveRepoForCascade = async function(cascadeId) {
+          const targetId = cascadeId || (window.__resolveCascadeId ? window.__resolveCascadeId() : null);
+          window.__antigravityCascadeRepos = window.__antigravityCascadeRepos || {};
+          if (targetId && window.__antigravityCascadeRepos[targetId]) {
+            return window.__antigravityCascadeRepos[targetId];
+          }
+          try {
+            if (window.__APP_CONFIG__?.csrfToken) {
+              const res = await fetch('/exa.language_server_pb.LanguageServerService/GetAllCascadeTrajectories', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Connect-Protocol-Version': '1',
+                  'x-codeium-csrf-token': window.__APP_CONFIG__.csrfToken
+                },
+                body: '{}'
+              });
+              if (res.ok) {
+                const data = await res.json();
+                const summaries = (data && data.trajectorySummaries) || {};
+                Object.keys(summaries).forEach(function(id) {
+                  const summary = summaries[id];
+                  const ws = (summary && summary.workspaces && summary.workspaces[0]) ||
+                             (summary && summary.trajectoryMetadata && summary.trajectoryMetadata.workspaces && summary.trajectoryMetadata.workspaces[0]);
+                  const rawUri = (ws && (ws.gitRootAbsoluteUri || ws.workspaceFolderAbsoluteUri)) ||
+                                 (summary && summary.trajectoryMetadata && summary.trajectoryMetadata.workspaceUris && summary.trajectoryMetadata.workspaceUris[0]);
+                  if (rawUri) {
+                    const cleanPath = window.__normalizeFileUriToPath ? window.__normalizeFileUriToPath(rawUri) : rawUri;
+                    if (cleanPath) {
+                      window.__antigravityCascadeRepos[id] = cleanPath;
+                    }
+                  }
+                });
+              }
+            }
+          } catch (e) {}
+          return (targetId && window.__antigravityCascadeRepos[targetId]) || '';
+        };
+
+        window.__antigravityFetchSessionVcsOverview = async function() {
+          try {
+            const cascadeId = window.__resolveCascadeId ? window.__resolveCascadeId() : '';
+            const repoPath = await window.__resolveRepoForCascade(cascadeId);
+            const url = 'http://127.0.0.1:53912/vcs/overview?cascadeId=' + encodeURIComponent(cascadeId || '') +
+              (repoPath ? '&repoPath=' + encodeURIComponent(repoPath) : '');
+            const res = await fetch(url);
+            if (res.ok) {
+              const liveData = await res.json();
+              if (liveData && typeof window.__antigravityUpdateVcsData === 'function') {
+                window.__antigravityUpdateVcsData(liveData);
+              }
+              return liveData;
+            }
+          } catch (e) {}
+          return null;
         };
 
         window.__classifyPromptMode = function(prompt) {
@@ -1227,16 +1318,22 @@ class ModLoader {
         window.__renderReticleSvg = renderReticleSvg;
 
         window.__applyChatboxModsCompact = function() {
-          const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
+          const compactSetting = localStorage.getItem('__antigravity_compact_chatbox_mods');
           document.querySelectorAll('.antigravity-tachometer-badge').forEach(tach => {
             const footer = tach.closest('[class*="input-footer"]') || tach.closest('.flex.items-center.justify-between') || tach.parentElement;
-            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
-            tach.classList.toggle('compact', isForcedCompact || isNarrow);
+            const isNarrow = (footer && footer.offsetWidth < 380) || window.innerWidth < 800;
+            const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
+            if (tach.classList.contains('compact') !== shouldCompact) {
+              tach.classList.toggle('compact', shouldCompact);
+            }
           });
           document.querySelectorAll('.antigravity-agent-badge').forEach(agent => {
             const footer = agent.closest('[class*="input-footer"]') || agent.closest('.flex.items-center.justify-between') || agent.parentElement;
-            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
-            agent.classList.toggle('compact', isForcedCompact || isNarrow);
+            const isNarrow = (footer && footer.offsetWidth < 380) || window.innerWidth < 800;
+            const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
+            if (agent.classList.contains('compact') !== shouldCompact) {
+              agent.classList.toggle('compact', shouldCompact);
+            }
           });
         };
 
@@ -1597,19 +1694,31 @@ class ModLoader {
           };
           window.__antigravityShowGitToast(hostEl, labelMap[payload.action] || ('Ejecutando ' + payload.action + '...'), false);
 
+          const cascadeId = (window.__resolveCascadeId ? window.__resolveCascadeId() : '') || '';
+          const repoPath = (window.__antigravityVcsData && window.__antigravityVcsData.repoPath) || '';
+          const actionPayload = Object.assign({}, payload, {
+            cascadeId: cascadeId,
+            repoPath: repoPath
+          });
+
           try {
             if (payload.action === 'create-pr' && payload.branch) {
               await fetch('http://127.0.0.1:53912/vcs/action', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'push', branch: payload.branch })
+                body: JSON.stringify({
+                  action: 'push',
+                  branch: payload.branch,
+                  cascadeId: cascadeId,
+                  repoPath: repoPath
+                })
               }).catch(function() {});
             }
 
             const res = await fetch('http://127.0.0.1:53912/vcs/action', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
+              body: JSON.stringify(actionPayload)
             });
             const result = await res.json();
 
@@ -1624,12 +1733,12 @@ class ModLoader {
               window.open(result.output, '_blank');
             }
 
-            const ovRes = await fetch('http://127.0.0.1:53912/vcs/overview');
-            if (ovRes.ok) {
-              const freshData = await ovRes.json();
-              window.__antigravityUpdateVcsData(freshData);
-              const newHost = document.getElementById('antigravity-git-panel-host') || hostEl;
-              window.__antigravityShowGitToast(newHost, 'Accion completada: ' + payload.action, false);
+            if (typeof window.__antigravityFetchSessionVcsOverview === 'function') {
+              const freshData = await window.__antigravityFetchSessionVcsOverview();
+              if (freshData) {
+                const newHost = document.getElementById('antigravity-git-panel-host') || hostEl;
+                window.__antigravityShowGitToast(newHost, 'Accion completada: ' + payload.action, false);
+              }
             }
           } catch (err) {
             window.__antigravityShowGitToast(hostEl, 'Servidor VCS local no disponible (daemon inactivo)', true);
@@ -1870,16 +1979,10 @@ class ModLoader {
               refreshBtn.style.transition = 'transform 0.5s ease';
               setTimeout(function() { refreshBtn.style.transform = ''; }, 500);
 
-              try {
-                const res = await fetch('http://127.0.0.1:53912/vcs/overview');
-                if (res.ok) {
-                  const data = await res.json();
-                  if (window.__antigravityUpdateVcsData) {
-                    window.__antigravityUpdateVcsData(data);
-                    return;
-                  }
-                }
-              } catch (err) {}
+              if (typeof window.__antigravityFetchSessionVcsOverview === 'function') {
+                const liveData = await window.__antigravityFetchSessionVcsOverview();
+                if (liveData) return;
+              }
 
               if (window.__antigravityMountAll) {
                 window.__antigravityMountAll();
@@ -1951,14 +2054,9 @@ class ModLoader {
             hostEl.style.display = 'flex';
             window.__bindGitPanelEvents(hostEl);
 
-            fetch('http://127.0.0.1:53912/vcs/overview')
-              .then(function(r) { return r.ok ? r.json() : null; })
-              .then(function(liveData) {
-                if (liveData && window.__antigravityUpdateVcsData) {
-                  window.__antigravityUpdateVcsData(liveData);
-                }
-              })
-              .catch(function() {});
+            if (typeof window.__antigravityFetchSessionVcsOverview === 'function') {
+              window.__antigravityFetchSessionVcsOverview();
+            }
           }
         };
 
@@ -2090,6 +2188,14 @@ class ModLoader {
         );
 
         window.__syncAgentBadges = function() {
+          const currentCascadeId = window.__resolveCascadeId ? window.__resolveCascadeId() : null;
+          if (currentCascadeId && currentCascadeId !== window.__lastGitCascadeId) {
+            window.__lastGitCascadeId = currentCascadeId;
+            if (typeof window.__antigravityFetchSessionVcsOverview === 'function') {
+              window.__antigravityFetchSessionVcsOverview();
+            }
+          }
+
           document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {
             const cId = window.__resolveCascadeId(badge);
             const agentToApply = window.__resolveAgentForCascade(cId);
@@ -2422,14 +2528,14 @@ class ModLoader {
           // Refresh active Git panel host if currently open
           const activeGitHost = document.getElementById('antigravity-git-panel-host');
           const gitTemplate = document.getElementById('antigravity-git-panel-template');
-          if (activeGitHost && activeGitHost.style.display !== 'none' && gitTemplate) {
+          if (activeGitHost && activeGitHost.style.display !== 'none' && gitTemplate && !activeGitHost.firstElementChild) {
             activeGitHost.innerHTML = gitTemplate.innerHTML;
             if (window.__bindGitPanelEvents) {
               window.__bindGitPanelEvents(activeGitHost);
             }
           }
 
-          // Restore saved agent selection across mounted badges (scoped per chat)
+          // Restore saved agent selection and caveman focus across mounted badges
           document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {
             const cId = window.__resolveCascadeId(badge);
             const agentToApply = window.__resolveAgentForCascade(cId);
@@ -2437,27 +2543,43 @@ class ModLoader {
               badge.__lastCascadeId = cId;
               window.__applyAgentToBadge(badge, agentToApply);
             }
+            // Sync exterior reticle trigger in the same group immediately upon mount
+            const group = badge.closest('.antigravity-agent-selector-group');
+            const reticleBtn = group ? group.querySelector('.antigravity-caveman-reticle-trigger') : null;
+            if (reticleBtn) {
+              const isFocus = window.__resolveCavemanForCascade ? window.__resolveCavemanForCascade(cId) : false;
+              const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
+              const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
+              reticleBtn.classList.toggle('is-focus', isFocus);
+              reticleBtn.setAttribute('title', isFocus ? focusTitle : explicativoTitle);
+              const box = reticleBtn.querySelector('.caveman-reticle-box');
+              if (box && window.__renderReticleSvg) {
+                box.innerHTML = window.__renderReticleSvg(isFocus, 14);
+              }
+            }
           });
 
           // Apply current telemetry
           window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})});
 
-          // Observe all slot containers for responsive auto-collapse
+          // Observe only stable parent containers for responsive auto-collapse (avoid layout thrashing)
           document.querySelectorAll('.antigravity-slot-container').forEach(slot => {
-            if (window.__antigravityResizeObserver) {
-              window.__antigravityResizeObserver.observe(slot);
-              if (slot.parentElement) {
-                window.__antigravityResizeObserver.observe(slot.parentElement);
-              }
+            const footer = slot.closest('[class*="input-footer"]') || slot.closest('.flex.items-center.justify-between') || slot.parentElement;
+            if (window.__antigravityResizeObserver && footer) {
+              window.__antigravityResizeObserver.observe(footer);
             }
-            const footer = slot.closest('[class*="input-footer"]') || slot.closest('.flex.items-center.justify-between') || slot.parentElement || slot;
-            const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
-            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
-            const shouldCompact = isForcedCompact || isNarrow;
+            const compactSetting = localStorage.getItem('__antigravity_compact_chatbox_mods');
+            const width = footer ? footer.offsetWidth : window.innerWidth;
+            const isNarrow = width < 380 || window.innerWidth < 800;
+            const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
             const tach = slot.querySelector('.antigravity-tachometer-badge');
-            if (tach) tach.classList.toggle('compact', shouldCompact);
+            if (tach && tach.classList.contains('compact') !== shouldCompact) {
+              tach.classList.toggle('compact', shouldCompact);
+            }
             const agent = slot.querySelector('.antigravity-agent-badge');
-            if (agent) agent.classList.toggle('compact', shouldCompact);
+            if (agent && agent.classList.contains('compact') !== shouldCompact) {
+              agent.classList.toggle('compact', shouldCompact);
+            }
           });
         }
 
@@ -2470,20 +2592,24 @@ class ModLoader {
         window.__antigravityResizeObserver = new ResizeObserver((entries) => {
           for (const entry of entries) {
             const container = entry.target;
-            const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
+            const compactSetting = localStorage.getItem('__antigravity_compact_chatbox_mods');
             const width = (entry.contentRect && entry.contentRect.width > 0)
               ? entry.contentRect.width
-              : ((container.closest('[class*="input-footer"]') || container.parentElement || container).getBoundingClientRect?.().width || 500);
-            const isNarrow = width < 440 || window.innerWidth < 960;
-            const shouldCompact = isForcedCompact || isNarrow;
+              : (container.getBoundingClientRect?.().width || 500);
+
+            // Hysteresis threshold to prevent vibration: 380px collapse, 430px expand
+            const isCurrentlyCompact = Boolean(container.querySelector('.antigravity-tachometer-badge.compact'));
+            const threshold = isCurrentlyCompact ? 430 : 380;
+            const isNarrow = width < threshold || window.innerWidth < 800;
+            const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
 
             const tach = container.querySelector('.antigravity-tachometer-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-tachometer-badge') : null);
-            if (tach) {
+            if (tach && tach.classList.contains('compact') !== shouldCompact) {
               tach.classList.toggle('compact', shouldCompact);
             }
 
             const agent = container.querySelector('.antigravity-agent-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-agent-badge') : null);
-            if (agent) {
+            if (agent && agent.classList.contains('compact') !== shouldCompact) {
               agent.classList.toggle('compact', shouldCompact);
             }
           }
@@ -2520,7 +2646,7 @@ class ModLoader {
 
             if (!missingSlot) {
               const auxBtn = document.querySelector('button[data-testid="aux-pane-new-tab-button"]') || document.querySelector('.aux-pane-new-tab-button');
-              if (auxBtn && !document.querySelector('.antigravity-slot-aux-pane-tabs, #antigravity-slot-aux-pane-tabs')) {
+              if (auxBtn && !document.querySelector('.antigravity-slot-aux-pane-tab, #antigravity-slot-aux-pane-tab')) {
                 missingSlot = true;
               }
             }
@@ -2549,6 +2675,9 @@ class ModLoader {
   }
 }
 
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
 
 
 
@@ -3221,6 +3350,9 @@ function resolveNativeQuotaForModel(groups, activeModelName = '', now = Date.now
 }
 
 
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 
 
 
@@ -3353,7 +3485,7 @@ class GitService {
     const remoteHashes = new Set();
     const localHashes = new Set();
     try {
-      const trunkLog = execSync('git rev-list --first-parent origin/main || git rev-list --first-parent main || git rev-list origin/main || git rev-list main', {
+      const trunkLog = execSync('git rev-list --first-parent origin/main || git rev-list --first-parent main || git rev-list --first-parent origin/master || git rev-list --first-parent master || git rev-list origin/main || git rev-list main', {
         cwd: repoPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore']
@@ -3821,7 +3953,7 @@ class GitService {
         }
       }
 
-      return this.computeTopology(rawCommits);
+      return this.computeTopology(rawCommits, { repoPath });
     } catch (err) {
       return [];
     }
@@ -4237,6 +4369,9 @@ class VcsOrchestrator {
 }
 
 
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 
 
 
@@ -4261,9 +4396,136 @@ class AgentSyncServer {
     this.port = options.port ?? 53912;
     this.host = options.host || '127.0.0.1';
     this.configPath = options.configPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'active_agents.json');
+    this.brainDir = options.brainDir || path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
+    this.sessionRepos = new Map();
     this.repoPath = options.repoPath || process.cwd();
     this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ repoPath: this.repoPath });
     this.server = null;
+  }
+
+  /**
+   * Normalizes a candidate file/directory path or file:// URI into a valid Git repository root.
+   * @param {string} [candidate='']
+   * @param {boolean} [requireGit=false]
+   * @returns {string|null}
+   */
+  normalizeRepoCandidate(candidate = '', requireGit = false) {
+    if (!candidate || typeof candidate !== 'string') return null;
+    let clean = candidate.trim();
+    if (!clean) return null;
+
+    try {
+      if (clean.startsWith('file://')) {
+        clean = decodeURIComponent(clean.replace(/^file:\/\/\/?/, ''));
+      } else if (clean.includes('%')) {
+        clean = decodeURIComponent(clean);
+      }
+      if (/^\/([a-zA-Z]:)/.test(clean)) {
+        clean = clean.slice(1);
+      }
+    } catch {}
+
+    clean = path.normalize(clean);
+    if (!fs.existsSync(clean)) return null;
+
+    let startDir = clean;
+    try {
+      const stat = fs.statSync(clean);
+      startDir = stat.isDirectory() ? clean : path.dirname(clean);
+    } catch {
+      return null;
+    }
+
+    let curr = startDir;
+    while (curr && curr !== path.dirname(curr)) {
+      if (fs.existsSync(path.join(curr, '.git'))) {
+        return curr;
+      }
+      curr = path.dirname(curr);
+    }
+    if (curr && fs.existsSync(path.join(curr, '.git'))) {
+      return curr;
+    }
+
+    return requireGit ? null : startDir;
+  }
+
+  /**
+   * Resolves the Git repository root for a specific conversation cascadeId or explicit path.
+   * @param {string} [cascadeId]
+   * @param {string} [explicitRepoPath]
+   * @returns {string}
+   */
+  resolveRepoForCascade(cascadeId, explicitRepoPath) {
+    if (explicitRepoPath) {
+      const normalized = this.normalizeRepoCandidate(explicitRepoPath, false);
+      if (normalized) {
+        this.repoPath = normalized;
+        if (cascadeId) {
+          this.sessionRepos.set(cascadeId, normalized);
+        }
+        return normalized;
+      }
+    }
+
+    if (cascadeId && this.sessionRepos.has(cascadeId)) {
+      const cached = this.sessionRepos.get(cascadeId);
+      if (cached && fs.existsSync(cached)) {
+        this.repoPath = cached;
+        return cached;
+      }
+      this.sessionRepos.delete(cascadeId);
+    }
+
+    if (cascadeId && /^[0-9a-fA-F-]{36}$/.test(cascadeId)) {
+      const logsDir = path.join(this.brainDir, cascadeId, '.system_generated', 'logs');
+      const candidates = [
+        path.join(logsDir, 'transcript.jsonl'),
+        path.join(logsDir, 'transcript_full.jsonl')
+      ];
+      for (const transcriptPath of candidates) {
+        if (!fs.existsSync(transcriptPath)) continue;
+        try {
+          const fd = fs.openSync(transcriptPath, 'r');
+          const buf = Buffer.alloc(65536);
+          const bytesRead = fs.readSync(fd, buf, 0, 65536, 0);
+          fs.closeSync(fd);
+          const sample = buf.toString('utf-8', 0, bytesRead);
+          const isJsonl = sample.trimStart().startsWith('{');
+          const cleanSample = isJsonl
+            ? sample.replace(/\\\\/g, '/').replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\"/g, '"')
+            : sample.replace(/\\\\/g, '/').replace(/\\/g, '/');
+
+          const cwdMatch = cleanSample.match(/Command Working Directory:\s*([^\r\n\\"]+)/i) ||
+                           cleanSample.match(/Active Workspaces:\s*(?:\\n|\r?\n)-\s*([^\r\n\\"]+)/i);
+          if (cwdMatch && cwdMatch[1]) {
+            const resolved = this.normalizeRepoCandidate(cwdMatch[1].trim(), false);
+            if (resolved) {
+              this.sessionRepos.set(cascadeId, resolved);
+              this.repoPath = resolved;
+              return resolved;
+            }
+          }
+
+          const pathRegex = /"Path"\s*:\s*"([^"]+)"/gi;
+          let m;
+          while ((m = pathRegex.exec(cleanSample)) !== null) {
+            const p = m[1];
+            if (!p || p.includes('.gemini/antigravity/builtin') || p.includes('.gemini/antigravity/brain')) {
+              continue;
+            }
+            const resolved = this.normalizeRepoCandidate(p, true);
+            if (resolved) {
+              this.sessionRepos.set(cascadeId, resolved);
+              this.repoPath = resolved;
+              return resolved;
+            }
+          }
+        } catch {}
+      }
+    }
+
+    return this.repoPath;
   }
 
   /**
@@ -4435,16 +4697,15 @@ class AgentSyncServer {
 
         if (req.method === 'GET' && (req.url === '/vcs/overview' || req.url.startsWith('/vcs/overview?'))) {
           try {
-            let targetRepo = this.repoPath;
+            let qRepo = null;
+            let qCascade = null;
             try {
               const urlObj = new URL(req.url, 'http://127.0.0.1');
-              const qRepo = urlObj.searchParams.get('repoPath');
-              if (qRepo && fs.existsSync(qRepo)) {
-                targetRepo = qRepo;
-                this.repoPath = qRepo;
-              }
+              qRepo = urlObj.searchParams.get('repoPath');
+              qCascade = urlObj.searchParams.get('cascadeId');
             } catch {}
 
+            const targetRepo = this.resolveRepoForCascade(qCascade, qRepo) || this.repoPath;
             const data = this.vcsOrchestrator.getRepositoryOverview({ repoPath: targetRepo });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(data));
@@ -4455,17 +4716,36 @@ class AgentSyncServer {
           return;
         }
 
-        if (req.method === 'POST' && req.url === '/vcs/fetch') {
-          try {
-            if (this.vcsOrchestrator?.gitService && typeof this.vcsOrchestrator.gitService.fetch === 'function') {
-              this.vcsOrchestrator.gitService.fetch({ repoPath: this.repoPath });
+        if (req.method === 'POST' && (req.url === '/vcs/fetch' || req.url.startsWith('/vcs/fetch?'))) {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            try {
+              let qRepo = null;
+              let qCascade = null;
+              try {
+                const urlObj = new URL(req.url, 'http://127.0.0.1');
+                qRepo = urlObj.searchParams.get('repoPath');
+                qCascade = urlObj.searchParams.get('cascadeId');
+              } catch {}
+              if (body) {
+                try {
+                  const parsed = JSON.parse(body);
+                  if (parsed.repoPath) qRepo = parsed.repoPath;
+                  if (parsed.cascadeId) qCascade = parsed.cascadeId;
+                } catch {}
+              }
+              const targetRepo = this.resolveRepoForCascade(qCascade, qRepo) || this.repoPath;
+              if (this.vcsOrchestrator?.gitService && typeof this.vcsOrchestrator.gitService.fetch === 'function') {
+                this.vcsOrchestrator.gitService.fetch({ repoPath: targetRepo });
+              }
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: true, repoPath: targetRepo }));
+            } catch (err) {
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: err.message }));
             }
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true }));
-          } catch (err) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: err.message }));
-          }
+          });
           return;
         }
 
@@ -4475,13 +4755,14 @@ class AgentSyncServer {
           req.on('end', () => {
             try {
               const payload = JSON.parse(body || '{}');
-              const { action, branch, targetSha } = payload;
+              const { action, branch, targetSha, cascadeId, repoPath } = payload;
               if (!action) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Missing action parameter' }));
                 return;
               }
 
+              const targetRepo = this.resolveRepoForCascade(cascadeId, repoPath) || this.repoPath;
               let result = {};
               if (action === 'checkout') {
                 if (!branch) {
@@ -4489,24 +4770,24 @@ class AgentSyncServer {
                   res.end(JSON.stringify({ error: 'Missing branch for checkout' }));
                   return;
                 }
-                execSync(`git checkout ${branch}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-                result = { success: true, action: 'checkout', branch };
+                execSync(`git checkout ${branch}`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                result = { success: true, action: 'checkout', branch, repoPath: targetRepo };
               } else if (action === 'pull') {
                 const targetBranch = branch || 'main';
-                execSync(`git pull origin ${targetBranch}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-                result = { success: true, action: 'pull', branch: targetBranch };
+                execSync(`git pull origin ${targetBranch}`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                result = { success: true, action: 'pull', branch: targetBranch, repoPath: targetRepo };
               } else if (action === 'push') {
                 const targetBranch = branch || 'main';
                 const refspec = targetSha ? `${targetSha}:refs/heads/${targetBranch}` : targetBranch;
-                execSync(`git push origin ${refspec}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-                result = { success: true, action: 'push', branch: targetBranch, refspec };
+                execSync(`git push origin ${refspec}`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                result = { success: true, action: 'push', branch: targetBranch, refspec, repoPath: targetRepo };
               } else if (action === 'create-pr') {
                 try {
-                  const prOut = execSync(`gh pr create --fill`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-                  result = { success: true, action: 'create-pr', output: prOut.trim() };
+                  const prOut = execSync(`gh pr create --fill`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                  result = { success: true, action: 'create-pr', output: prOut.trim(), repoPath: targetRepo };
                 } catch (e) {
                   try {
-                    const remoteUrl = execSync('git remote get-url origin', { cwd: this.repoPath, encoding: 'utf-8' }).trim();
+                    const remoteUrl = execSync('git remote get-url origin', { cwd: targetRepo, encoding: 'utf-8' }).trim();
                     const cleanRemote = remoteUrl.replace(/\.git$/, '').replace(/^git@github\.com:/, 'https://github.com/');
                     result = { success: false, fallbackUrl: `${cleanRemote}/compare`, error: e.message };
                   } catch {
@@ -4567,6 +4848,9 @@ class AgentSyncServer {
   }
 }
 
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
 
 
 
@@ -4749,6 +5033,9 @@ class AgentDiscoveryService {
 }
 
 
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 
 
 
@@ -4810,24 +5097,52 @@ class ModHost {
    * @returns {Promise<string>}
    */
   async resolveRepoPath(cdpClient, explicitTranscriptPath) {
-    // 1. Try resolving via live CDP renderer active tab, editor resource, or query parameter
+    // 1. Try resolving via live CDP renderer active conversation trajectory or editor tab
     if (cdpClient) {
       try {
         const res = await cdpClient.evaluate(`
-          (() => {
+          (async () => {
+            try {
+              const cascadeId = window.location.pathname.split('/c/')[1]?.split('/')[0]?.split('?')[0] ||
+                                document.querySelector('[data-cascade-id]')?.getAttribute('data-cascade-id');
+              if (cascadeId && window.__APP_CONFIG__?.csrfToken) {
+                const resp = await fetch('/exa.language_server_pb.LanguageServerService/GetAllCascadeTrajectories', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Connect-Protocol-Version': '1',
+                    'x-codeium-csrf-token': window.__APP_CONFIG__.csrfToken
+                  },
+                  body: '{}'
+                });
+                if (resp.ok) {
+                  const data = await resp.json();
+                  const summary = data?.trajectorySummaries?.[cascadeId];
+                  const ws = summary?.workspaces?.[0] || summary?.trajectoryMetadata?.workspaces?.[0];
+                  const uri = ws?.gitRootAbsoluteUri || ws?.workspaceFolderAbsoluteUri || summary?.trajectoryMetadata?.workspaceUris?.[0];
+                  if (uri) return uri;
+                }
+              }
+            } catch (e) {}
+
             // 1. Check active editor tab or resource in VS Code / Antigravity DOM
             const activeTab = document.querySelector('.tab.active, [aria-selected="true"].tab, .tab-label[aria-selected="true"]');
             if (activeTab) {
               const resource = activeTab.getAttribute('data-resource-name') ||
                                activeTab.getAttribute('title') ||
                                activeTab.getAttribute('aria-label');
-              if (resource) return resource;
+              if (resource && !resource.includes('.gemini/antigravity/builtin') && !resource.includes('.gemini\\\\antigravity\\\\builtin')) {
+                return resource;
+              }
             }
             // 2. Query editor tab query parameter
             const search = window.location.search || '';
             const match = search.match(/tab=file__file%3A%2F%2F%2F([^&]+)/i);
             if (match && match[1]) {
-              return decodeURIComponent(match[1]);
+              const decoded = decodeURIComponent(match[1]);
+              if (!decoded.includes('.gemini/antigravity/builtin') && !decoded.includes('.gemini\\\\antigravity\\\\builtin')) {
+                return decoded;
+              }
             }
             // 3. Document title fallback
             if (document.title) {
@@ -4839,8 +5154,13 @@ class ModHost {
         if (res && res.value && typeof res.value === 'string') {
           // Normalize clean path candidate
           let candidate = res.value.trim();
-          if (candidate.startsWith('file:///')) {
-            candidate = decodeURIComponent(candidate.replace('file:///', ''));
+          if (candidate.startsWith('file://')) {
+            candidate = decodeURIComponent(candidate.replace(/^file:\/\/\/?/, ''));
+          } else if (candidate.includes('%')) {
+            try { candidate = decodeURIComponent(candidate); } catch {}
+          }
+          if (/^\/([a-zA-Z]:)/.test(candidate)) {
+            candidate = candidate.slice(1);
           }
           if (candidate.includes(' — ')) {
             const parts = candidate.split(' — ');
@@ -4850,6 +5170,7 @@ class ModHost {
             candidate = parts[0].trim();
           }
 
+          candidate = path.normalize(candidate);
           let currentDir = fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()
             ? candidate
             : path.dirname(candidate);
@@ -5420,7 +5741,7 @@ class ContextTachometerMod extends AntigravityMod {
       priority: 50
     });
 
-    this.cachedCss = ".antigravity-tachometer-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 8px 0 6px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #e4e4e7;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.antigravity-tachometer-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-tachometer-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n/* Responsive compact mode (Speedometer SVG only, hides labels, exact 28x28 circle) */\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) {\r\n  width: 28px !important;\r\n  height: 28px !important;\r\n  min-width: 28px !important;\r\n  padding: 0 !important;\r\n  gap: 0 !important;\r\n  justify-content: center !important;\r\n  border-radius: 9999px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n/* Responsive shrinking for narrow screen resolutions */\r\n@media (max-width: 960px) {\r\n  .antigravity-tachometer-badge:not(.open):not(.pinned) {\r\n    width: 28px !important;\r\n    height: 28px !important;\r\n    min-width: 28px !important;\r\n    padding: 0 !important;\r\n    gap: 0 !important;\r\n    justify-content: center !important;\r\n    border-radius: 9999px !important;\r\n    box-sizing: border-box !important;\r\n  }\r\n  .antigravity-tachometer-badge:not(.open):not(.pinned) .tachometer-tokens,\r\n  .antigravity-tachometer-badge:not(.open):not(.pinned) .tachometer-pct {\r\n    display: none !important;\r\n  }\r\n}\r\n\r\n/* Interactive Tachometer Popover Portal (Fixed to Viewport) */\r\n.antigravity-tachometer-popover-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\r\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\r\n}\r\n\r\n.antigravity-tachometer-popover-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-popover-container {\r\n  display: none !important;\r\n}\r\n\r\n@keyframes popoverFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-4px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n";
+    this.cachedCss = ".antigravity-tachometer-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 8px 0 6px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #e4e4e7;\r\n  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.antigravity-tachometer-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-tachometer-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n/* Responsive compact mode (Speedometer SVG only, hides labels, exact 28x28 circle) */\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) {\r\n  width: 28px !important;\r\n  height: 28px !important;\r\n  min-width: 28px !important;\r\n  padding: 0 !important;\r\n  gap: 0 !important;\r\n  justify-content: center !important;\r\n  border-radius: 9999px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n/* Responsive shrinking for narrow screen resolutions */\r\n@media (max-width: 960px) {\r\n  .antigravity-tachometer-badge.compact:not(.open):not(.pinned) {\r\n    width: 28px !important;\r\n    height: 28px !important;\r\n    min-width: 28px !important;\r\n    padding: 0 !important;\r\n    gap: 0 !important;\r\n    justify-content: center !important;\r\n    border-radius: 9999px !important;\r\n    box-sizing: border-box !important;\r\n  }\r\n  .antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,\r\n  .antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {\r\n    display: none !important;\r\n  }\r\n}\r\n\r\n/* Interactive Tachometer Popover Portal (Fixed to Viewport) */\r\n.antigravity-tachometer-popover-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\r\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\r\n}\r\n\r\n.antigravity-tachometer-popover-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-popover-container {\r\n  display: none !important;\r\n}\r\n\r\n@keyframes popoverFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-4px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n";
   }
 
   /**
@@ -6224,7 +6545,7 @@ class AgentSelectorMod extends AntigravityMod {
     });
 
     this.discoveryService = options.discoveryService || new AgentDiscoveryService();
-    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY AGENT SELECTOR MOD - STYLES\r\n   Card Architecture: Every text section enclosed in card components\r\n   ========================================================================= */\r\n\r\n.antigravity-agent-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 10px 0 7px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #f4f4f5;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.agent-badge-dot {\r\n  width: 6px;\r\n  height: 6px;\r\n  border-radius: 9999px;\r\n  flex-shrink: 0;\r\n  transition: all 0.3s ease;\r\n}\r\n\r\n.antigravity-agent-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-agent-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n.antigravity-agent-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n.agent-label {\r\n  font-weight: 500;\r\n  letter-spacing: -0.01em;\r\n  color: #e4e4e7;\r\n  white-space: nowrap;\r\n}\r\n\r\n.agent-caret {\r\n  font-size: 8px;\r\n  color: #a1a1aa;\r\n  margin-left: 1px;\r\n  transition: transform 0.2s ease;\r\n}\r\n\r\n.antigravity-agent-badge.open .agent-caret {\r\n  transform: rotate(180deg);\r\n}\r\n\r\n/* Responsive compact mode */\r\n.antigravity-agent-badge.compact {\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 7px !important;\r\n  gap: 5px !important;\r\n  border-radius: 9999px !important;\r\n  justify-content: center !important;\r\n}\r\n.antigravity-agent-badge.compact .agent-label,\r\n.antigravity-agent-badge.compact .agent-caret {\r\n  display: none !important;\r\n}\r\n\r\n@media (max-width: 960px) {\r\n  .agent-label,\r\n  .agent-caret {\r\n    display: none !important;\r\n  }\r\n  .antigravity-agent-badge {\r\n    height: 28px !important;\r\n    box-sizing: border-box !important;\r\n    padding: 0 7px !important;\r\n    gap: 5px !important;\r\n    border-radius: 9999px !important;\r\n    justify-content: center !important;\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   OSCILLATING AUTO BADGE (CONTEXT-DRIVEN PLAN / BUILD FLIPPER)\r\n   Transitions automatically only when context changes between PLAN and BUILD\r\n   ========================================================================= */\r\n.antigravity-agent-badge.mode-auto {\r\n  border-color: rgba(168, 85, 247, 0.45);\r\n  box-shadow: 0 0 10px rgba(168, 85, 247, 0.25);\r\n  transition: border-color 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto .agent-badge-dot {\r\n  background: #a855f7 !important;\r\n  box-shadow: 0 0 8px #a855f7 !important;\r\n  transition: background 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build {\r\n  border-color: rgba(245, 158, 11, 0.45);\r\n  box-shadow: 0 0 10px rgba(245, 158, 11, 0.25);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .agent-badge-dot {\r\n  background: #f59e0b !important;\r\n  box-shadow: 0 0 8px #f59e0b !important;\r\n}\r\n\r\n.auto-oscillate-track {\r\n  display: inline-flex;\r\n  flex-direction: column;\r\n  height: 28px;\r\n  line-height: 28px;\r\n  overflow: hidden;\r\n  vertical-align: top;\r\n}\r\n\r\n.auto-oscillate-step {\r\n  height: 28px;\r\n  line-height: 28px;\r\n  display: block;\r\n  font-weight: 600;\r\n  letter-spacing: -0.01em;\r\n  white-space: nowrap;\r\n  transform: translateY(0);\r\n  transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .auto-oscillate-step {\r\n  transform: translateY(-28px);\r\n}\r\n\r\n.auto-oscillate-step.plan {\r\n  color: #c084fc;\r\n}\r\n\r\n.auto-oscillate-step.build {\r\n  color: #fbbf24;\r\n}\r\n\r\n/* =========================================================================\r\n   DROPDOWN PORTAL (FIXED TO VIEWPORT)\r\n   Card Architecture: Harmonized with Mods Manager design language\r\n   ========================================================================= */\r\n.antigravity-agent-dropdown-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  width: 380px !important;\r\n  animation: agentFadeIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n  filter: drop-shadow(0 24px 60px rgba(0, 0, 0, 0.85));\r\n}\r\n\r\n.antigravity-agent-dropdown-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-agent-dropdown-wrapper {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-agent-dropdown {\r\n  width: 380px !important;\r\n  background: #161822 !important;\r\n  background: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 14px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 14px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  pointer-events: auto !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* =========================================================================\r\n   CARD COMPONENT SYSTEM\r\n   ========================================================================= */\r\n.agent-card {\r\n  box-sizing: border-box !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n}\r\n\r\n/* 1. HEADER CARD */\r\n.agent-header-card {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 10px 12px !important;\r\n  margin-bottom: 2px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.agent-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.agent-header-icon {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(122, 162, 247, 0.15) !important;\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.25) !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-title-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.agent-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-main-title {\r\n  font-size: 13.5px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n  margin: 0 !important;\r\n}\r\n\r\n.agent-header-badge {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(122, 162, 247, 0.18) !important;\r\n  color: #7aa2f7 !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\r\n  letter-spacing: 0.3px !important;\r\n}\r\n\r\n.agent-subtitle {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n}\r\n\r\n.agent-close-btn {\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  cursor: pointer !important;\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 6px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  font-size: 12px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.agent-close-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.16) !important;\r\n}\r\n\r\n/* 2. PRIMARY SECTION: CARDS DIRECTAS CON PIN */\r\n.agent-primary-section,\r\n.agent-cards-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-card.primary-hero-card {\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 11px 13px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 12px !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-sizing: border-box !important;\r\n  cursor: pointer !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-card.primary-hero-card:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(122, 162, 247, 0.35) !important;\r\n  transform: translateY(-1px) !important;\r\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;\r\n}\r\n\r\n.agent-card.primary-hero-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 16px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 30%, transparent) !important;\r\n}\r\n\r\n.agent-card-info {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-icon-box {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n.agent-text-wrap {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-title {\r\n  font-size: 13px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.agent-tag {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  letter-spacing: 0.04em !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n/* =========================================================================\r\n   PIN TOGGLE BUTTON COMPONENT\r\n   ========================================================================= */\r\n.agent-pin-btn {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  color: rgba(255, 255, 255, 0.35) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  flex-shrink: 0 !important;\r\n  padding: 0 !important;\r\n}\r\n\r\n.agent-pin-btn:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #ffffff !important;\r\n  transform: scale(1.06) !important;\r\n}\r\n\r\n.agent-pin-btn.active {\r\n  background: rgba(122, 162, 247, 0.2) !important;\r\n  border-color: rgba(122, 162, 247, 0.6) !important;\r\n  color: #7aa2f7 !important;\r\n  box-shadow: 0 0 12px rgba(122, 162, 247, 0.35) !important;\r\n  transform: scale(1.02) !important;\r\n}\r\n\r\n.agent-pin-btn.active svg {\r\n  fill: currentColor !important;\r\n}\r\n\r\n.antigravity-agent-item.selected .agent-pin-btn.active {\r\n  background: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 22%, transparent) !important;\r\n  border-color: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 70%, transparent) !important;\r\n  color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 14px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 45%, transparent) !important;\r\n}\r\n\r\n/* 3. TOGGLE ACORDEÓN CARD */\r\n.agent-toggle-card {\r\n  padding: 0 !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 9px 12px !important;\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 9px !important;\r\n  color: rgba(255, 255, 255, 0.7) !important;\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn:hover {\r\n  background: rgba(255, 255, 255, 0.07) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.catalog-toggle-count {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #a1a1aa !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n/* 4. DRAWER CONTAINER CARD */\r\n.agent-catalog-drawer {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n.agent-catalog-drawer.collapsed {\r\n  display: none !important;\r\n}\r\n\r\n.agent-drawer-card {\r\n  padding: 10px !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  background: rgba(0, 0, 0, 0.35) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n}\r\n\r\n/* LEVEL TABS DENTRO DEL DRAWER */\r\n.agent-level-tabs {\r\n  display: flex !important;\r\n  gap: 4px !important;\r\n  padding: 3px !important;\r\n  background: rgba(0, 0, 0, 0.4) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 7px !important;\r\n}\r\n\r\n.agent-tab-btn {\r\n  flex: 1 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  gap: 6px !important;\r\n  height: 26px !important;\r\n  border: none !important;\r\n  background: transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  border-radius: 5px !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-tab-btn:hover {\r\n  color: #e4e4e7 !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.agent-tab-btn.active {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #ffffff !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.tab-icon {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n/* TAB PANELS */\r\n.agent-tab-content {\r\n  display: none !important;\r\n  max-height: 220px !important;\r\n  overflow-y: auto !important;\r\n  padding-right: 2px !important;\r\n}\r\n\r\n.agent-tab-content.active {\r\n  display: block !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar {\r\n  width: 4px !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar-thumb {\r\n  background: rgba(255, 255, 255, 0.15) !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n/* COMPACT GRID */\r\n.compact-grid {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.compact-agent-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n  padding: 8px 10px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.025) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.compact-agent-card:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  transform: translateY(-0.5px) !important;\r\n}\r\n\r\n.compact-agent-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 10px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 25%, transparent) !important;\r\n}\r\n\r\n.compact-icon-box {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n  border: 1px solid transparent !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.compact-details {\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 1px !important;\r\n}\r\n\r\n.compact-name-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n.compact-name {\r\n  font-size: 11.5px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-sub {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-pin-btn {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n}\r\n\r\n/* 5. FOOTER CARD */\r\n.agent-footer-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  padding: 8px 12px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 8px !important;\r\n}\r\n\r\n.agent-footer-icon {\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-footer-text {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.55) !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n@keyframes agentFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-6px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   EXTERIOR FOCUS / EXPLICATIVO RETICLE TRIGGER\r\n   ========================================================================= */\r\n.antigravity-agent-selector-group {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  width: 28px !important;\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  color: #94a3b8 !important;\r\n  cursor: pointer !important;\r\n  outline: none !important;\r\n  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;\r\n  position: relative !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger:hover {\r\n  background: rgba(255, 255, 255, 0.09) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger.is-focus {\r\n  background: rgba(245, 158, 11, 0.15) !important;\r\n  border-color: rgba(245, 158, 11, 0.4) !important;\r\n  color: #f59e0b !important;\r\n  box-shadow: 0 0 8px rgba(245, 158, 11, 0.25) !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger.is-focus:hover {\r\n  background: rgba(245, 158, 11, 0.22) !important;\r\n  border-color: rgba(245, 158, 11, 0.6) !important;\r\n  box-shadow: 0 0 12px rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.caveman-reticle-box {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.reticle-icon {\r\n  transition: transform 0.2s ease, stroke 0.2s ease !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger:hover .reticle-icon {\r\n  transform: scale(1.08) !important;\r\n}\r\n";
+    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY AGENT SELECTOR MOD - STYLES\r\n   Card Architecture: Every text section enclosed in card components\r\n   ========================================================================= */\r\n\r\n.antigravity-agent-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 10px 0 7px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #f4f4f5;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.agent-badge-dot {\r\n  width: 6px;\r\n  height: 6px;\r\n  border-radius: 9999px;\r\n  flex-shrink: 0;\r\n  transition: all 0.3s ease;\r\n}\r\n\r\n.antigravity-agent-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-agent-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n.antigravity-agent-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n.agent-label {\r\n  font-weight: 500;\r\n  letter-spacing: -0.01em;\r\n  color: #e4e4e7;\r\n  white-space: nowrap;\r\n}\r\n\r\n.agent-caret {\r\n  font-size: 8px;\r\n  color: #a1a1aa;\r\n  margin-left: 1px;\r\n  transition: transform 0.2s ease;\r\n}\r\n\r\n.antigravity-agent-badge.open .agent-caret {\r\n  transform: rotate(180deg);\r\n}\r\n\r\n/* Responsive compact mode */\r\n.antigravity-agent-badge.compact {\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 7px !important;\r\n  gap: 5px !important;\r\n  border-radius: 9999px !important;\r\n  justify-content: center !important;\r\n}\r\n.antigravity-agent-badge.compact .agent-label,\r\n.antigravity-agent-badge.compact .agent-caret {\r\n  display: none !important;\r\n}\r\n\r\n@media (max-width: 960px) {\r\n  .agent-label,\r\n  .agent-caret {\r\n    display: none !important;\r\n  }\r\n  .antigravity-agent-badge {\r\n    height: 28px !important;\r\n    box-sizing: border-box !important;\r\n    padding: 0 7px !important;\r\n    gap: 5px !important;\r\n    border-radius: 9999px !important;\r\n    justify-content: center !important;\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   OSCILLATING AUTO BADGE (CONTEXT-DRIVEN PLAN / BUILD FLIPPER)\r\n   Transitions automatically only when context changes between PLAN and BUILD\r\n   ========================================================================= */\r\n.antigravity-agent-badge.mode-auto {\r\n  border-color: rgba(168, 85, 247, 0.45);\r\n  box-shadow: 0 0 10px rgba(168, 85, 247, 0.25);\r\n  transition: border-color 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto .agent-badge-dot {\r\n  background: #a855f7 !important;\r\n  box-shadow: 0 0 8px #a855f7 !important;\r\n  transition: background 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build {\r\n  border-color: rgba(245, 158, 11, 0.45);\r\n  box-shadow: 0 0 10px rgba(245, 158, 11, 0.25);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .agent-badge-dot {\r\n  background: #f59e0b !important;\r\n  box-shadow: 0 0 8px #f59e0b !important;\r\n}\r\n\r\n.auto-oscillate-track {\r\n  display: inline-flex;\r\n  flex-direction: column;\r\n  height: 28px;\r\n  line-height: 28px;\r\n  overflow: hidden;\r\n  vertical-align: top;\r\n}\r\n\r\n.auto-oscillate-step {\r\n  height: 28px;\r\n  line-height: 28px;\r\n  display: block;\r\n  font-weight: 600;\r\n  letter-spacing: -0.01em;\r\n  white-space: nowrap;\r\n  transform: translateY(0);\r\n  transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .auto-oscillate-step {\r\n  transform: translateY(-28px);\r\n}\r\n\r\n.auto-oscillate-step.plan {\r\n  color: #c084fc;\r\n}\r\n\r\n.auto-oscillate-step.build {\r\n  color: #fbbf24;\r\n}\r\n\r\n/* =========================================================================\r\n   DROPDOWN PORTAL (FIXED TO VIEWPORT)\r\n   Card Architecture: Harmonized with Mods Manager design language\r\n   ========================================================================= */\r\n.antigravity-agent-dropdown-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  width: 380px !important;\r\n  animation: agentFadeIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n  filter: drop-shadow(0 24px 60px rgba(0, 0, 0, 0.85));\r\n}\r\n\r\n.antigravity-agent-dropdown-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-agent-dropdown-wrapper {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-agent-dropdown {\r\n  width: 380px !important;\r\n  background: #161822 !important;\r\n  background: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 14px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 14px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  pointer-events: auto !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* =========================================================================\r\n   CARD COMPONENT SYSTEM\r\n   ========================================================================= */\r\n.agent-card {\r\n  box-sizing: border-box !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n}\r\n\r\n/* 1. HEADER CARD */\r\n.agent-header-card {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 10px 12px !important;\r\n  margin-bottom: 2px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.agent-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.agent-header-icon {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(122, 162, 247, 0.15) !important;\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.25) !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-title-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.agent-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-main-title {\r\n  font-size: 13.5px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n  margin: 0 !important;\r\n}\r\n\r\n.agent-header-badge {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(122, 162, 247, 0.18) !important;\r\n  color: #7aa2f7 !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\r\n  letter-spacing: 0.3px !important;\r\n}\r\n\r\n.agent-subtitle {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n}\r\n\r\n.agent-close-btn {\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  cursor: pointer !important;\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 6px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  font-size: 12px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.agent-close-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.16) !important;\r\n}\r\n\r\n/* 2. PRIMARY SECTION: CARDS DIRECTAS CON PIN */\r\n.agent-primary-section,\r\n.agent-cards-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-card.primary-hero-card {\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 11px 13px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 12px !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-sizing: border-box !important;\r\n  cursor: pointer !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-card.primary-hero-card:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(122, 162, 247, 0.35) !important;\r\n  transform: translateY(-1px) !important;\r\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;\r\n}\r\n\r\n.agent-card.primary-hero-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 16px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 30%, transparent) !important;\r\n}\r\n\r\n.agent-card-info {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-icon-box {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n.agent-text-wrap {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-title {\r\n  font-size: 13px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.agent-tag {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  letter-spacing: 0.04em !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n/* =========================================================================\r\n   PIN TOGGLE BUTTON COMPONENT\r\n   ========================================================================= */\r\n.agent-pin-btn {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  color: rgba(255, 255, 255, 0.35) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  flex-shrink: 0 !important;\r\n  padding: 0 !important;\r\n}\r\n\r\n.agent-pin-btn:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #ffffff !important;\r\n  transform: scale(1.06) !important;\r\n}\r\n\r\n.agent-pin-btn.active {\r\n  background: rgba(122, 162, 247, 0.2) !important;\r\n  border-color: rgba(122, 162, 247, 0.6) !important;\r\n  color: #7aa2f7 !important;\r\n  box-shadow: 0 0 12px rgba(122, 162, 247, 0.35) !important;\r\n  transform: scale(1.02) !important;\r\n}\r\n\r\n.agent-pin-btn.active svg {\r\n  fill: currentColor !important;\r\n}\r\n\r\n.antigravity-agent-item.selected .agent-pin-btn.active {\r\n  background: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 22%, transparent) !important;\r\n  border-color: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 70%, transparent) !important;\r\n  color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 14px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 45%, transparent) !important;\r\n}\r\n\r\n/* 3. TOGGLE ACORDEÓN CARD */\r\n.agent-toggle-card {\r\n  padding: 0 !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 9px 12px !important;\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 9px !important;\r\n  color: rgba(255, 255, 255, 0.7) !important;\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn:hover {\r\n  background: rgba(255, 255, 255, 0.07) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.catalog-toggle-count {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #a1a1aa !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n/* 4. DRAWER CONTAINER CARD */\r\n.agent-catalog-drawer {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n.agent-catalog-drawer.collapsed {\r\n  display: none !important;\r\n}\r\n\r\n.agent-drawer-card {\r\n  padding: 10px !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  background: rgba(0, 0, 0, 0.35) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n}\r\n\r\n/* LEVEL TABS DENTRO DEL DRAWER */\r\n.agent-level-tabs {\r\n  display: flex !important;\r\n  gap: 4px !important;\r\n  padding: 3px !important;\r\n  background: rgba(0, 0, 0, 0.4) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 7px !important;\r\n}\r\n\r\n.agent-tab-btn {\r\n  flex: 1 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  gap: 6px !important;\r\n  height: 26px !important;\r\n  border: none !important;\r\n  background: transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  border-radius: 5px !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-tab-btn:hover {\r\n  color: #e4e4e7 !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.agent-tab-btn.active {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #ffffff !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.tab-icon {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n/* TAB PANELS */\r\n.agent-tab-content {\r\n  display: none !important;\r\n  max-height: 220px !important;\r\n  overflow-y: auto !important;\r\n  padding-right: 2px !important;\r\n}\r\n\r\n.agent-tab-content.active {\r\n  display: block !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar {\r\n  width: 4px !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar-thumb {\r\n  background: rgba(255, 255, 255, 0.15) !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n/* COMPACT GRID */\r\n.compact-grid {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.compact-agent-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n  padding: 8px 10px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.025) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.compact-agent-card:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  transform: translateY(-0.5px) !important;\r\n}\r\n\r\n.compact-agent-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 10px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 25%, transparent) !important;\r\n}\r\n\r\n.compact-icon-box {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n  border: 1px solid transparent !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.compact-details {\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 1px !important;\r\n}\r\n\r\n.compact-name-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n.compact-name {\r\n  font-size: 11.5px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-sub {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-pin-btn {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n}\r\n\r\n/* 5. FOOTER CARD */\r\n.agent-footer-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  padding: 8px 12px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 8px !important;\r\n}\r\n\r\n.agent-footer-icon {\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-footer-text {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.55) !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n@keyframes agentFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-6px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   EXTERIOR FOCUS / EXPLICATIVO RETICLE TRIGGER\r\n   ========================================================================= */\r\n.antigravity-agent-selector-group {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  width: 28px !important;\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  color: #94a3b8 !important;\r\n  cursor: pointer !important;\r\n  outline: none !important;\r\n  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease !important;\r\n  position: relative !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger:hover {\r\n  background: rgba(255, 255, 255, 0.09) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger.is-focus {\r\n  background: rgba(245, 158, 11, 0.15) !important;\r\n  border-color: rgba(245, 158, 11, 0.4) !important;\r\n  color: #f59e0b !important;\r\n  box-shadow: 0 0 8px rgba(245, 158, 11, 0.25) !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger.is-focus:hover {\r\n  background: rgba(245, 158, 11, 0.22) !important;\r\n  border-color: rgba(245, 158, 11, 0.6) !important;\r\n  box-shadow: 0 0 12px rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.caveman-reticle-box {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.reticle-icon {\r\n  transition: transform 0.2s ease, stroke 0.2s ease !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger:hover .reticle-icon {\r\n  transform: scale(1.08) !important;\r\n}\r\n";
   }
 
   /**
@@ -7533,7 +7854,7 @@ class VoiceAssistantMod extends AntigravityMod {
     this.narratorService = options.narratorService || ActionNarratorService;
     this.sanitizer = options.sanitizer || TextSanitizer;
 
-    this.cachedCss = "/* Voice Assistant Mod Styles */\n.antigravity-slot-chat-input-actions {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  margin-right: 2px;\n}\n\n.antigravity-voice-assistant-wrapper {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  position: relative;\n}\n\n.antigravity-voice-assistant-btn {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  width: 1.75rem;\n  height: 1.75rem;\n  padding: 0.375rem;\n  border-radius: 9999px;\n  background: transparent;\n  color: var(--secondary-foreground, #ececec);\n  border: none;\n  cursor: pointer;\n  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;\n  user-select: none;\n  outline: none;\n}\n\n.antigravity-voice-assistant-btn:hover {\n  background-color: var(--secondary, rgba(255, 255, 255, 0.08));\n}\n\n.antigravity-voice-assistant-btn:focus-visible {\n  outline: 2px solid var(--ring, #3b82f6);\n  outline-offset: 1px;\n}\n\n.antigravity-voice-assistant-btn.state-muted {\n  opacity: 0.45;\n}\n\n.antigravity-voice-assistant-btn.state-speaking {\n  color: #38bdf8;\n  background-color: rgba(56, 189, 248, 0.12);\n}\n\n.antigravity-voice-assistant-btn.state-speaking .wave-1 {\n  animation: voiceWavePulse 1.2s infinite ease-in-out;\n}\n\n.antigravity-voice-assistant-btn.state-speaking .wave-2 {\n  animation: voiceWavePulse 1.2s infinite ease-in-out 0.3s;\n}\n\n@keyframes voiceWavePulse {\n  0%, 100% {\n    opacity: 0.3;\n    transform: scale(0.95);\n    transform-origin: center;\n  }\n  50% {\n    opacity: 1;\n    transform: scale(1.1);\n    transform-origin: center;\n  }\n}\n";
+    this.cachedCss = "/* Voice Assistant Mod Styles */\r\n.antigravity-slot-chat-input-actions {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  margin-right: 2px;\r\n}\r\n\r\n.antigravity-voice-assistant-wrapper {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  position: relative;\r\n}\r\n\r\n.antigravity-voice-assistant-btn {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  width: 1.75rem;\r\n  height: 1.75rem;\r\n  padding: 0.375rem;\r\n  border-radius: 9999px;\r\n  background: transparent;\r\n  color: var(--secondary-foreground, #ececec);\r\n  border: none;\r\n  cursor: pointer;\r\n  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;\r\n  user-select: none;\r\n  outline: none;\r\n}\r\n\r\n.antigravity-voice-assistant-btn:hover {\r\n  background-color: var(--secondary, rgba(255, 255, 255, 0.08));\r\n}\r\n\r\n.antigravity-voice-assistant-btn:focus-visible {\r\n  outline: 2px solid var(--ring, #3b82f6);\r\n  outline-offset: 1px;\r\n}\r\n\r\n.antigravity-voice-assistant-btn.state-muted {\r\n  opacity: 0.45;\r\n}\r\n\r\n.antigravity-voice-assistant-btn.state-speaking {\r\n  color: #38bdf8;\r\n  background-color: rgba(56, 189, 248, 0.12);\r\n}\r\n\r\n.antigravity-voice-assistant-btn.state-speaking .wave-1 {\r\n  animation: voiceWavePulse 1.2s infinite ease-in-out;\r\n}\r\n\r\n.antigravity-voice-assistant-btn.state-speaking .wave-2 {\r\n  animation: voiceWavePulse 1.2s infinite ease-in-out 0.3s;\r\n}\r\n\r\n@keyframes voiceWavePulse {\r\n  0%, 100% {\r\n    opacity: 0.3;\r\n    transform: scale(0.95);\r\n    transform-origin: center;\r\n  }\r\n  50% {\r\n    opacity: 1;\r\n    transform: scale(1.1);\r\n    transform-origin: center;\r\n  }\r\n}\r\n";
   }
 
   get id() {

@@ -122,6 +122,79 @@ export class ModLoader {
           return searchMatch ? searchMatch[1] : null;
         };
 
+        window.__normalizeFileUriToPath = function(uri) {
+          if (!uri || typeof uri !== 'string') return '';
+          let clean = uri.trim();
+          try {
+            if (clean.indexOf('file://') === 0) {
+              clean = decodeURIComponent(clean.replace(/^file:\\/\\/\\/?/, ''));
+            } else if (clean.indexOf('%') !== -1) {
+              clean = decodeURIComponent(clean);
+            }
+            if (/^\\/([a-zA-Z]:)/.test(clean)) {
+              clean = clean.slice(1);
+            }
+          } catch (e) {}
+          return clean;
+        };
+
+        window.__resolveRepoForCascade = async function(cascadeId) {
+          const targetId = cascadeId || (window.__resolveCascadeId ? window.__resolveCascadeId() : null);
+          window.__antigravityCascadeRepos = window.__antigravityCascadeRepos || {};
+          if (targetId && window.__antigravityCascadeRepos[targetId]) {
+            return window.__antigravityCascadeRepos[targetId];
+          }
+          try {
+            if (window.__APP_CONFIG__?.csrfToken) {
+              const res = await fetch('/exa.language_server_pb.LanguageServerService/GetAllCascadeTrajectories', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Connect-Protocol-Version': '1',
+                  'x-codeium-csrf-token': window.__APP_CONFIG__.csrfToken
+                },
+                body: '{}'
+              });
+              if (res.ok) {
+                const data = await res.json();
+                const summaries = (data && data.trajectorySummaries) || {};
+                Object.keys(summaries).forEach(function(id) {
+                  const summary = summaries[id];
+                  const ws = (summary && summary.workspaces && summary.workspaces[0]) ||
+                             (summary && summary.trajectoryMetadata && summary.trajectoryMetadata.workspaces && summary.trajectoryMetadata.workspaces[0]);
+                  const rawUri = (ws && (ws.gitRootAbsoluteUri || ws.workspaceFolderAbsoluteUri)) ||
+                                 (summary && summary.trajectoryMetadata && summary.trajectoryMetadata.workspaceUris && summary.trajectoryMetadata.workspaceUris[0]);
+                  if (rawUri) {
+                    const cleanPath = window.__normalizeFileUriToPath ? window.__normalizeFileUriToPath(rawUri) : rawUri;
+                    if (cleanPath) {
+                      window.__antigravityCascadeRepos[id] = cleanPath;
+                    }
+                  }
+                });
+              }
+            }
+          } catch (e) {}
+          return (targetId && window.__antigravityCascadeRepos[targetId]) || '';
+        };
+
+        window.__antigravityFetchSessionVcsOverview = async function() {
+          try {
+            const cascadeId = window.__resolveCascadeId ? window.__resolveCascadeId() : '';
+            const repoPath = await window.__resolveRepoForCascade(cascadeId);
+            const url = 'http://127.0.0.1:53912/vcs/overview?cascadeId=' + encodeURIComponent(cascadeId || '') +
+              (repoPath ? '&repoPath=' + encodeURIComponent(repoPath) : '');
+            const res = await fetch(url);
+            if (res.ok) {
+              const liveData = await res.json();
+              if (liveData && typeof window.__antigravityUpdateVcsData === 'function') {
+                window.__antigravityUpdateVcsData(liveData);
+              }
+              return liveData;
+            }
+          } catch (e) {}
+          return null;
+        };
+
         window.__classifyPromptMode = function(prompt) {
           if (!prompt || typeof prompt !== 'string') return 'PLAN';
           const text = prompt.trim();
@@ -931,19 +1004,31 @@ export class ModLoader {
           };
           window.__antigravityShowGitToast(hostEl, labelMap[payload.action] || ('Ejecutando ' + payload.action + '...'), false);
 
+          const cascadeId = (window.__resolveCascadeId ? window.__resolveCascadeId() : '') || '';
+          const repoPath = (window.__antigravityVcsData && window.__antigravityVcsData.repoPath) || '';
+          const actionPayload = Object.assign({}, payload, {
+            cascadeId: cascadeId,
+            repoPath: repoPath
+          });
+
           try {
             if (payload.action === 'create-pr' && payload.branch) {
               await fetch('http://127.0.0.1:53912/vcs/action', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'push', branch: payload.branch })
+                body: JSON.stringify({
+                  action: 'push',
+                  branch: payload.branch,
+                  cascadeId: cascadeId,
+                  repoPath: repoPath
+                })
               }).catch(function() {});
             }
 
             const res = await fetch('http://127.0.0.1:53912/vcs/action', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
+              body: JSON.stringify(actionPayload)
             });
             const result = await res.json();
 
@@ -958,12 +1043,12 @@ export class ModLoader {
               window.open(result.output, '_blank');
             }
 
-            const ovRes = await fetch('http://127.0.0.1:53912/vcs/overview');
-            if (ovRes.ok) {
-              const freshData = await ovRes.json();
-              window.__antigravityUpdateVcsData(freshData);
-              const newHost = document.getElementById('antigravity-git-panel-host') || hostEl;
-              window.__antigravityShowGitToast(newHost, 'Accion completada: ' + payload.action, false);
+            if (typeof window.__antigravityFetchSessionVcsOverview === 'function') {
+              const freshData = await window.__antigravityFetchSessionVcsOverview();
+              if (freshData) {
+                const newHost = document.getElementById('antigravity-git-panel-host') || hostEl;
+                window.__antigravityShowGitToast(newHost, 'Accion completada: ' + payload.action, false);
+              }
             }
           } catch (err) {
             window.__antigravityShowGitToast(hostEl, 'Servidor VCS local no disponible (daemon inactivo)', true);
@@ -1204,16 +1289,10 @@ export class ModLoader {
               refreshBtn.style.transition = 'transform 0.5s ease';
               setTimeout(function() { refreshBtn.style.transform = ''; }, 500);
 
-              try {
-                const res = await fetch('http://127.0.0.1:53912/vcs/overview');
-                if (res.ok) {
-                  const data = await res.json();
-                  if (window.__antigravityUpdateVcsData) {
-                    window.__antigravityUpdateVcsData(data);
-                    return;
-                  }
-                }
-              } catch (err) {}
+              if (typeof window.__antigravityFetchSessionVcsOverview === 'function') {
+                const liveData = await window.__antigravityFetchSessionVcsOverview();
+                if (liveData) return;
+              }
 
               if (window.__antigravityMountAll) {
                 window.__antigravityMountAll();
@@ -1285,14 +1364,9 @@ export class ModLoader {
             hostEl.style.display = 'flex';
             window.__bindGitPanelEvents(hostEl);
 
-            fetch('http://127.0.0.1:53912/vcs/overview')
-              .then(function(r) { return r.ok ? r.json() : null; })
-              .then(function(liveData) {
-                if (liveData && window.__antigravityUpdateVcsData) {
-                  window.__antigravityUpdateVcsData(liveData);
-                }
-              })
-              .catch(function() {});
+            if (typeof window.__antigravityFetchSessionVcsOverview === 'function') {
+              window.__antigravityFetchSessionVcsOverview();
+            }
           }
         };
 
@@ -1424,6 +1498,14 @@ export class ModLoader {
         );
 
         window.__syncAgentBadges = function() {
+          const currentCascadeId = window.__resolveCascadeId ? window.__resolveCascadeId() : null;
+          if (currentCascadeId && currentCascadeId !== window.__lastGitCascadeId) {
+            window.__lastGitCascadeId = currentCascadeId;
+            if (typeof window.__antigravityFetchSessionVcsOverview === 'function') {
+              window.__antigravityFetchSessionVcsOverview();
+            }
+          }
+
           document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {
             const cId = window.__resolveCascadeId(badge);
             const agentToApply = window.__resolveAgentForCascade(cId);
@@ -1756,7 +1838,7 @@ export class ModLoader {
           // Refresh active Git panel host if currently open
           const activeGitHost = document.getElementById('antigravity-git-panel-host');
           const gitTemplate = document.getElementById('antigravity-git-panel-template');
-          if (activeGitHost && activeGitHost.style.display !== 'none' && gitTemplate) {
+          if (activeGitHost && activeGitHost.style.display !== 'none' && gitTemplate && !activeGitHost.firstElementChild) {
             activeGitHost.innerHTML = gitTemplate.innerHTML;
             if (window.__bindGitPanelEvents) {
               window.__bindGitPanelEvents(activeGitHost);
@@ -1874,7 +1956,7 @@ export class ModLoader {
 
             if (!missingSlot) {
               const auxBtn = document.querySelector('button[data-testid="aux-pane-new-tab-button"]') || document.querySelector('.aux-pane-new-tab-button');
-              if (auxBtn && !document.querySelector('.antigravity-slot-aux-pane-tabs, #antigravity-slot-aux-pane-tabs')) {
+              if (auxBtn && !document.querySelector('.antigravity-slot-aux-pane-tab, #antigravity-slot-aux-pane-tab')) {
                 missingSlot = true;
               }
             }

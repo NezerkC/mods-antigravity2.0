@@ -63,24 +63,52 @@ export class ModHost {
    * @returns {Promise<string>}
    */
   async resolveRepoPath(cdpClient, explicitTranscriptPath) {
-    // 1. Try resolving via live CDP renderer active tab, editor resource, or query parameter
+    // 1. Try resolving via live CDP renderer active conversation trajectory or editor tab
     if (cdpClient) {
       try {
         const res = await cdpClient.evaluate(`
-          (() => {
+          (async () => {
+            try {
+              const cascadeId = window.location.pathname.split('/c/')[1]?.split('/')[0]?.split('?')[0] ||
+                                document.querySelector('[data-cascade-id]')?.getAttribute('data-cascade-id');
+              if (cascadeId && window.__APP_CONFIG__?.csrfToken) {
+                const resp = await fetch('/exa.language_server_pb.LanguageServerService/GetAllCascadeTrajectories', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Connect-Protocol-Version': '1',
+                    'x-codeium-csrf-token': window.__APP_CONFIG__.csrfToken
+                  },
+                  body: '{}'
+                });
+                if (resp.ok) {
+                  const data = await resp.json();
+                  const summary = data?.trajectorySummaries?.[cascadeId];
+                  const ws = summary?.workspaces?.[0] || summary?.trajectoryMetadata?.workspaces?.[0];
+                  const uri = ws?.gitRootAbsoluteUri || ws?.workspaceFolderAbsoluteUri || summary?.trajectoryMetadata?.workspaceUris?.[0];
+                  if (uri) return uri;
+                }
+              }
+            } catch (e) {}
+
             // 1. Check active editor tab or resource in VS Code / Antigravity DOM
             const activeTab = document.querySelector('.tab.active, [aria-selected="true"].tab, .tab-label[aria-selected="true"]');
             if (activeTab) {
               const resource = activeTab.getAttribute('data-resource-name') ||
                                activeTab.getAttribute('title') ||
                                activeTab.getAttribute('aria-label');
-              if (resource) return resource;
+              if (resource && !resource.includes('.gemini/antigravity/builtin') && !resource.includes('.gemini\\\\antigravity\\\\builtin')) {
+                return resource;
+              }
             }
             // 2. Query editor tab query parameter
             const search = window.location.search || '';
             const match = search.match(/tab=file__file%3A%2F%2F%2F([^&]+)/i);
             if (match && match[1]) {
-              return decodeURIComponent(match[1]);
+              const decoded = decodeURIComponent(match[1]);
+              if (!decoded.includes('.gemini/antigravity/builtin') && !decoded.includes('.gemini\\\\antigravity\\\\builtin')) {
+                return decoded;
+              }
             }
             // 3. Document title fallback
             if (document.title) {
@@ -92,8 +120,13 @@ export class ModHost {
         if (res && res.value && typeof res.value === 'string') {
           // Normalize clean path candidate
           let candidate = res.value.trim();
-          if (candidate.startsWith('file:///')) {
-            candidate = decodeURIComponent(candidate.replace('file:///', ''));
+          if (candidate.startsWith('file://')) {
+            candidate = decodeURIComponent(candidate.replace(/^file:\/\/\/?/, ''));
+          } else if (candidate.includes('%')) {
+            try { candidate = decodeURIComponent(candidate); } catch {}
+          }
+          if (/^\/([a-zA-Z]:)/.test(candidate)) {
+            candidate = candidate.slice(1);
           }
           if (candidate.includes(' — ')) {
             const parts = candidate.split(' — ');
@@ -103,6 +136,7 @@ export class ModHost {
             candidate = parts[0].trim();
           }
 
+          candidate = path.normalize(candidate);
           let currentDir = fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()
             ? candidate
             : path.dirname(candidate);

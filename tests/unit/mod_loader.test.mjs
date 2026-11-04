@@ -230,3 +230,15 @@ test('ModLoader - generates chatbox compact handler supporting explicit normal s
   assert.ok(script.includes('threshold = isCurrentlyCompact ? 430 : 380'));
   assert.ok(script.includes('window.__renderReticleSvg(isFocus, 14)'));
 });
+
+test('ModLoader - includes session repo resolution helpers and Git panel DOM guards', () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({});
+
+  assert.ok(script.includes('window.__normalizeFileUriToPath = function(uri)'));
+  assert.ok(script.includes('window.__resolveRepoForCascade = async function(cascadeId)'));
+  assert.ok(script.includes('window.__antigravityFetchSessionVcsOverview = async function()'));
+  assert.ok(script.includes('window.__lastGitCascadeId = currentCascadeId'));
+  assert.ok(script.includes('!activeGitHost.firstElementChild'));
+  assert.ok(script.includes('.antigravity-slot-aux-pane-tab, #antigravity-slot-aux-pane-tab'));
+});
