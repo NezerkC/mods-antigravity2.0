@@ -1,6 +1,6 @@
 # Mods Antigravity 2.0 (`mods-antigravity2.0`)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Tests: 139 Passing](https://img.shields.io/badge/Tests-139%20Passing-success.svg)](tests/)
 [![Node.js: >=18](https://img.shields.io/badge/Node.js-%3E%3D18-brightgreen.svg)](package.json)
 [![Runtime Dependencies: 0](https://img.shields.io/badge/Runtime%20Dependencies-0-blueviolet.svg)](package.json)
@@ -194,7 +194,7 @@ mods-antigravity2.0/
 ├── tools/                           # Diagnostic CLI utilities & packaging scripts
 ├── build.js                         # Production bundler
 ├── CONTRIBUTING.md                  # Development principles & workflow
-├── LICENSE                          # MIT License
+├── LICENSE                          # Apache License 2.0
 ├── package.json                     # Package metadata & npm scripts
 ├── README.md                        # Documentation & visual overview
 ├── SECURITY.md                      # Security policy & threat model
@@ -219,4 +219,4 @@ Santiago, Chile
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [Apache License, Version 2.0](LICENSE).

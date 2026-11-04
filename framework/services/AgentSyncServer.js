@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';

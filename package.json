@@ -23,7 +23,7 @@
     "probe:cdp": "node tools/probe.js cdp"
   },
   "author": "Victor Manuel Martinez Munoz",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/NezerkC/mods-antigravity2.0.git"

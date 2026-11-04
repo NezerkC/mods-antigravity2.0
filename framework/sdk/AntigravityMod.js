@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 /**
  * Base class for all Antigravity desktop UI mods.
  * Enforces metadata manifest and standard lifecycle contracts.
