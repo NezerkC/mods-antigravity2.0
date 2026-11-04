@@ -76,28 +76,33 @@ flowchart TD
 ### 2. Dynamic Agent Discovery & Specialist Selector
 - Automatically scans and indexes specialist roles from workspace manifests (`./agents/*.md`, `**/*.agent.md`, `agent.md`), the Shared Architecture Vault, and Global Skills.
 - Parses YAML frontmatter and Markdown headers to infer roles, competencies, and suites.
-- Hierarchical classification across Cúspide (Planner/Builder), Micro, and Nano tiers with search filtering and direct badge synchronization.
+- Hierarchical classification: **Cúspide** (Lead Architect & SDD Orchestrator), **Micro**, and **Nano** specialists with Lucide SVG icons (`AgentIcons.js`).
+- Dynamic Auto Mode with heuristic Plan vs. Build prompt classification.
+- Interactive Focus/Explicativo mode toggle (Caveman mode) saving ~70% token overhead when activated.
 
 ### 3. Voice Assistant & Real-Time Action Narrator
 - Non-invasive Web Speech Synthesis (TTS) module providing immediate auditory feedback during autonomous workflows.
 - Translates background agent thoughts, file operations, bash executions, and subagent dispatches into natural spoken narratives.
 - Sanitizes streaming payloads, stripping markdown formatting, code fences, and raw URLs before synthesis.
 
-### 4. Git Graph & CI/CD Inspector
-- Mounts directly into Antigravity's auxiliary workspace pane.
-- Renders an interactive SVG commit DAG with branch filtering, commit inspector cards, and direct GitHub links.
-- Real-time pull request status cards with live CI/CD test check badges and error summaries.
+### 4. Git Graph, Branches & GitHub CI/CD Panel
+- Auxiliary Workspace Pane integration rendering topological commit history with Bezier curve lanes.
+- Lazy data loading via local HTTP bridge (`/vcs/overview`), eliminating renderer freeze during dispatch.
+- Visual branch clusters (Trunk, VCS, Framework, UI Mods, Fixes, CI, Docs, Features) with status indicators (`ahead`, `behind`, `dirty`).
+- Inline inspection capsule `--< * * * * >--` and expandable per-commit file diff accordions.
+- GitHub Pull Request status rollup and GitHub Actions CI/CD check visualization.
 
 ### 5. Tailscale Remote Mesh & Peer Sync
 - Built-in `RemoteHostServer` providing Server-Sent Events (SSE) telemetry streaming across secure private networks.
 - Automatic node discovery via `TailscaleDiscoveryService`, separating local and remote online peers for cross-device chat telemetry.
 
-### 6. Central Mods Manager & Stealth Kill-Switch
+### 6. Central Mods Manager & Performance Optimizations
 - Sidebar header button (`.bg-sidebar`) opening a slide-out drawer with per-mod activation toggles.
-- Instantaneous kill-switch (`localStorage.__antigravity_daemon_enabled`) allowing complete client-side detachment without app restarts.
+- Debounced `MutationObserver` (150ms) eliminating forced layout reflows and DOM thrashing.
+- Global persistence stealth kill-switch (`localStorage.__antigravity_daemon_enabled`).
 
 ### 7. Background Daemon & Windows System Tray
-- Multi-port discovery engine automatically locating Antigravity's active CDP port (`127.0.0.1:53908`, `9222`, etc.) via active HTTP probing.
+- Multi-port discovery engine automatically locating Antigravity's active CDP port (`127.0.0.1:53908`, `9222`, `9229`, etc.) via active HTTP probing.
 - Self-healing reinjection on window navigation, reload, or app restart without DOM thrashing.
 - Interactive launcher (`start-daemon.bat`) with persistent PowerShell tray icon and one-click auto-start registration (`shell:startup`).
 
@@ -125,11 +130,13 @@ Compile all modules and deploy the unified loader into Antigravity's config path
 npm run build
 ```
 
-### Step 2: Launch Daemon
+This compiles `framework/` and `mods/` into `dist/antigravity_mod_loader.mjs` and syncs it to `~/.gemini/config/mods/`.
 
-#### Option A: Windows System Tray Launcher (Recommended)
-Launch the interactive manager:
+### Step 2: Running the Background Daemon
 
+Choose between the interactive Windows launcher or npm CLI scripts:
+
+#### Option A: Interactive Windows Launcher (Recommended)
 ```bat
 .\start-daemon.bat
 ```
@@ -141,16 +148,25 @@ Select from the interactive menu:
 - `[4] Instalar en el inicio de Windows`: Registers the daemon in Windows Startup (`shell:startup`).
 - `[5] Desinstalar del inicio de Windows`: Unregisters auto-start persistence.
 
-#### Option B: NPM CLI Scripts
+#### Option B: NPM CLI Commands
 ```bash
-# Start background daemon
+# Start background daemon with System Tray
 npm run daemon:start
 
-# Inspect status
+# Inspect status and PID tracking
 npm run daemon:status
 
-# Stop daemon
+# Stop background daemon and tray icon
 npm run daemon:stop
+
+# Install into Windows Startup
+npm run daemon:install
+
+# Remove from Windows Startup
+npm run daemon:uninstall
+
+# Run directly in foreground (debug mode)
+npm run daemon
 ```
 
 ---
@@ -178,16 +194,61 @@ npm run probe:proc
 ```text
 mods-antigravity2.0/
 ├── framework/                       # Core Mod Framework & Runtime
-│   ├── core/                        # CDP client, port resolver, mod host & loader
-│   ├── sdk/                         # AntigravityMod base class & StyleIsolator
-│   ├── services/                    # Telemetry, AgentDiscovery, GitService, Tailscale
+│   ├── core/
+│   │   ├── CdpPortResolver.js       # Auto-discovers Electron CDP debug port
+│   │   ├── CdpWebSocketClient.js    # Dispatches JS payloads via CDP WebSockets
+│   │   ├── ModDaemon.js             # Autonomous background watcher & CDP supervisor
+│   │   ├── ModHost.js               # Central host orchestrator & lifecycle manager
+│   │   ├── ModLoader.js             # Compiles mods, binds events, manages portals
+│   │   └── SlotManager.js           # Multi-panel slot injection & anchor targeting
+│   ├── sdk/
+│   │   ├── AntigravityMod.js        # Base contract for custom mods
+│   │   └── StyleIsolator.js         # CSS scoping with portal & keyframes support
+│   ├── services/
+│   │   ├── AgentDiscoveryService.js # Dynamic scanner for agent.md & *.agent.md files
+│   │   ├── AgentSyncServer.js       # Local HTTP bridge server (ports 53912/53913)
+│   │   ├── GitService.js            # Git DAG topology, lane allocation & avatar service
+│   │   ├── GitHubCliService.js      # GitHub CLI integration for PRs & CI/CD status
+│   │   ├── RemoteHostServer.js      # Remote mesh server for peer sync & SSE streams
+│   │   ├── TailscaleDiscoveryService.js # Zero-config peer discovery via Tailscale mesh
+│   │   ├── TelemetryService.js      # Cached per-chat transcript & token analyzer
+│   │   ├── VcsOrchestrator.js       # Lazy VCS aggregator (Git + GitHub CLI)
+│   │   └── WindowsDaemonService.js  # Startup persistence & System Tray supervisor
 │   └── index.js                     # Unified framework entrypoint
 ├── mods/                            # User-Facing Injected Mods
 │   ├── agent-selector/              # Specialist catalog & in-chat role injector
+│   │   ├── components/
+│   │   │   ├── AgentDropdownHtml.js # Floating portal dropdown template
+│   │   │   ├── AgentIcons.js        # Lucide SVG icons & Focus reticle
+│   │   │   └── AgentIconSvg.js      # Fedora hat + sunglasses SVG icon
+│   │   ├── manifest.json
+│   │   └── styles.css
 │   ├── context-tachometer/          # Per-chat token speedometer & popover
+│   │   ├── components/
+│   │   │   ├── GaugeSvg.js          # SVG 240° gradient speedometer
+│   │   │   └── PopoverHtml.js       # Detailed telemetry breakdown card
+│   │   ├── manifest.json
+│   │   └── styles.css
 │   ├── git-graph/                   # Auxiliary pane commit DAG & CI/CD inspector
+│   │   ├── components/
+│   │   │   ├── GitGraphPanelHtml.js # Topological commit tree & inspector card
+│   │   │   ├── GitGraphSvg.js       # Bezier curve lane rendering engine
+│   │   │   └── PrCiCardHtml.js      # GitHub PR and CI/CD status cards
+│   │   ├── manifest.json
+│   │   └── styles.css
 │   ├── mods-manager/                # Sidebar trigger & kill-switch manager
+│   │   ├── components/
+│   │   │   └── ModsManagerHtml.js   # Slide-out modal with toggle switches
+│   │   ├── manifest.json
+│   │   └── styles.css
 │   └── voice-assistant/             # Real-time TTS & action narrator
+│       ├── components/
+│       │   └── VoiceButtonHtml.js   # Dynamic speech toggle button
+│       ├── services/
+│       │   ├── ActionNarratorService.js # Real-time thought & tool action translator
+│       │   └── TextSanitizer.js     # Code & markdown payload cleaner
+│       ├── manifest.json
+│       └── styles.css
 ├── dist/                            # Production bundled distributions
 ├── docs/                            # Architecture specs, guides & visual assets
 ├── tests/                           # Unit & functional test suite (139 tests)
