@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 import { SlotManager } from './SlotManager.js';
 import { StyleIsolator } from '../sdk/StyleIsolator.js';
 import { renderPopoverHtml, renderSvgIcon } from '../../mods/context-tachometer/components/PopoverHtml.js';
