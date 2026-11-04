@@ -1,21 +1,22 @@
-## Descripción del Cambio
-<!-- Explica qué problema resuelve este cambio y la motivación técnica -->
+## Description
+<!-- Provide a concise summary of the changes and the architectural motivation -->
 
-## Tipo de Cambio
-- [ ] `feat`: Nueva funcionalidad
-- [ ] `fix`: Corrección de bug
-- [ ] `refactor`: Refactorización sin cambio de comportamiento
-- [ ] `perf`: Optimización de rendimiento
-- [ ] `test`: Nuevas pruebas unitarias o de integración
-- [ ] `docs`: Documentación
-- [ ] `ci` / `chore`: Workflows o mantenimiento
+## Change Type
+- [ ] `feat`: New capability or UI mod
+- [ ] `fix`: Bug fix
+- [ ] `refactor`: Structural refactor with zero behavior changes
+- [ ] `perf`: Performance optimization
+- [ ] `test`: Unit or functional integration test suite addition
+- [ ] `docs`: Documentation update
+- [ ] `ci` / `chore`: CI/CD workflows, build tools, or repository maintenance
 
-## Checklist de Calidad
-- [ ] Rama creada siguiendo la convención (`feat/`, `fix/`, `docs/`, etc.)
-- [ ] Commits atómicos aplicando Conventional Commits v1.0.0
-- [ ] Cero menciones de atribución automática / Co-Authored-By
-- [ ] `npm test` ejecuta y pasa al 100% (cero fallos)
-- [ ] Código verificado contra la arquitectura de capas y contratos del SDK
+## Quality Checklist
+- [ ] Branch follows convention (`<type>/<scope>-<kebab-case-description>`)
+- [ ] Atomic commits adhere strictly to Conventional Commits specification
+- [ ] Zero AI attribution trailers or `Co-Authored-By` markers
+- [ ] `npm test` passes with 100% success rate (zero broken tests)
+- [ ] UI changes comply with `SECURITY.md` (strict XSS output encoding, zero unsafe DOM mutations)
+- [ ] Public SDK interfaces in `framework/` maintain backward compatibility
 
-## Issues Relacionados
+## Related Issues
 Closes #
