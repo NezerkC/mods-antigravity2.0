@@ -221,3 +221,258 @@ test('ModLoader - compiles valid executable JavaScript syntax without SyntaxErro
   assert.ok(script.includes('window.__antigravityProjectFilteredCommits'));
   assert.ok(!script.includes('.git-pill-files'));
 });
+
+test('ModLoader - injection script unlocks Antigravity 2.29 native voice mode and flag overrides', () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({});
+
+  assert.ok(script.includes('/voice/health'));
+  assert.ok(script.includes('enable-voice-relay'));
+  assert.ok(script.includes('127.0.0.1:8765'));
+  assert.ok(script.includes('jetski.developer.customFlagOverrides'));
+});
+
+test('ModLoader - injection script includes window.__toggleVoiceAssistant and localStorage sync', () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({});
+
+  assert.ok(script.includes('window.__toggleVoiceAssistant'));
+  assert.ok(script.includes('window.__syncVoiceAssistantButton'));
+  assert.ok(script.includes('__antigravity_voice_assistant_enabled'));
+  assert.ok(script.includes('data-mod-action="toggle-voice"'));
+  assert.ok(script.includes('#antigravity-voice-assistant-btn'));
+});
+
+test('ModLoader - includes RDP and window minimize zero-dimension guards, recovery listener, and voice conditioning', () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({});
+
+  assert.ok(script.includes('document.hidden || window.innerWidth <= 0'));
+  assert.ok(script.includes('document.hidden || window.innerWidth <= 0 || footerWidth <= 0'));
+  assert.ok(script.includes('if (width <= 0) continue;'));
+  assert.ok(script.includes('window.__antigravityRdpRecoveryBound'));
+  assert.ok(script.includes("document.addEventListener('visibilitychange'"));
+  assert.ok(script.includes("window.addEventListener('focus'"));
+  assert.ok(script.includes("window.addEventListener('resize'"));
+  assert.ok(script.includes('window.__conditionAgentFromVoice'));
+  assert.ok(script.includes('window.__scanVoiceTranscriptsForAgent'));
+});
+
+test('ModLoader - preserves badge state during RDP/minimize zero dimensions and recovers on visibilitychange/focus/resize', () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({
+    activeAgents: {
+      'chat-1': { id: 'auto', name: 'Auto', color: '#38bdf8', effectiveMode: 'PLAN' }
+    }
+  });
+
+  const makeClassList = (initial = []) => {
+    const set = new Set(initial);
+    return {
+      add: (...cls) => cls.forEach(c => set.add(c)),
+      remove: (...cls) => cls.forEach(c => set.delete(c)),
+      toggle: (c, force) => {
+        const shouldAdd = force !== undefined ? !!force : !set.has(c);
+        if (shouldAdd) set.add(c);
+        else set.delete(c);
+        return shouldAdd;
+      },
+      contains: (c) => set.has(c)
+    };
+  };
+
+  const tachBadge = {
+    classList: makeClassList(),
+    attributes: {},
+    style: {},
+    setAttribute(k, v) { this.attributes[k] = v; },
+    getAttribute(k) { return this.attributes[k] ?? null; },
+    removeAttribute(k) { delete this.attributes[k]; },
+    addEventListener() {},
+    closest(sel) {
+      if (sel === '[data-cascade-id]') return cascadeContainer;
+      return footerEl;
+    },
+    querySelector() { return null; }
+  };
+
+  const agentLabel = {
+    textContent: 'Auto',
+    innerHTML: '<span class="auto-oscillate-track"></span>',
+    querySelector(sel) {
+      return sel === '.auto-oscillate-track' && this.innerHTML.includes('auto-oscillate-track') ? {} : null;
+    }
+  };
+
+  const agentBadge = {
+    classList: makeClassList(),
+    attributes: { 'data-agent-id': 'auto', 'data-effective-mode': 'PLAN' },
+    style: {},
+    setAttribute(k, v) { this.attributes[k] = v; },
+    getAttribute(k) { return this.attributes[k] ?? null; },
+    removeAttribute(k) { delete this.attributes[k]; },
+    addEventListener() {},
+    closest(sel) {
+      if (sel === '[data-cascade-id]') return cascadeContainer;
+      return footerEl;
+    },
+    querySelector(sel) {
+      if (sel === '.antigravity-active-agent-name') return agentLabel;
+      return null;
+    }
+  };
+
+  const footerEl = {
+    offsetWidth: 680,
+    getBoundingClientRect() { return { width: this.offsetWidth }; },
+    querySelector(sel) {
+      if (sel.includes('tachometer-badge')) return tachBadge;
+      if (sel.includes('agent-badge')) return agentBadge;
+      return null;
+    }
+  };
+
+  const slotContainer = {
+    parentElement: footerEl,
+    classList: makeClassList(['antigravity-slot-container']),
+    closest() { return footerEl; },
+    querySelector(sel) {
+      if (sel.includes('tachometer-badge')) return tachBadge;
+      if (sel.includes('agent-badge')) return agentBadge;
+      return null;
+    }
+  };
+
+  const cascadeContainer = {
+    getAttribute(k) { return k === 'data-cascade-id' ? 'chat-1' : null; },
+    querySelector(sel) {
+      if (sel.includes('agent-badge')) return agentBadge;
+      return null;
+    }
+  };
+
+  const voiceTranscriptEl = {
+    textContent: 'implementa y corrige el bug en ModLoader',
+    getAttribute() { return null; },
+    closest(sel) { return sel === '[data-cascade-id]' ? cascadeContainer : null; }
+  };
+
+  const docListeners = {};
+  const winListeners = {};
+  let resizeCallback = null;
+  let storage = {};
+
+  const mockDocument = {
+    hidden: false,
+    head: { appendChild() {} },
+    body: { appendChild() {} },
+    getElementById() { return null; },
+    createElement() {
+      return {
+        style: {},
+        classList: makeClassList(),
+        setAttribute() {},
+        getAttribute() { return '2'; },
+        querySelector() { return null; },
+        querySelectorAll() { return []; }
+      };
+    },
+    addEventListener(type, fn) {
+      docListeners[type] = docListeners[type] || [];
+      docListeners[type].push(fn);
+    },
+    querySelector(sel) {
+      if (sel.includes('agent-badge')) return agentBadge;
+      if (sel.includes('tachometer-badge')) return tachBadge;
+      return null;
+    },
+    querySelectorAll(sel) {
+      if (sel === '.antigravity-slot-container') return [slotContainer];
+      if (sel === '.antigravity-tachometer-badge') return [tachBadge];
+      if (sel === '.antigravity-agent-badge') return [agentBadge];
+      if (sel.includes('data-voice-transcript')) return [voiceTranscriptEl];
+      return [];
+    }
+  };
+
+  const mockWindow = {
+    innerWidth: 1280,
+    innerHeight: 800,
+    location: { pathname: '/c/chat-1', search: '' },
+    addEventListener(type, fn) {
+      winListeners[type] = winListeners[type] || [];
+      winListeners[type].push(fn);
+    }
+  };
+
+  const mockLocalStorage = {
+    getItem(k) { return storage[k] ?? null; },
+    setItem(k, v) { storage[k] = String(v); }
+  };
+
+  class MockResizeObserver {
+    constructor(cb) { resizeCallback = cb; }
+    observe() {}
+    disconnect() {}
+  }
+
+  class MockMutationObserver {
+    constructor(cb) { this.cb = cb; }
+    observe() {}
+    disconnect() {}
+  }
+
+  const runner = new Function(
+    'window',
+    'document',
+    'localStorage',
+    'ResizeObserver',
+    'MutationObserver',
+    script
+  );
+  runner(mockWindow, mockDocument, mockLocalStorage, MockResizeObserver, MockMutationObserver);
+
+  // 1. Initial wide layout: neither badge is forced into compact mode
+  assert.equal(tachBadge.classList.contains('compact'), false);
+  assert.equal(agentBadge.classList.contains('compact'), false);
+  assert.equal(mockWindow.__antigravityRdpRecoveryBound, true);
+
+  // 2. Simulate RDP disconnect / window minimize: zero dimensions & hidden document
+  mockDocument.hidden = true;
+  mockWindow.innerWidth = 0;
+  footerEl.offsetWidth = 0;
+
+  mockWindow.__antigravityMountAll();
+  resizeCallback([{ target: slotContainer, contentRect: { width: 0 } }]);
+  mockWindow.__applyChatboxModsCompact();
+
+  assert.equal(tachBadge.classList.contains('compact'), false, 'Tachometer must not collapse to compact when minimized/RDP');
+  assert.equal(agentBadge.classList.contains('compact'), false, 'Agent badge must not collapse to compact when minimized/RDP');
+
+  // Even if document.hidden is false transiently during RDP resize while container width is 0
+  mockDocument.hidden = false;
+  mockWindow.innerWidth = 1280;
+  footerEl.offsetWidth = 0;
+  resizeCallback([{ target: slotContainer, contentRect: { width: 0 } }]);
+  assert.equal(tachBadge.classList.contains('compact'), false, 'Zero contentRect width must be ignored');
+
+  // 3. Simulate desync during minimize and recovery when window restores
+  agentBadge.setAttribute('data-agent-id', 'default');
+  footerEl.offsetWidth = 680;
+  let mountCallCount = 0;
+  const origMount = mockWindow.__antigravityMountAll;
+  mockWindow.__antigravityMountAll = () => {
+    mountCallCount++;
+    origMount();
+  };
+
+  for (const fn of (docListeners.visibilitychange || [])) fn();
+  assert.ok(mountCallCount >= 1, 'visibilitychange recovery must invoke mountAllMods');
+  assert.equal(agentBadge.getAttribute('data-agent-id'), 'auto', 'Agent badge must resync after RDP recovery');
+
+  // 4. Verify voice transcript conditioning updates active auto agent mode to BUILD
+  mockWindow.__scanVoiceTranscriptsForAgent();
+  assert.equal(agentBadge.getAttribute('data-effective-mode'), 'BUILD');
+  assert.equal(agentBadge.classList.contains('auto-state-build'), true);
+});
+
