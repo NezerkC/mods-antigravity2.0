@@ -1,0 +1,11 @@
+{
+  "name": "antigravity-voice-control",
+  "displayName": "Antigravity Global Voice Control",
+  "version": "1.0.0",
+  "description": "Global application-level voice control orchestration for Antigravity using Handy local STT (transcribe.dll and Canary 180M) and app-wide Connect RPC management.",
+  "suggestedPrompts": [
+    "Open the voice control hub and check local STT engine status",
+    "List all active conversations across workspaces and terminals",
+    "Send a voice command to another conversation without leaving this chat"
+  ]
+}
