@@ -651,6 +651,118 @@ export class ModLoader {
           }
         };
 
+        window.__dockNativeVoiceToast = function(rootDoc) {
+          const doc = rootDoc || (typeof document !== 'undefined' ? document : null);
+          if (!doc) return null;
+
+          const isExcludedContainer = (el) => {
+            if (!el) return true;
+            if (el.id === 'antigravity-git-panel-host' || (el.closest && el.closest('#antigravity-git-panel-host'))) return true;
+            if (el.id === 'antigravity-agent-dropdown-portal' || (el.closest && el.closest('#antigravity-agent-dropdown-portal'))) return true;
+            if (el.id === 'antigravity-tachometer-popover-portal' || (el.closest && el.closest('#antigravity-tachometer-popover-portal'))) return true;
+            if (el.id === 'antigravity-mods-manager-portal' || (el.closest && el.closest('#antigravity-mods-manager-portal'))) return true;
+            if (el.matches && el.matches('[role="dialog"]:not([data-testid*="voice"]):not([class*="voice"])')) return true;
+            return false;
+          };
+
+          const candidateButtons = Array.from(doc.querySelectorAll('button'));
+          let targetBar = null;
+
+          for (const btn of candidateButtons) {
+            if (isExcludedContainer(btn)) continue;
+
+            const text = (btn.textContent || '').trim().toLowerCase();
+            const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+            const testid = (btn.getAttribute('data-testid') || '').toLowerCase();
+
+            const isEndBtn = text === 'end' || text === 'end call' || text === 'terminar' || text === 'finalizar' ||
+              label.includes('end call') || label === 'end' || label.includes('terminar llamada') || label.includes('finalizar llamada') ||
+              testid.includes('voice-end') || testid.includes('call-end');
+
+            if (!isEndBtn) continue;
+
+            let curr = btn.parentElement;
+            let bestMatch = null;
+
+            while (curr && curr !== doc.body && curr !== doc.documentElement) {
+              if (isExcludedContainer(curr)) break;
+
+              if (curr.querySelector && curr.querySelector('textarea, [contenteditable="true"], .antigravity-slot-chat-input-actions')) {
+                break;
+              }
+
+              const hasAudioControls = curr.querySelector && curr.querySelector(
+                'button[aria-label*="mic" i], button[aria-label*="mute" i], button[aria-label*="audio" i], ' +
+                'button[aria-label*="speaker" i], [data-testid*="mic"], [data-testid*="mute"], [data-testid*="audio"], ' +
+                '[data-voice-control], button[title*="Mute" i], button[title*="Audio" i]'
+              );
+
+              if (hasAudioControls) {
+                bestMatch = curr;
+              }
+              curr = curr.parentElement;
+            }
+
+            if (bestMatch) {
+              targetBar = bestMatch;
+              break;
+            }
+          }
+
+          if (!targetBar) {
+            const directBar = doc.querySelector && doc.querySelector('.antigravity-voice-toast, [data-testid*="voice-call-bar"], [data-testid*="voice-toast"], [data-voice-call-bar]');
+            if (directBar && !isExcludedContainer(directBar)) {
+              targetBar = directBar;
+            }
+          }
+
+          if (!targetBar) return null;
+
+          if (!targetBar.classList.contains('antigravity-voice-toast-docked')) {
+            targetBar.classList.add('antigravity-voice-toast-docked');
+            targetBar.setAttribute('data-antigravity-voice-docked', 'true');
+          }
+
+          const collapseBtn = targetBar.querySelector && targetBar.querySelector(
+            'button[aria-label*="collapse" i], button[aria-label*="minim" i], .collapse-btn, ' +
+            '[data-testid*="collapse"], [data-testid*="minim"], [data-mod-action="collapse-voice"]'
+          );
+          let isMinimized = false;
+          if (collapseBtn) {
+            const expanded = collapseBtn.getAttribute('aria-expanded');
+            if (expanded === 'false') {
+              isMinimized = true;
+            } else if (expanded === 'true') {
+              isMinimized = false;
+            } else {
+              isMinimized = collapseBtn.classList.contains('collapsed') || targetBar.classList.contains('minimized');
+            }
+          } else {
+            isMinimized = targetBar.classList.contains('minimized');
+          }
+
+          if (isMinimized) {
+            targetBar.classList.add('is-minimized');
+            targetBar.setAttribute('data-minimized', 'true');
+          } else {
+            targetBar.classList.remove('is-minimized');
+            targetBar.removeAttribute('data-minimized');
+          }
+
+          if (collapseBtn && !collapseBtn.__collapseSyncBound) {
+            collapseBtn.__collapseSyncBound = true;
+            collapseBtn.addEventListener('click', () => {
+              setTimeout(() => {
+                if (typeof window.__dockNativeVoiceToast === 'function') {
+                  window.__dockNativeVoiceToast(doc);
+                }
+              }, 40);
+            });
+          }
+
+          return targetBar;
+        };
+
         window.__applyModsVisibility = function() {
           const voiceModEnabled = localStorage.getItem('__antigravity_mod_enabled_voice-assistant') !== 'false';
           document.querySelectorAll('.antigravity-voice-assistant-wrapper, #antigravity-voice-assistant-wrapper').forEach(b => {
@@ -1944,6 +2056,10 @@ export class ModLoader {
             if (tach) tach.classList.toggle('compact', shouldCompact);
             if (agent) agent.classList.toggle('compact', shouldCompact);
           });
+
+          if (typeof window.__dockNativeVoiceToast === 'function') {
+            window.__dockNativeVoiceToast(document);
+          }
         }
 
         // Initialize ResizeObserver for responsive auto-collapse
@@ -2023,6 +2139,9 @@ export class ModLoader {
           if (mountDebounce) return;
           mountDebounce = setTimeout(() => {
             mountDebounce = null;
+            if (typeof window.__dockNativeVoiceToast === 'function') {
+              window.__dockNativeVoiceToast(document);
+            }
             if (typeof window.__scanVoiceTranscriptsForAgent === 'function') {
               window.__scanVoiceTranscriptsForAgent();
             }
