@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "antigravity-voice-control-mcp": {
+      "command": "node",
+      "args": [
+        "./mcp/server.mjs"
+      ]
+    }
+  }
+}
