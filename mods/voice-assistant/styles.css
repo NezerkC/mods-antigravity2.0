@@ -68,3 +68,38 @@
     transform-origin: center;
   }
 }
+
+/* Detached Native Voice Mode Card Toast */
+.antigravity-voice-toast-docked,
+body .antigravity-voice-toast-docked,
+:root .antigravity-voice-toast-docked {
+  position: fixed !important;
+  right: 24px !important;
+  bottom: 24px !important;
+  left: auto !important;
+  transform: none !important;
+  z-index: 9998 !important;
+  max-width: min(420px, calc(100vw - 48px)) !important;
+  box-sizing: border-box !important;
+  transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease;
+  pointer-events: auto !important;
+}
+
+.antigravity-voice-toast-docked.is-minimized,
+body .antigravity-voice-toast-docked.is-minimized,
+.antigravity-voice-toast-docked[data-minimized="true"],
+body .antigravity-voice-toast-docked[data-minimized="true"],
+.antigravity-voice-toast-docked.minimized,
+body .antigravity-voice-toast-docked.minimized {
+  position: fixed !important;
+  right: 24px !important;
+  bottom: 24px !important;
+  left: auto !important;
+  transform: none !important;
+  transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease;
+}
+
+.antigravity-voice-toast-docked button,
+body .antigravity-voice-toast-docked button {
+  pointer-events: auto !important;
+}
