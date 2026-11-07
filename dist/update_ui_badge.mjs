@@ -1326,6 +1326,118 @@ class ModLoader {
           }
         };
 
+        window.__dockNativeVoiceToast = function(rootDoc) {
+          const doc = rootDoc || (typeof document !== 'undefined' ? document : null);
+          if (!doc) return null;
+
+          const isExcludedContainer = (el) => {
+            if (!el) return true;
+            if (el.id === 'antigravity-git-panel-host' || (el.closest && el.closest('#antigravity-git-panel-host'))) return true;
+            if (el.id === 'antigravity-agent-dropdown-portal' || (el.closest && el.closest('#antigravity-agent-dropdown-portal'))) return true;
+            if (el.id === 'antigravity-tachometer-popover-portal' || (el.closest && el.closest('#antigravity-tachometer-popover-portal'))) return true;
+            if (el.id === 'antigravity-mods-manager-portal' || (el.closest && el.closest('#antigravity-mods-manager-portal'))) return true;
+            if (el.matches && el.matches('[role="dialog"]:not([data-testid*="voice"]):not([class*="voice"])')) return true;
+            return false;
+          };
+
+          const candidateButtons = Array.from(doc.querySelectorAll('button'));
+          let targetBar = null;
+
+          for (const btn of candidateButtons) {
+            if (isExcludedContainer(btn)) continue;
+
+            const text = (btn.textContent || '').trim().toLowerCase();
+            const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+            const testid = (btn.getAttribute('data-testid') || '').toLowerCase();
+
+            const isEndBtn = text === 'end' || text === 'end call' || text === 'terminar' || text === 'finalizar' ||
+              label.includes('end call') || label === 'end' || label.includes('terminar llamada') || label.includes('finalizar llamada') ||
+              testid.includes('voice-end') || testid.includes('call-end');
+
+            if (!isEndBtn) continue;
+
+            let curr = btn.parentElement;
+            let bestMatch = null;
+
+            while (curr && curr !== doc.body && curr !== doc.documentElement) {
+              if (isExcludedContainer(curr)) break;
+
+              if (curr.querySelector && curr.querySelector('textarea, [contenteditable="true"], .antigravity-slot-chat-input-actions')) {
+                break;
+              }
+
+              const hasAudioControls = curr.querySelector && curr.querySelector(
+                'button[aria-label*="mic" i], button[aria-label*="mute" i], button[aria-label*="audio" i], ' +
+                'button[aria-label*="speaker" i], [data-testid*="mic"], [data-testid*="mute"], [data-testid*="audio"], ' +
+                '[data-voice-control], button[title*="Mute" i], button[title*="Audio" i]'
+              );
+
+              if (hasAudioControls) {
+                bestMatch = curr;
+              }
+              curr = curr.parentElement;
+            }
+
+            if (bestMatch) {
+              targetBar = bestMatch;
+              break;
+            }
+          }
+
+          if (!targetBar) {
+            const directBar = doc.querySelector && doc.querySelector('.antigravity-voice-toast, [data-testid*="voice-call-bar"], [data-testid*="voice-toast"], [data-voice-call-bar]');
+            if (directBar && !isExcludedContainer(directBar)) {
+              targetBar = directBar;
+            }
+          }
+
+          if (!targetBar) return null;
+
+          if (!targetBar.classList.contains('antigravity-voice-toast-docked')) {
+            targetBar.classList.add('antigravity-voice-toast-docked');
+            targetBar.setAttribute('data-antigravity-voice-docked', 'true');
+          }
+
+          const collapseBtn = targetBar.querySelector && targetBar.querySelector(
+            'button[aria-label*="collapse" i], button[aria-label*="minim" i], .collapse-btn, ' +
+            '[data-testid*="collapse"], [data-testid*="minim"], [data-mod-action="collapse-voice"]'
+          );
+          let isMinimized = false;
+          if (collapseBtn) {
+            const expanded = collapseBtn.getAttribute('aria-expanded');
+            if (expanded === 'false') {
+              isMinimized = true;
+            } else if (expanded === 'true') {
+              isMinimized = false;
+            } else {
+              isMinimized = collapseBtn.classList.contains('collapsed') || targetBar.classList.contains('minimized');
+            }
+          } else {
+            isMinimized = targetBar.classList.contains('minimized');
+          }
+
+          if (isMinimized) {
+            targetBar.classList.add('is-minimized');
+            targetBar.setAttribute('data-minimized', 'true');
+          } else {
+            targetBar.classList.remove('is-minimized');
+            targetBar.removeAttribute('data-minimized');
+          }
+
+          if (collapseBtn && !collapseBtn.__collapseSyncBound) {
+            collapseBtn.__collapseSyncBound = true;
+            collapseBtn.addEventListener('click', () => {
+              setTimeout(() => {
+                if (typeof window.__dockNativeVoiceToast === 'function') {
+                  window.__dockNativeVoiceToast(doc);
+                }
+              }, 40);
+            });
+          }
+
+          return targetBar;
+        };
+
         window.__applyModsVisibility = function() {
           const voiceModEnabled = localStorage.getItem('__antigravity_mod_enabled_voice-assistant') !== 'false';
           document.querySelectorAll('.antigravity-voice-assistant-wrapper, #antigravity-voice-assistant-wrapper').forEach(b => {
@@ -2619,6 +2731,10 @@ class ModLoader {
             if (tach) tach.classList.toggle('compact', shouldCompact);
             if (agent) agent.classList.toggle('compact', shouldCompact);
           });
+
+          if (typeof window.__dockNativeVoiceToast === 'function') {
+            window.__dockNativeVoiceToast(document);
+          }
         }
 
         // Initialize ResizeObserver for responsive auto-collapse
@@ -2698,6 +2814,9 @@ class ModLoader {
           if (mountDebounce) return;
           mountDebounce = setTimeout(() => {
             mountDebounce = null;
+            if (typeof window.__dockNativeVoiceToast === 'function') {
+              window.__dockNativeVoiceToast(document);
+            }
             if (typeof window.__scanVoiceTranscriptsForAgent === 'function') {
               window.__scanVoiceTranscriptsForAgent();
             }
@@ -7890,7 +8009,7 @@ class VoiceAssistantMod extends AntigravityMod {
     this.ttsAdapter = options.ttsAdapter || new XttsLocalAdapter(options.ttsOptions || {});
     this.promptConditioner = options.promptConditioner || new VoicePromptConditioner(options.conditionerOptions || {});
 
-    this.cachedCss = "/* Voice Assistant Mod Styles */\r\n.antigravity-slot-chat-input-actions {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  margin-right: 2px;\r\n}\r\n\r\n.antigravity-voice-assistant-wrapper {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  position: relative;\r\n}\r\n\r\n.antigravity-voice-assistant-btn {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  width: 1.75rem;\r\n  height: 1.75rem;\r\n  padding: 0.375rem;\r\n  border-radius: 9999px;\r\n  background: transparent;\r\n  color: var(--secondary-foreground, #ececec);\r\n  border: none;\r\n  cursor: pointer;\r\n  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;\r\n  user-select: none;\r\n  outline: none;\r\n}\r\n\r\n.antigravity-voice-assistant-btn:hover {\r\n  background-color: var(--secondary, rgba(255, 255, 255, 0.08));\r\n}\r\n\r\n.antigravity-voice-assistant-btn:focus-visible {\r\n  outline: 2px solid var(--ring, #3b82f6);\r\n  outline-offset: 1px;\r\n}\r\n\r\n.antigravity-voice-assistant-btn.state-muted {\r\n  opacity: 0.45;\r\n}\r\n\r\n.antigravity-voice-assistant-btn.state-speaking {\r\n  color: #38bdf8;\r\n  background-color: rgba(56, 189, 248, 0.12);\r\n}\r\n\r\n.antigravity-voice-assistant-btn.state-speaking .wave-1 {\r\n  animation: voiceWavePulse 1.2s infinite ease-in-out;\r\n}\r\n\r\n.antigravity-voice-assistant-btn.state-speaking .wave-2 {\r\n  animation: voiceWavePulse 1.2s infinite ease-in-out 0.3s;\r\n}\r\n\r\n@keyframes voiceWavePulse {\r\n  0%, 100% {\r\n    opacity: 0.3;\r\n    transform: scale(0.95);\r\n    transform-origin: center;\r\n  }\r\n  50% {\r\n    opacity: 1;\r\n    transform: scale(1.1);\r\n    transform-origin: center;\r\n  }\r\n}\r\n";
+    this.cachedCss = "/* Voice Assistant Mod Styles */\n.antigravity-slot-chat-input-actions {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  margin-right: 2px;\n}\n\n.antigravity-voice-assistant-wrapper {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  position: relative;\n}\n\n.antigravity-voice-assistant-btn {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  width: 1.75rem;\n  height: 1.75rem;\n  padding: 0.375rem;\n  border-radius: 9999px;\n  background: transparent;\n  color: var(--secondary-foreground, #ececec);\n  border: none;\n  cursor: pointer;\n  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;\n  user-select: none;\n  outline: none;\n}\n\n.antigravity-voice-assistant-btn:hover {\n  background-color: var(--secondary, rgba(255, 255, 255, 0.08));\n}\n\n.antigravity-voice-assistant-btn:focus-visible {\n  outline: 2px solid var(--ring, #3b82f6);\n  outline-offset: 1px;\n}\n\n.antigravity-voice-assistant-btn.state-muted {\n  opacity: 0.45;\n}\n\n.antigravity-voice-assistant-btn.state-speaking {\n  color: #38bdf8;\n  background-color: rgba(56, 189, 248, 0.12);\n}\n\n.antigravity-voice-assistant-btn.state-speaking .wave-1 {\n  animation: voiceWavePulse 1.2s infinite ease-in-out;\n}\n\n.antigravity-voice-assistant-btn.state-speaking .wave-2 {\n  animation: voiceWavePulse 1.2s infinite ease-in-out 0.3s;\n}\n\n@keyframes voiceWavePulse {\n  0%, 100% {\n    opacity: 0.3;\n    transform: scale(0.95);\n    transform-origin: center;\n  }\n  50% {\n    opacity: 1;\n    transform: scale(1.1);\n    transform-origin: center;\n  }\n}\n\n/* Detached Native Voice Mode Card Toast */\n.antigravity-voice-toast-docked,\nbody .antigravity-voice-toast-docked,\n:root .antigravity-voice-toast-docked {\n  position: fixed !important;\n  right: 24px !important;\n  bottom: 24px !important;\n  left: auto !important;\n  transform: none !important;\n  z-index: 9998 !important;\n  max-width: min(420px, calc(100vw - 48px)) !important;\n  box-sizing: border-box !important;\n  transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease;\n  pointer-events: auto !important;\n}\n\n.antigravity-voice-toast-docked.is-minimized,\nbody .antigravity-voice-toast-docked.is-minimized,\n.antigravity-voice-toast-docked[data-minimized=\"true\"],\nbody .antigravity-voice-toast-docked[data-minimized=\"true\"],\n.antigravity-voice-toast-docked.minimized,\nbody .antigravity-voice-toast-docked.minimized {\n  position: fixed !important;\n  right: 24px !important;\n  bottom: 24px !important;\n  left: auto !important;\n  transform: none !important;\n  transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease;\n}\n\n.antigravity-voice-toast-docked button,\nbody .antigravity-voice-toast-docked button {\n  pointer-events: auto !important;\n}\n";
   }
 
   get id() {
