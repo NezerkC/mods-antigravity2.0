@@ -1,0 +1,11 @@
+{
+  "name": "antigravity-mods",
+  "displayName": "Antigravity Mods & Telemetry Hub",
+  "version": "2.1.0",
+  "description": "Panel lateral nativo con tacómetro de contexto en tiempo real, selector jerárquico de agentes, telemetría VCS y monitoreo del asistente de voz.",
+  "suggestedPrompts": [
+    "Abre el panel de Mods y Telemetría para revisar el tacómetro",
+    "Verifica el uso de tokens y el estado del agente activo",
+    "Inspecciona el gráfico de commits y ramas activas"
+  ]
+}

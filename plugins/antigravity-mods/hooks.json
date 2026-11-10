@@ -1,0 +1,25 @@
+{
+  "antigravity-mods-hook": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "node ./scripts/context-hook.mjs",
+        "timeout": 10
+      }
+    ],
+    "PostInvocation": [
+      {
+        "type": "command",
+        "command": "node ./scripts/context-hook.mjs --post",
+        "timeout": 10
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "node ./scripts/context-hook.mjs --post",
+        "timeout": 10
+      }
+    ]
+  }
+}
