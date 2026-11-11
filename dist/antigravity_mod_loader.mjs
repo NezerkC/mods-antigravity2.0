@@ -1330,14 +1330,48 @@ class ModLoader {
           const doc = rootDoc || (typeof document !== 'undefined' ? document : null);
           if (!doc) return null;
 
+          const EXCLUDED_IDS = [
+            'antigravity-git-panel-host',
+            'antigravity-agent-dropdown-portal',
+            'antigravity-tachometer-popover-portal',
+            'antigravity-mods-manager-portal'
+          ];
+
           const isExcludedContainer = (el) => {
             if (!el) return true;
-            if (el.id === 'antigravity-git-panel-host' || (el.closest && el.closest('#antigravity-git-panel-host'))) return true;
-            if (el.id === 'antigravity-agent-dropdown-portal' || (el.closest && el.closest('#antigravity-agent-dropdown-portal'))) return true;
-            if (el.id === 'antigravity-tachometer-popover-portal' || (el.closest && el.closest('#antigravity-tachometer-popover-portal'))) return true;
-            if (el.id === 'antigravity-mods-manager-portal' || (el.closest && el.closest('#antigravity-mods-manager-portal'))) return true;
+            for (const exId of EXCLUDED_IDS) {
+              if (el.id === exId) return true;
+              if (el.closest && el.closest('#' + exId)) return true;
+            }
             if (el.matches && el.matches('[role="dialog"]:not([data-testid*="voice"]):not([class*="voice"])')) return true;
             return false;
+          };
+
+          const getAttr = (el, name) => (el && typeof el.getAttribute === 'function' ? (el.getAttribute(name) || '') : '');
+          const setAttrIfMissing = (el, name, value) => {
+            if (el && typeof el.setAttribute === 'function' && !getAttr(el, name)) {
+              el.setAttribute(name, value);
+            }
+          };
+
+          const hasAudioControls = (el) => {
+            if (!el || typeof el.querySelector !== 'function') return false;
+            return Boolean(el.querySelector(
+              'button[aria-label*="mic" i], button[aria-label*="mute" i], button[aria-label*="audio" i], ' +
+              'button[aria-label*="speaker" i], button[aria-label*="speed" i], [data-testid*="mic"], ' +
+              '[data-testid*="mute"], [data-testid*="audio"], [data-testid="voice-call-speed"], ' +
+              '[data-testid="voice-speed-button"], [data-voice-control], button[title*="Mute" i], button[title*="Audio" i]'
+            ));
+          };
+
+          const resolveVoiceVariant = (el) => {
+            const tid = getAttr(el, 'data-testid').toLowerCase();
+            if (tid === 'voice-teleprompter-slot' || (el.querySelector && el.querySelector('[data-testid="live-docked"]'))) {
+              return 'teleprompter';
+            }
+            if (tid === 'voice-dock') return 'dock';
+            if (tid === 'voice-pill') return 'pill';
+            return 'generic';
           };
 
           const candidateButtons = Array.from(doc.querySelectorAll('button'));
@@ -1347,12 +1381,15 @@ class ModLoader {
             if (isExcludedContainer(btn)) continue;
 
             const text = (btn.textContent || '').trim().toLowerCase();
-            const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-            const testid = (btn.getAttribute('data-testid') || '').toLowerCase();
+            const label = getAttr(btn, 'aria-label').toLowerCase();
+            const testid = getAttr(btn, 'data-testid').toLowerCase();
 
-            const isEndBtn = text === 'end' || text === 'end call' || text === 'terminar' || text === 'finalizar' ||
-              label.includes('end call') || label === 'end' || label.includes('terminar llamada') || label.includes('finalizar llamada') ||
-              testid.includes('voice-end') || testid.includes('call-end');
+            const isEndBtn =
+              text === 'end' || text === 'end call' || text === 'terminar' || text === 'finalizar' ||
+              label.includes('end call') || label === 'end' || label.includes('end voice') || label.includes('end live') ||
+              label.includes('terminar llamada') || label.includes('finalizar llamada') ||
+              testid.includes('voice-end') || testid.includes('call-end') ||
+              testid === 'voice-dock-end' || testid === 'voice-call-end' || testid === 'voice-end-button';
 
             if (!isEndBtn) continue;
 
@@ -1362,19 +1399,26 @@ class ModLoader {
             while (curr && curr !== doc.body && curr !== doc.documentElement) {
               if (isExcludedContainer(curr)) break;
 
-              if (curr.querySelector && curr.querySelector('textarea, [contenteditable="true"], .antigravity-slot-chat-input-actions')) {
+              const currTestId = getAttr(curr, 'data-testid').toLowerCase();
+              const isNativeVoiceShell =
+                currTestId === 'voice-teleprompter-slot' ||
+                currTestId === 'voice-dock' ||
+                currTestId === 'live-docked' ||
+                currTestId === 'voice-pill';
+
+              if (!isNativeVoiceShell && curr.querySelector && curr.querySelector('textarea, [contenteditable="true"], .antigravity-slot-chat-input-actions')) {
                 break;
               }
 
-              const hasAudioControls = curr.querySelector && curr.querySelector(
-                'button[aria-label*="mic" i], button[aria-label*="mute" i], button[aria-label*="audio" i], ' +
-                'button[aria-label*="speaker" i], [data-testid*="mic"], [data-testid*="mute"], [data-testid*="audio"], ' +
-                '[data-voice-control], button[title*="Mute" i], button[title*="Audio" i]'
-              );
-
-              if (hasAudioControls) {
+              if (hasAudioControls(curr)) {
                 bestMatch = curr;
               }
+
+              // Stop climbing once we capture the complete outer Voice HUD wrapper (which keeps mic warnings & drawers grouped).
+              if (currTestId === 'voice-teleprompter-slot' || currTestId === 'voice-dock') {
+                break;
+              }
+
               curr = curr.parentElement;
             }
 
@@ -1385,7 +1429,10 @@ class ModLoader {
           }
 
           if (!targetBar) {
-            const directBar = doc.querySelector && doc.querySelector('.antigravity-voice-toast, [data-testid*="voice-call-bar"], [data-testid*="voice-toast"], [data-voice-call-bar]');
+            const directBar = doc.querySelector && doc.querySelector(
+              '[data-testid="voice-teleprompter-slot"], [data-testid="voice-dock"], ' +
+              '.antigravity-voice-toast, [data-testid*="voice-call-bar"], [data-testid*="voice-toast"], [data-voice-call-bar]'
+            );
             if (directBar && !isExcludedContainer(directBar)) {
               targetBar = directBar;
             }
@@ -1396,6 +1443,52 @@ class ModLoader {
           if (!targetBar.classList.contains('antigravity-voice-toast-docked')) {
             targetBar.classList.add('antigravity-voice-toast-docked');
             targetBar.setAttribute('data-antigravity-voice-docked', 'true');
+          }
+
+          // Annotate semantic HTML5 boxes-inside-boxes attributes cleanly without detaching React nodes.
+          const variant = resolveVoiceVariant(targetBar);
+          targetBar.setAttribute('data-voice-hud-box', 'viewport-anchor');
+          targetBar.setAttribute('data-voice-hud-variant', variant);
+          setAttrIfMissing(targetBar, 'role', 'region');
+          setAttrIfMissing(targetBar, 'aria-label', 'Voice mode HUD');
+
+          if (targetBar.querySelector) {
+            const surfaceEl = targetBar.querySelector('[data-testid="live-docked"]');
+            if (surfaceEl && surfaceEl !== targetBar) {
+              surfaceEl.setAttribute('data-voice-hud-box', 'surface');
+            }
+            const controlsEl = targetBar.querySelector('[data-testid="voice-call-controls"]');
+            if (controlsEl) {
+              controlsEl.setAttribute('data-voice-hud-box', 'header');
+            }
+            const drawerEl = targetBar.querySelector('[data-testid="live-docked-replies"], [data-testid="voice-dock-composer"]');
+            if (drawerEl) {
+              drawerEl.setAttribute('data-voice-hud-box', 'drawer');
+              drawerEl.setAttribute('data-voice-hud-placement', 'below');
+            }
+          }
+
+          if (targetBar.querySelectorAll) {
+            const alertEls = targetBar.querySelectorAll('[data-testid="voice-mic-warning"], [data-testid="voice-mic-switched"], [data-testid="voice-error-tip"]');
+            for (const alertEl of alertEls) {
+              if (alertEl && alertEl.setAttribute) {
+                alertEl.setAttribute('data-voice-hud-box', 'alert');
+                alertEl.setAttribute('data-voice-hud-placement', 'below');
+              }
+            }
+          }
+
+          // Compute live Top HUD vertical clearance below the 35px menubar if present.
+          const menuBar = doc.querySelector && doc.querySelector('[data-testid="title-menu-bar"]');
+          let hudTopPx = 4;
+          if (menuBar && typeof menuBar.getBoundingClientRect === 'function') {
+            const mbRect = menuBar.getBoundingClientRect();
+            if (mbRect && mbRect.height > 0 && mbRect.bottom > 0 && mbRect.bottom < 80) {
+              hudTopPx = Math.round(mbRect.bottom + 4);
+            }
+          }
+          if (targetBar.style && typeof targetBar.style.setProperty === 'function') {
+            targetBar.style.setProperty('--agy-voice-hud-top', hudTopPx + 'px');
           }
 
           const collapseBtn = targetBar.querySelector && targetBar.querySelector(
@@ -1433,6 +1526,36 @@ class ModLoader {
                 }
               }, 40);
             });
+          }
+
+          // Keep portaled speed slider & mic switcher popovers onscreen below Top HUD if BaseUI opens them upward.
+          if (targetBar.querySelectorAll && typeof targetBar.getBoundingClientRect === 'function') {
+            const popoverTriggers = targetBar.querySelectorAll(
+              '[data-testid="voice-call-speed"], [data-testid="voice-speed-button"], [data-testid="voice-mic-warning-switch"]'
+            );
+            for (const triggerEl of popoverTriggers) {
+              if (!triggerEl || triggerEl.__agyHudPopoverBound || typeof triggerEl.addEventListener !== 'function') continue;
+              triggerEl.__agyHudPopoverBound = true;
+              triggerEl.addEventListener('click', () => {
+                setTimeout(() => {
+                  const popEl = doc.querySelector && (
+                    doc.querySelector('[data-testid="voice-speed-panel"]') ||
+                    doc.querySelector('[data-popover-popup]')
+                  );
+                  const popupBox = popEl && popEl.closest ? (popEl.closest('[data-popover-popup]') || popEl) : popEl;
+                  const positioner = popupBox && popupBox.parentElement ? popupBox.parentElement : popupBox;
+                  if (positioner && typeof positioner.getBoundingClientRect === 'function' && positioner.style) {
+                    const barRect = targetBar.getBoundingClientRect();
+                    const posRect = positioner.getBoundingClientRect();
+                    if (posRect && barRect && posRect.top < Math.max(4, barRect.bottom + 4)) {
+                      positioner.style.top = Math.round(barRect.bottom + 8) + 'px';
+                      positioner.style.bottom = 'auto';
+                      positioner.style.zIndex = '10020';
+                    }
+                  }
+                }, 24);
+              });
+            }
           }
 
           return targetBar;
@@ -8009,7 +8132,7 @@ class VoiceAssistantMod extends AntigravityMod {
     this.ttsAdapter = options.ttsAdapter || new XttsLocalAdapter(options.ttsOptions || {});
     this.promptConditioner = options.promptConditioner || new VoicePromptConditioner(options.conditionerOptions || {});
 
-    this.cachedCss = "/* Voice Assistant Mod Styles */\n.antigravity-slot-chat-input-actions {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  margin-right: 2px;\n}\n\n.antigravity-voice-assistant-wrapper {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  position: relative;\n}\n\n.antigravity-voice-assistant-btn {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  width: 1.75rem;\n  height: 1.75rem;\n  padding: 0.375rem;\n  border-radius: 9999px;\n  background: transparent;\n  color: var(--secondary-foreground, #ececec);\n  border: none;\n  cursor: pointer;\n  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;\n  user-select: none;\n  outline: none;\n}\n\n.antigravity-voice-assistant-btn:hover {\n  background-color: var(--secondary, rgba(255, 255, 255, 0.08));\n}\n\n.antigravity-voice-assistant-btn:focus-visible {\n  outline: 2px solid var(--ring, #3b82f6);\n  outline-offset: 1px;\n}\n\n.antigravity-voice-assistant-btn.state-muted {\n  opacity: 0.45;\n}\n\n.antigravity-voice-assistant-btn.state-speaking {\n  color: #38bdf8;\n  background-color: rgba(56, 189, 248, 0.12);\n}\n\n.antigravity-voice-assistant-btn.state-speaking .wave-1 {\n  animation: voiceWavePulse 1.2s infinite ease-in-out;\n}\n\n.antigravity-voice-assistant-btn.state-speaking .wave-2 {\n  animation: voiceWavePulse 1.2s infinite ease-in-out 0.3s;\n}\n\n@keyframes voiceWavePulse {\n  0%, 100% {\n    opacity: 0.3;\n    transform: scale(0.95);\n    transform-origin: center;\n  }\n  50% {\n    opacity: 1;\n    transform: scale(1.1);\n    transform-origin: center;\n  }\n}\n\n/* Detached Native Voice Mode Card Toast */\n.antigravity-voice-toast-docked,\nbody .antigravity-voice-toast-docked,\n:root .antigravity-voice-toast-docked {\n  position: fixed !important;\n  right: 24px !important;\n  bottom: 24px !important;\n  left: auto !important;\n  transform: none !important;\n  z-index: 9998 !important;\n  max-width: min(420px, calc(100vw - 48px)) !important;\n  box-sizing: border-box !important;\n  transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease;\n  pointer-events: auto !important;\n}\n\n.antigravity-voice-toast-docked.is-minimized,\nbody .antigravity-voice-toast-docked.is-minimized,\n.antigravity-voice-toast-docked[data-minimized=\"true\"],\nbody .antigravity-voice-toast-docked[data-minimized=\"true\"],\n.antigravity-voice-toast-docked.minimized,\nbody .antigravity-voice-toast-docked.minimized {\n  position: fixed !important;\n  right: 24px !important;\n  bottom: 24px !important;\n  left: auto !important;\n  transform: none !important;\n  transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease;\n}\n\n.antigravity-voice-toast-docked button,\nbody .antigravity-voice-toast-docked button {\n  pointer-events: auto !important;\n}\n";
+    this.cachedCss = "/* Voice Assistant Mod Styles */\n.antigravity-slot-chat-input-actions {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  margin-right: 2px;\n}\n\n.antigravity-voice-assistant-wrapper {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  position: relative;\n}\n\n.antigravity-voice-assistant-btn {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  width: 1.75rem;\n  height: 1.75rem;\n  padding: 0.375rem;\n  border-radius: 9999px;\n  background: transparent;\n  color: var(--secondary-foreground, #ececec);\n  border: none;\n  cursor: pointer;\n  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;\n  user-select: none;\n  outline: none;\n}\n\n.antigravity-voice-assistant-btn:hover {\n  background-color: var(--secondary, rgba(255, 255, 255, 0.08));\n}\n\n.antigravity-voice-assistant-btn:focus-visible {\n  outline: 2px solid var(--ring, #3b82f6);\n  outline-offset: 1px;\n}\n\n.antigravity-voice-assistant-btn.state-muted {\n  opacity: 0.45;\n}\n\n.antigravity-voice-assistant-btn.state-speaking {\n  color: #38bdf8;\n  background-color: rgba(56, 189, 248, 0.12);\n}\n\n.antigravity-voice-assistant-btn.state-speaking .wave-1 {\n  animation: voiceWavePulse 1.2s infinite ease-in-out;\n}\n\n.antigravity-voice-assistant-btn.state-speaking .wave-2 {\n  animation: voiceWavePulse 1.2s infinite ease-in-out 0.3s;\n}\n\n@keyframes voiceWavePulse {\n  0%, 100% {\n    opacity: 0.3;\n    transform: scale(0.95);\n    transform-origin: center;\n  }\n  50% {\n    opacity: 1;\n    transform: scale(1.1);\n    transform-origin: center;\n  }\n}\n\n/* ==========================================================================\n   Generalized HTML5 Box-in-Box Voice Mode HUD (Top-Centered Across Views)\n   Box 0: viewport-anchor (.antigravity-voice-toast-docked / .agy-voice-hud)\n   Box 1: frame           ([data-voice-hud-box=\"frame\"])\n   Box 2: surface         ([data-voice-hud-box=\"surface\"] / [data-testid=\"live-docked\"])\n   Box 3: header/toolbar  ([data-voice-hud-box=\"header\"] / [role=\"toolbar\"])\n            -> identity | controls-well | actions | drawer\n   Box 4: tray/alerts     ([data-voice-hud-box=\"tray\"] / mic warning / composer)\n   ========================================================================== */\n\n/* Box 0: Top-Centered Viewport Anchor (Chats, History, and Customizations HUD) */\n.antigravity-voice-toast-docked,\nbody .antigravity-voice-toast-docked,\n:root .antigravity-voice-toast-docked,\n.agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"],\nbody .agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"] {\n  --agy-voice-hud-top: 4px;\n  --agy-voice-outer-radius: var(--nux-radius-lg, 16px);\n  --agy-voice-inner-pad: 4px;\n  --agy-voice-inner-radius: calc(var(--agy-voice-outer-radius) - var(--agy-voice-inner-pad));\n  position: fixed !important;\n  inset-block-start: var(--agy-voice-hud-top) !important;\n  inset-inline: 0 !important;\n  top: var(--agy-voice-hud-top) !important;\n  left: 0 !important;\n  right: 0 !important;\n  bottom: auto !important;\n  margin-inline: auto !important;\n  margin-bottom: 0 !important;\n  width: fit-content !important;\n  min-width: min(260px, calc(100vw - 32px)) !important;\n  max-width: min(440px, max(260px, calc(100vw - 320px)), calc(100vw - 48px)) !important;\n  height: auto !important;\n  padding: 0 !important;\n  transform: none !important;\n  z-index: 9998 !important;\n  box-sizing: border-box !important;\n  overflow: visible !important;\n  pointer-events: auto !important;\n  transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease;\n}\n\n/* Offset cleanly below the 35px menubar when present (Chats & Customizations) */\nbody:has([data-testid=\"title-menu-bar\"]) .antigravity-voice-toast-docked,\n:root:has([data-testid=\"title-menu-bar\"]) .antigravity-voice-toast-docked,\nbody:has([data-testid=\"title-menu-bar\"]) .agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"] {\n  --agy-voice-hud-top: 39px;\n}\n\n/* Multi-layer variant wrappers stack vertically (Header surface above Alert tray) */\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"],\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"dock\"],\nbody .antigravity-voice-toast-docked.agy-voice-hud,\n.agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"] {\n  display: flex !important;\n  flex-direction: column !important;\n  align-items: center !important;\n  gap: 6px !important;\n  pointer-events: none !important;\n}\n\n/* Direct compact/minimized bar keeps pill ergonomics centered at the Top HUD */\n.antigravity-voice-toast-docked.is-minimized,\nbody .antigravity-voice-toast-docked.is-minimized,\n.antigravity-voice-toast-docked[data-minimized=\"true\"],\nbody .antigravity-voice-toast-docked[data-minimized=\"true\"],\n.antigravity-voice-toast-docked.minimized,\nbody .antigravity-voice-toast-docked.minimized {\n  position: fixed !important;\n  inset-block-start: var(--agy-voice-hud-top, 4px) !important;\n  inset-inline: 0 !important;\n  top: var(--agy-voice-hud-top, 4px) !important;\n  left: 0 !important;\n  right: 0 !important;\n  bottom: auto !important;\n  margin-inline: auto !important;\n  transform: none !important;\n  border-radius: var(--nux-radius-pill, 9999px) !important;\n  transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease;\n}\n\n/* Box 1: Frame (normalizes native teleprompter inner wrapper & standalone frame) */\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] > div,\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"frame\"],\n.agy-voice-hud [data-voice-hud-box=\"frame\"] {\n  display: flex !important;\n  flex-direction: column !important;\n  align-items: center !important;\n  gap: 6px !important;\n  width: 100% !important;\n  box-sizing: border-box !important;\n  pointer-events: none !important;\n}\n\n/* Order Box 2 (Surface) above native <c6> inline mic warning inside teleprompter slot */\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] > div > [data-testid=\"live-docked\"],\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"surface\"] {\n  order: 1 !important;\n  width: 100% !important;\n  pointer-events: auto !important;\n}\n\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] > div > :not([data-testid=\"live-docked\"]) {\n  order: 2 !important;\n  justify-content: center !important;\n  margin: 0 !important;\n  pointer-events: auto !important;\n}\n\n/* Box 2: Onyx 4-Sided Glass Card Surface (neutralizes bottom-composer border-b-0 / pb-8) */\nbody .antigravity-voice-toast-docked [data-testid=\"live-docked\"],\nbody[data-agy-theme][data-newux-theme=\"onyx\"] .agy-live-dock-slot.antigravity-voice-toast-docked [data-testid=\"live-docked\"],\nbody[data-agy-theme][data-newux-theme=\"onyx\"] .agy-live-dock-slot:has(+ .surface-composer).antigravity-voice-toast-docked [data-testid=\"live-docked\"],\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"surface\"],\n.agy-voice-hud [data-voice-hud-box=\"surface\"] {\n  background-color: var(--glass, rgba(24, 24, 28, 0.88)) !important;\n  -webkit-backdrop-filter: blur(20px) saturate(1.6) !important;\n  backdrop-filter: blur(20px) saturate(1.6) !important;\n  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14)) !important;\n  border-radius: var(--agy-voice-outer-radius, 16px) !important;\n  box-shadow:\n    inset 0 1px 0 var(--glass-highlight, rgba(255, 255, 255, 0.08)),\n    var(--glass-shadow, 0 14px 34px -10px rgba(0, 0, 0, 0.45)) !important;\n  padding: var(--agy-voice-inner-pad, 4px) 6px !important;\n  margin: 0 !important;\n  box-sizing: border-box !important;\n  pointer-events: auto !important;\n}\n\n/* Minimize bottom padding when standalone/teleprompter is collapsed into a slim HUD capsule */\nbody .antigravity-voice-toast-docked.is-minimized [data-testid=\"live-docked\"],\nbody .antigravity-voice-toast-docked[data-minimized=\"true\"] [data-testid=\"live-docked\"],\n.agy-voice-hud.is-minimized [data-voice-hud-box=\"surface\"] {\n  border-radius: var(--nux-radius-pill, 9999px) !important;\n  padding: 3px 6px !important;\n}\n\n/* Box 3: Header Strip & Inner Pills / Recessed Toolbar Well */\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"header\"],\nbody .antigravity-voice-toast-docked [data-testid=\"voice-call-controls\"],\n.agy-voice-hud [data-voice-hud-box=\"header\"] {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  gap: 8px !important;\n  width: 100% !important;\n  min-width: 0 !important;\n  box-sizing: border-box !important;\n  pointer-events: auto !important;\n}\n\n.agy-voice-hud [data-voice-hud-box=\"identity\"],\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"identity\"] {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-width: 0;\n  padding-inline: 6px;\n  font-size: 12px;\n  font-weight: 500;\n  color: var(--muted-foreground, #a1a1aa);\n}\n\n.agy-voice-hud [data-voice-hud-box=\"toolbar\"] {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-width: 0;\n}\n\n.agy-voice-hud [data-voice-hud-box=\"controls-well\"],\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"controls-well\"] {\n  display: inline-flex;\n  align-items: center;\n  gap: 4px;\n  padding: 2px;\n  border-radius: var(--nux-radius-pill, 9999px);\n  background-color: var(--onyx-well, rgba(255, 255, 255, 0.055));\n  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));\n}\n\n.agy-voice-hud [data-voice-hud-box=\"actions\"],\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"actions\"] {\n  display: inline-flex;\n  align-items: center;\n  gap: 4px;\n}\n\n.agy-voice-hud .agy-voice-hud-separator {\n  inline-size: 1px;\n  block-size: 14px;\n  background-color: var(--border, rgba(255, 255, 255, 0.16));\n}\n\n/* Native Floating Voice Dock pill row in Chats History & Customizations */\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"dock\"] {\n  cursor: default !important;\n}\n\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"dock\"] > div:last-child {\n  order: 1 !important;\n  pointer-events: auto !important;\n}\n\n/* Box 3C: Bounded Transcript / Composer Drawer inside Top HUD */\nbody .antigravity-voice-toast-docked [data-testid=\"live-docked-replies\"],\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"drawer\"],\n.agy-voice-hud [data-voice-hud-box=\"drawer\"] {\n  max-height: min(40vh, 260px) !important;\n  overflow-y: auto !important;\n  overscroll-behavior: contain;\n  border-radius: var(--agy-voice-inner-radius, 12px);\n  pointer-events: auto !important;\n}\n\n.agy-voice-hud.is-minimized [data-voice-hud-box=\"drawer\"],\nbody .antigravity-voice-toast-docked.is-minimized [data-testid=\"live-docked-replies\"] {\n  display: none !important;\n}\n\n/* Box 4: Downward Flip for Mic Disconnected, Mic Switched, Error Tips & Quick Composer */\nbody .antigravity-voice-toast-docked [data-testid=\"voice-mic-warning\"],\nbody .antigravity-voice-toast-docked [data-testid=\"voice-mic-switched\"],\nbody .antigravity-voice-toast-docked [data-testid=\"voice-error-tip\"],\nbody .antigravity-voice-toast-docked [data-testid=\"voice-dock-composer\"],\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"alert\"],\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"dock\"] > [role=\"status\"],\n.agy-voice-hud [data-voice-hud-box=\"tray\"] {\n  top: calc(100% + 8px) !important;\n  bottom: auto !important;\n  left: 50% !important;\n  right: auto !important;\n  translate: -50% 0 !important;\n  margin-top: 0 !important;\n  margin-bottom: 0 !important;\n  transform-origin: top center !important;\n  max-width: min(360px, calc(100vw - 32px)) !important;\n  z-index: 9999 !important;\n  pointer-events: auto !important;\n}\n\n/* In-flow <c6> mic warning inside teleprompter slot sits right below surface card */\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] [data-testid=\"voice-mic-warning\"]:not(.absolute),\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] [data-testid=\"voice-mic-switched\"]:not(.absolute),\n.agy-voice-hud [data-voice-hud-box=\"tray\"] > [data-voice-hud-box=\"alert\"] {\n  position: relative !important;\n  top: auto !important;\n  left: auto !important;\n  translate: none !important;\n  order: 2 !important;\n  pointer-events: auto !important;\n}\n\n/* Dictation Speed Panel & Mic Switcher Popover Portals stay above Top HUD (z > 9998) */\nbody [data-popover-popup]:has([data-testid=\"voice-speed-panel\"]),\nbody [class*=\"z-[6000]\"]:has([data-testid=\"voice-speed-panel\"]),\nbody [data-popover-popup]:has([data-testid=\"voice-mic-warning-switch\"]),\nbody [class*=\"z-[6000]\"]:has([data-testid=\"voice-mic-warning-switch\"]) {\n  z-index: 10020 !important;\n  pointer-events: auto !important;\n}\n\n/* Interactive Control Ergonomics, ARIA Pressed State & Accessibility */\n.antigravity-voice-toast-docked button,\nbody .antigravity-voice-toast-docked button,\n.antigravity-voice-toast-docked input,\nbody .antigravity-voice-toast-docked input,\n.antigravity-voice-toast-docked textarea,\nbody .antigravity-voice-toast-docked textarea,\n.agy-voice-hud button,\n.agy-voice-hud input {\n  min-inline-size: 24px;\n  min-block-size: 24px;\n  pointer-events: auto !important;\n}\n\n.agy-voice-hud button[aria-pressed=\"true\"] {\n  background-color: var(--secondary, rgba(255, 255, 255, 0.16));\n  color: var(--foreground, #ffffff);\n  box-shadow: inset 0 0 0 1px var(--border, rgba(255, 255, 255, 0.22));\n}\n\n.antigravity-voice-toast-docked button:focus-visible,\nbody .antigravity-voice-toast-docked button:focus-visible,\n.agy-voice-hud button:focus-visible {\n  outline: 2px solid var(--ring, #3b82f6);\n  outline-offset: 2px;\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .antigravity-voice-toast-docked,\n  body .antigravity-voice-toast-docked,\n  .agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"] {\n    transition: none !important;\n  }\n}\n\n@media (forced-colors: active) {\n  body .antigravity-voice-toast-docked [data-voice-hud-box=\"surface\"],\n  .agy-voice-hud [data-voice-hud-box=\"surface\"] {\n    border: 1px solid CanvasText !important;\n    background-color: Canvas !important;\n    color: CanvasText !important;\n  }\n}\n\n";
   }
 
   get id() {
