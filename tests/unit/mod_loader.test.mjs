@@ -476,3 +476,16 @@ test('ModLoader - preserves badge state during RDP/minimize zero dimensions and 
   assert.equal(agentBadge.classList.contains('auto-state-build'), true);
 });
 
+test('ModLoader - observer checks real slot IDs and ignores self-mutations to avoid 150ms flicker loop', () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({});
+
+  assert.ok(script.includes('.min-w-0:not(.flex) > #antigravity-slot-header-actions'));
+  assert.ok(script.includes('#antigravity-slot-aux-pane-tab'));
+  assert.ok(script.includes('#antigravity-slot-menubar-actions'));
+  assert.ok(!script.includes('#antigravity-slot-sidebar-header'));
+  assert.ok(!script.includes('#antigravity-slot-aux-pane-tabs'));
+  assert.ok(script.includes('isMountingMods'));
+  assert.ok(script.includes("target.closest('.antigravity-slot-container, [id^=\"antigravity-\"]')"));
+});
+

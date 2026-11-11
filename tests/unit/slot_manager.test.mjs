@@ -337,3 +337,35 @@ test('SlotManager - keeps append slots like floating-dock mounted on non-flex bo
   assert.equal(body.children[0].id, 'antigravity-slot-floating-dock');
   assert.ok(body.children[0].querySelector('#antigravity-mod-voice-toast'));
 });
+
+test('SlotManager - preserves mounted modNode innerHTML when HTML signature is unchanged', () => {
+  const root = createMockElement('html');
+  const body = createMockElement('body');
+  root.appendChild(body);
+
+  const doc = createMockDocument(root);
+  const manager = new SlotManager();
+  const code = manager.generateMountCode({
+    slotId: 'floating-dock',
+    modId: 'mods-manager',
+    htmlContent: '<button id="antigravity-mods-manager-trigger">Mods</button>'
+  });
+
+  const runMount = new Function('document', code);
+  runMount(doc);
+
+  const modNode = body.querySelector('#antigravity-mod-mods-manager');
+  assert.ok(modNode);
+  // Simulate existing child + bound listener state
+  const childMarker = createMockElement('button', { id: 'antigravity-mods-manager-trigger' });
+  modNode.children.push(childMarker);
+  let innerHtmlWrites = 0;
+  const origInner = modNode._innerHTML;
+  Object.defineProperty(modNode, 'innerHTML', {
+    get() { return origInner; },
+    set() { innerHtmlWrites++; }
+  });
+
+  runMount(doc);
+  assert.equal(innerHtmlWrites, 0, 'Should not overwrite innerHTML when modNode already has child and matching signature');
+});

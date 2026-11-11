@@ -74,6 +74,22 @@ export class SlotManager {
   }
 
   /**
+   * Computes a lightweight deterministic signature for mod HTML content
+   * so unchanged mounts avoid destructive innerHTML replacements.
+   * @param {string} htmlContent
+   * @returns {string}
+   */
+  static computeHtmlSignature(htmlContent) {
+    const str = String(htmlContent || '');
+    let hash = 2166136261;
+    for (let i = 0; i < str.length; i++) {
+      hash ^= str.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `${str.length}:${(hash >>> 0).toString(36)}`;
+  }
+
+  /**
    * Generates browser-executable JavaScript to mount a mod within a target slot
    * across ALL conversation tabs and split panels matching the selector.
    * @param {Object} params
@@ -86,6 +102,7 @@ export class SlotManager {
     const slot = this.getSlot(slotId);
     const containerId = this.getContainerId(slotId);
     const modWrapperId = `antigravity-mod-${modId}`;
+    const htmlSig = SlotManager.computeHtmlSignature(htmlContent);
 
     return `
       (() => {
@@ -143,9 +160,12 @@ export class SlotManager {
             modNode.style.height = '28px';
             container.appendChild(modNode);
           }
-          modNode.setAttribute('data-version', '2');
-          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
+          if (modNode.getAttribute('data-version') !== '2') {
+            modNode.setAttribute('data-version', '2');
+          }
+          if (!modNode.firstElementChild || ('${modId}' !== 'agent-selector' && '${modId}' !== 'context-tachometer' && modNode.getAttribute('data-html-sig') !== '${htmlSig}')) {
             modNode.innerHTML = ${JSON.stringify(htmlContent)};
+            modNode.setAttribute('data-html-sig', '${htmlSig}');
           }
         });
 
@@ -230,9 +250,12 @@ export class SlotManager {
             modNode.style.height = '28px';
             container.appendChild(modNode);
           }
-          modNode.setAttribute('data-version', '2');
-          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
+          if (modNode.getAttribute('data-version') !== '2') {
+            modNode.setAttribute('data-version', '2');
+          }
+          if (!modNode.firstElementChild || ('${modId}' !== 'agent-selector' && '${modId}' !== 'context-tachometer' && modNode.getAttribute('data-html-sig') !== '${htmlSig}')) {
             modNode.innerHTML = ${JSON.stringify(htmlContent)};
+            modNode.setAttribute('data-html-sig', '${htmlSig}');
           }
         }
       })();

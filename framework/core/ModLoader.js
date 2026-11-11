@@ -1923,9 +1923,9 @@ export class ModLoader {
             if (prevAgent) slot.__lastAgentCompact = prevAgent.classList.contains('compact');
           });
 
-          // Permanently remove legacy duplicate unmanaged badges & misplaced slot containers
+          // Permanently remove legacy duplicate unmanaged badges & misplaced non-flex slot containers
           document.querySelectorAll('.antigravity-context-badge').forEach(el => el.remove());
-          document.querySelectorAll('.min-w-0 > #antigravity-slot-header-actions, .no-focus-agent-input > #antigravity-slot-header-actions').forEach(el => el.remove());
+          document.querySelectorAll('.min-w-0:not(.flex) > #antigravity-slot-header-actions, .no-focus-agent-input > #antigravity-slot-header-actions').forEach(el => el.remove());
 
           ${mountSnippets.join('\n')}
 
@@ -1938,7 +1938,7 @@ export class ModLoader {
             document.body.appendChild(agentPortal);
           }
           const agentTemplate = document.querySelector('.antigravity-agent-dropdown-template');
-          if (agentTemplate && !agentPortal.classList.contains('open')) {
+          if (agentTemplate && !agentPortal.classList.contains('open') && (!agentPortal.firstElementChild || agentPortal.getAttribute('data-v') !== '2')) {
             agentPortal.innerHTML = agentTemplate.innerHTML;
             agentPortal.setAttribute('data-v', '2');
           }
@@ -2135,45 +2135,59 @@ export class ModLoader {
         }
 
         let mountDebounce = null;
-        window.__antigravityModObserver = new MutationObserver(() => {
+        let isMountingMods = false;
+        window.__antigravityModObserver = new MutationObserver((mutations) => {
+          if (isMountingMods) return;
+          const hasExternalMutation = !Array.isArray(mutations) || mutations.some((m) => {
+            const target = m && m.target;
+            if (!target || typeof target.closest !== 'function') return false;
+            return !target.closest('.antigravity-slot-container, [id^="antigravity-"]');
+          });
+          if (!hasExternalMutation) return;
           if (mountDebounce) return;
           mountDebounce = setTimeout(() => {
             mountDebounce = null;
-            if (typeof window.__dockNativeVoiceToast === 'function') {
-              window.__dockNativeVoiceToast(document);
-            }
-            if (typeof window.__scanVoiceTranscriptsForAgent === 'function') {
-              window.__scanVoiceTranscriptsForAgent();
-            }
-            const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
-            let missingSlot = false;
-            for (const btn of triggers) {
-              const parent = btn.parentElement;
-              if (!parent) continue;
-              const row = parent.closest('.flex.items-center') || parent;
-              if (!row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')) {
-                missingSlot = true;
-                break;
+            if (isMountingMods) return;
+            isMountingMods = true;
+            try {
+              if (typeof window.__dockNativeVoiceToast === 'function') {
+                window.__dockNativeVoiceToast(document);
               }
-            }
+              if (typeof window.__scanVoiceTranscriptsForAgent === 'function') {
+                window.__scanVoiceTranscriptsForAgent();
+              }
+              const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
+              let missingSlot = false;
+              for (const btn of triggers) {
+                const parent = btn.parentElement;
+                if (!parent) continue;
+                const row = parent.closest('.flex.items-center') || parent;
+                if (!row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')) {
+                  missingSlot = true;
+                  break;
+                }
+              }
 
-            if (!missingSlot) {
-              const auxBtn = document.querySelector('button[data-testid="aux-pane-new-tab-button"]') || document.querySelector('.aux-pane-new-tab-button');
-              if (auxBtn && !document.querySelector('.antigravity-slot-aux-pane-tabs, #antigravity-slot-aux-pane-tabs')) {
-                missingSlot = true;
+              if (!missingSlot) {
+                const auxBtn = document.querySelector('button[data-testid="aux-pane-new-tab-button"], button[data-testid="side-panel-new-tab-button"], [data-active-tab-id], [data-side-panel-strip="true"]');
+                if (auxBtn && !document.querySelector('.antigravity-slot-aux-pane-tab, #antigravity-slot-aux-pane-tab')) {
+                  missingSlot = true;
+                }
               }
-            }
-            if (!missingSlot) {
-              const sidebarSlot = document.querySelector('.shrink-0 > .bg-sidebar');
-              if (sidebarSlot && !document.querySelector('.antigravity-slot-sidebar-header, #antigravity-slot-sidebar-header')) {
-                missingSlot = true;
+              if (!missingSlot) {
+                const sidebarSlot = document.querySelector('.shrink-0 > .bg-sidebar');
+                if (sidebarSlot && !document.querySelector('.antigravity-slot-menubar-actions, #antigravity-slot-menubar-actions')) {
+                  missingSlot = true;
+                }
               }
-            }
 
-            if (missingSlot) {
-              mountAllMods();
-            } else if (typeof window.__syncAgentBadges === 'function') {
-              window.__syncAgentBadges();
+              if (missingSlot) {
+                mountAllMods();
+              } else if (typeof window.__syncAgentBadges === 'function') {
+                window.__syncAgentBadges();
+              }
+            } finally {
+              isMountingMods = false;
             }
           }, 150);
         });
