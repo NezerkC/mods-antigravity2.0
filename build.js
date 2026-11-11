@@ -77,6 +77,7 @@ async function build() {
   const textSanitizer = cleanModuleCode('mods/voice-assistant/services/TextSanitizer.js');
   const actionNarratorService = cleanModuleCode('mods/voice-assistant/services/ActionNarratorService.js');
   const xttsLocalAdapter = cleanModuleCode('mods/voice-assistant/services/XttsLocalAdapter.js');
+  const voicePromptConditioner = cleanModuleCode('mods/voice-assistant/services/VoicePromptConditioner.js');
   const voiceAssistantCss = fs.readFileSync(path.resolve('mods/voice-assistant/styles.css'), 'utf-8');
 
   const voiceAssistantIndex = cleanModuleCode('mods/voice-assistant/index.js')
@@ -157,6 +158,8 @@ ${textSanitizer}
 ${actionNarratorService}
 
 ${xttsLocalAdapter}
+
+${voicePromptConditioner}
 
 ${voiceButtonHtml}
 
