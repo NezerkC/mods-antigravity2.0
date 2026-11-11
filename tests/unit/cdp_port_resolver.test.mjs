@@ -75,8 +75,12 @@ test('CdpPortResolver - probePort validates live CDP HTTP /json/version endpoint
     const isLive = await resolver.probePort(serverPort);
     assert.equal(isLive, true);
 
-    // Test resolvePort with candidate ports prioritizing mock server
-    const probeResolver = new CdpPortResolver({ defaultPort: serverPort, probeTimeoutMs: 100 });
+    // Test resolvePort with defaultPort prioritizing mock server (isolated from host DevToolsActivePort)
+    const probeResolver = new CdpPortResolver({
+      defaultPort: serverPort,
+      devToolsActivePortPath: path.join(os.tmpdir(), `nonexistent-devtools-port-${process.pid}`),
+      probeTimeoutMs: 100
+    });
     const resolved = await probeResolver.resolvePort();
     assert.equal(resolved, serverPort);
   } finally {
@@ -97,5 +101,84 @@ test('CdpPortResolver - respects ANTIGRAVITY_CDP_PORT environment variable', asy
     } else {
       delete process.env.ANTIGRAVITY_CDP_PORT;
     }
+  }
+});
+
+test('CdpPortResolver - resolvePortFromDevToolsActivePort parses line 1 and rejects invalid/missing files', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cdp-active-port-'));
+  try {
+    const logsDir = path.join(tempRoot, 'logs');
+    fs.mkdirSync(logsDir);
+    const activePortFile = path.join(tempRoot, 'DevToolsActivePort');
+
+    const resolver = new CdpPortResolver({ logDir: logsDir });
+    assert.equal(resolver.resolvePortFromDevToolsActivePort(), null);
+
+    fs.writeFileSync(activePortFile, '61514\r\n/devtools/browser/abc-123\r\n', 'utf-8');
+    assert.equal(resolver.resolvePortFromDevToolsActivePort(), 61514);
+
+    fs.writeFileSync(activePortFile, '\uFEFF  9222  \n/devtools/browser/xyz', 'utf-8');
+    assert.equal(resolver.resolvePortFromDevToolsActivePort(), 9222);
+
+    for (const invalid of ['', '   \n/devtools/browser/id', '0\n', '65536\n', '-5\n', '61514abc\n', 'not-a-port\n']) {
+      fs.writeFileSync(activePortFile, invalid, 'utf-8');
+      assert.equal(resolver.resolvePortFromDevToolsActivePort(), null);
+    }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('CdpPortResolver - resolvePort prioritizes verified DevToolsActivePort over default/candidate ports and falls back when stale', async () => {
+  const createMockCdpServer = () => http.createServer((req, res) => {
+    if (req.url === '/json/version') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ webSocketDebuggerUrl: 'ws://127.0.0.1:1/devtools/browser/mock' }));
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+
+  const activeServer = createMockCdpServer();
+  const defaultServer = createMockCdpServer();
+  await new Promise(resolve => activeServer.listen(0, '127.0.0.1', resolve));
+  await new Promise(resolve => defaultServer.listen(0, '127.0.0.1', resolve));
+
+  const activePort = activeServer.address().port;
+  const defaultPort = defaultServer.address().port;
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cdp-priority-'));
+  const activePortFile = path.join(tempRoot, 'DevToolsActivePort');
+  const prevEnv = process.env.ANTIGRAVITY_CDP_PORT;
+  delete process.env.ANTIGRAVITY_CDP_PORT;
+
+  try {
+    fs.writeFileSync(activePortFile, `${activePort}\n/devtools/browser/live\n`, 'utf-8');
+
+    const resolver = new CdpPortResolver({
+      devToolsActivePortPath: activePortFile,
+      defaultPort,
+      candidatePorts: [defaultPort],
+      probeTimeoutMs: 150
+    });
+    assert.equal(await resolver.resolvePort(), activePort);
+
+    // Env override still takes precedence over DevToolsActivePort
+    process.env.ANTIGRAVITY_CDP_PORT = '62345';
+    assert.equal(await resolver.resolvePort(), 62345);
+    delete process.env.ANTIGRAVITY_CDP_PORT;
+
+    // Stale (unresponsive) DevToolsActivePort falls back to live defaultPort
+    fs.writeFileSync(activePortFile, '59997\n/devtools/browser/stale\n', 'utf-8');
+    assert.equal(await resolver.resolvePort(), defaultPort);
+  } finally {
+    if (prevEnv !== undefined) {
+      process.env.ANTIGRAVITY_CDP_PORT = prevEnv;
+    } else {
+      delete process.env.ANTIGRAVITY_CDP_PORT;
+    }
+    activeServer.close();
+    defaultServer.close();
+    fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
