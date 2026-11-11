@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 /**
  * Scopes and isolates raw CSS rules to prevent injected mod styles
  * from conflicting with Antigravity host UI.

@@ -476,3 +476,12 @@ test('ModLoader - preserves badge state during RDP/minimize zero dimensions and 
   assert.equal(agentBadge.classList.contains('auto-state-build'), true);
 });
 
+test('ModLoader - generates chatbox compact handler supporting explicit normal setting and hysteresis in ResizeObserver', () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({});
+
+  assert.ok(script.includes('window.__applyChatboxModsCompact'));
+  assert.ok(script.includes("compactSetting === 'false' ? false : isNarrow"));
+  assert.ok(script.includes('threshold = isCurrentlyCompact ? 430 : 380'));
+  assert.ok(script.includes('window.__renderReticleSvg(isFocus, 14)'));
+});

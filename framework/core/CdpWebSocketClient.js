@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 /**
  * Client for interacting with the Electron Chrome DevTools Protocol (CDP) WebSocket bridge.
  */

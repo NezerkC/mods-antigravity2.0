@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 export { AntigravityMod } from './sdk/AntigravityMod.js';
 export { StyleIsolator } from './sdk/StyleIsolator.js';
 export { SlotManager } from './core/SlotManager.js';

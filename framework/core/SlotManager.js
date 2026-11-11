@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 /**
  * Manages target UI slots in the Antigravity 2.0 DOM and generates
  * collision-free injection payloads for registered mods across all active chat panels.
