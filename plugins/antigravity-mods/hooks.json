@@ -17,7 +17,7 @@
     "Stop": [
       {
         "type": "command",
-        "command": "node ./scripts/context-hook.mjs --post",
+        "command": "node ./scripts/context-hook.mjs --stop",
         "timeout": 10
       }
     ]
