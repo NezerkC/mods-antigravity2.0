@@ -655,14 +655,48 @@ export class ModLoader {
           const doc = rootDoc || (typeof document !== 'undefined' ? document : null);
           if (!doc) return null;
 
+          const EXCLUDED_IDS = [
+            'antigravity-git-panel-host',
+            'antigravity-agent-dropdown-portal',
+            'antigravity-tachometer-popover-portal',
+            'antigravity-mods-manager-portal'
+          ];
+
           const isExcludedContainer = (el) => {
             if (!el) return true;
-            if (el.id === 'antigravity-git-panel-host' || (el.closest && el.closest('#antigravity-git-panel-host'))) return true;
-            if (el.id === 'antigravity-agent-dropdown-portal' || (el.closest && el.closest('#antigravity-agent-dropdown-portal'))) return true;
-            if (el.id === 'antigravity-tachometer-popover-portal' || (el.closest && el.closest('#antigravity-tachometer-popover-portal'))) return true;
-            if (el.id === 'antigravity-mods-manager-portal' || (el.closest && el.closest('#antigravity-mods-manager-portal'))) return true;
+            for (const exId of EXCLUDED_IDS) {
+              if (el.id === exId) return true;
+              if (el.closest && el.closest('#' + exId)) return true;
+            }
             if (el.matches && el.matches('[role="dialog"]:not([data-testid*="voice"]):not([class*="voice"])')) return true;
             return false;
+          };
+
+          const getAttr = (el, name) => (el && typeof el.getAttribute === 'function' ? (el.getAttribute(name) || '') : '');
+          const setAttrIfMissing = (el, name, value) => {
+            if (el && typeof el.setAttribute === 'function' && !getAttr(el, name)) {
+              el.setAttribute(name, value);
+            }
+          };
+
+          const hasAudioControls = (el) => {
+            if (!el || typeof el.querySelector !== 'function') return false;
+            return Boolean(el.querySelector(
+              'button[aria-label*="mic" i], button[aria-label*="mute" i], button[aria-label*="audio" i], ' +
+              'button[aria-label*="speaker" i], button[aria-label*="speed" i], [data-testid*="mic"], ' +
+              '[data-testid*="mute"], [data-testid*="audio"], [data-testid="voice-call-speed"], ' +
+              '[data-testid="voice-speed-button"], [data-voice-control], button[title*="Mute" i], button[title*="Audio" i]'
+            ));
+          };
+
+          const resolveVoiceVariant = (el) => {
+            const tid = getAttr(el, 'data-testid').toLowerCase();
+            if (tid === 'voice-teleprompter-slot' || (el.querySelector && el.querySelector('[data-testid="live-docked"]'))) {
+              return 'teleprompter';
+            }
+            if (tid === 'voice-dock') return 'dock';
+            if (tid === 'voice-pill') return 'pill';
+            return 'generic';
           };
 
           const candidateButtons = Array.from(doc.querySelectorAll('button'));
@@ -672,12 +706,15 @@ export class ModLoader {
             if (isExcludedContainer(btn)) continue;
 
             const text = (btn.textContent || '').trim().toLowerCase();
-            const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-            const testid = (btn.getAttribute('data-testid') || '').toLowerCase();
+            const label = getAttr(btn, 'aria-label').toLowerCase();
+            const testid = getAttr(btn, 'data-testid').toLowerCase();
 
-            const isEndBtn = text === 'end' || text === 'end call' || text === 'terminar' || text === 'finalizar' ||
-              label.includes('end call') || label === 'end' || label.includes('terminar llamada') || label.includes('finalizar llamada') ||
-              testid.includes('voice-end') || testid.includes('call-end');
+            const isEndBtn =
+              text === 'end' || text === 'end call' || text === 'terminar' || text === 'finalizar' ||
+              label.includes('end call') || label === 'end' || label.includes('end voice') || label.includes('end live') ||
+              label.includes('terminar llamada') || label.includes('finalizar llamada') ||
+              testid.includes('voice-end') || testid.includes('call-end') ||
+              testid === 'voice-dock-end' || testid === 'voice-call-end' || testid === 'voice-end-button';
 
             if (!isEndBtn) continue;
 
@@ -687,19 +724,26 @@ export class ModLoader {
             while (curr && curr !== doc.body && curr !== doc.documentElement) {
               if (isExcludedContainer(curr)) break;
 
-              if (curr.querySelector && curr.querySelector('textarea, [contenteditable="true"], .antigravity-slot-chat-input-actions')) {
+              const currTestId = getAttr(curr, 'data-testid').toLowerCase();
+              const isNativeVoiceShell =
+                currTestId === 'voice-teleprompter-slot' ||
+                currTestId === 'voice-dock' ||
+                currTestId === 'live-docked' ||
+                currTestId === 'voice-pill';
+
+              if (!isNativeVoiceShell && curr.querySelector && curr.querySelector('textarea, [contenteditable="true"], .antigravity-slot-chat-input-actions')) {
                 break;
               }
 
-              const hasAudioControls = curr.querySelector && curr.querySelector(
-                'button[aria-label*="mic" i], button[aria-label*="mute" i], button[aria-label*="audio" i], ' +
-                'button[aria-label*="speaker" i], [data-testid*="mic"], [data-testid*="mute"], [data-testid*="audio"], ' +
-                '[data-voice-control], button[title*="Mute" i], button[title*="Audio" i]'
-              );
-
-              if (hasAudioControls) {
+              if (hasAudioControls(curr)) {
                 bestMatch = curr;
               }
+
+              // Stop climbing once we capture the complete outer Voice HUD wrapper (which keeps mic warnings & drawers grouped).
+              if (currTestId === 'voice-teleprompter-slot' || currTestId === 'voice-dock') {
+                break;
+              }
+
               curr = curr.parentElement;
             }
 
@@ -710,7 +754,10 @@ export class ModLoader {
           }
 
           if (!targetBar) {
-            const directBar = doc.querySelector && doc.querySelector('.antigravity-voice-toast, [data-testid*="voice-call-bar"], [data-testid*="voice-toast"], [data-voice-call-bar]');
+            const directBar = doc.querySelector && doc.querySelector(
+              '[data-testid="voice-teleprompter-slot"], [data-testid="voice-dock"], ' +
+              '.antigravity-voice-toast, [data-testid*="voice-call-bar"], [data-testid*="voice-toast"], [data-voice-call-bar]'
+            );
             if (directBar && !isExcludedContainer(directBar)) {
               targetBar = directBar;
             }
@@ -721,6 +768,52 @@ export class ModLoader {
           if (!targetBar.classList.contains('antigravity-voice-toast-docked')) {
             targetBar.classList.add('antigravity-voice-toast-docked');
             targetBar.setAttribute('data-antigravity-voice-docked', 'true');
+          }
+
+          // Annotate semantic HTML5 boxes-inside-boxes attributes cleanly without detaching React nodes.
+          const variant = resolveVoiceVariant(targetBar);
+          targetBar.setAttribute('data-voice-hud-box', 'viewport-anchor');
+          targetBar.setAttribute('data-voice-hud-variant', variant);
+          setAttrIfMissing(targetBar, 'role', 'region');
+          setAttrIfMissing(targetBar, 'aria-label', 'Voice mode HUD');
+
+          if (targetBar.querySelector) {
+            const surfaceEl = targetBar.querySelector('[data-testid="live-docked"]');
+            if (surfaceEl && surfaceEl !== targetBar) {
+              surfaceEl.setAttribute('data-voice-hud-box', 'surface');
+            }
+            const controlsEl = targetBar.querySelector('[data-testid="voice-call-controls"]');
+            if (controlsEl) {
+              controlsEl.setAttribute('data-voice-hud-box', 'header');
+            }
+            const drawerEl = targetBar.querySelector('[data-testid="live-docked-replies"], [data-testid="voice-dock-composer"]');
+            if (drawerEl) {
+              drawerEl.setAttribute('data-voice-hud-box', 'drawer');
+              drawerEl.setAttribute('data-voice-hud-placement', 'below');
+            }
+          }
+
+          if (targetBar.querySelectorAll) {
+            const alertEls = targetBar.querySelectorAll('[data-testid="voice-mic-warning"], [data-testid="voice-mic-switched"], [data-testid="voice-error-tip"]');
+            for (const alertEl of alertEls) {
+              if (alertEl && alertEl.setAttribute) {
+                alertEl.setAttribute('data-voice-hud-box', 'alert');
+                alertEl.setAttribute('data-voice-hud-placement', 'below');
+              }
+            }
+          }
+
+          // Compute live Top HUD vertical clearance below the 35px menubar if present.
+          const menuBar = doc.querySelector && doc.querySelector('[data-testid="title-menu-bar"]');
+          let hudTopPx = 4;
+          if (menuBar && typeof menuBar.getBoundingClientRect === 'function') {
+            const mbRect = menuBar.getBoundingClientRect();
+            if (mbRect && mbRect.height > 0 && mbRect.bottom > 0 && mbRect.bottom < 80) {
+              hudTopPx = Math.round(mbRect.bottom + 4);
+            }
+          }
+          if (targetBar.style && typeof targetBar.style.setProperty === 'function') {
+            targetBar.style.setProperty('--agy-voice-hud-top', hudTopPx + 'px');
           }
 
           const collapseBtn = targetBar.querySelector && targetBar.querySelector(
@@ -758,6 +851,36 @@ export class ModLoader {
                 }
               }, 40);
             });
+          }
+
+          // Keep portaled speed slider & mic switcher popovers onscreen below Top HUD if BaseUI opens them upward.
+          if (targetBar.querySelectorAll && typeof targetBar.getBoundingClientRect === 'function') {
+            const popoverTriggers = targetBar.querySelectorAll(
+              '[data-testid="voice-call-speed"], [data-testid="voice-speed-button"], [data-testid="voice-mic-warning-switch"]'
+            );
+            for (const triggerEl of popoverTriggers) {
+              if (!triggerEl || triggerEl.__agyHudPopoverBound || typeof triggerEl.addEventListener !== 'function') continue;
+              triggerEl.__agyHudPopoverBound = true;
+              triggerEl.addEventListener('click', () => {
+                setTimeout(() => {
+                  const popEl = doc.querySelector && (
+                    doc.querySelector('[data-testid="voice-speed-panel"]') ||
+                    doc.querySelector('[data-popover-popup]')
+                  );
+                  const popupBox = popEl && popEl.closest ? (popEl.closest('[data-popover-popup]') || popEl) : popEl;
+                  const positioner = popupBox && popupBox.parentElement ? popupBox.parentElement : popupBox;
+                  if (positioner && typeof positioner.getBoundingClientRect === 'function' && positioner.style) {
+                    const barRect = targetBar.getBoundingClientRect();
+                    const posRect = positioner.getBoundingClientRect();
+                    if (posRect && barRect && posRect.top < Math.max(4, barRect.bottom + 4)) {
+                      positioner.style.top = Math.round(barRect.bottom + 8) + 'px';
+                      positioner.style.bottom = 'auto';
+                      positioner.style.zIndex = '10020';
+                    }
+                  }
+                }, 24);
+              });
+            }
           }
 
           return targetBar;
