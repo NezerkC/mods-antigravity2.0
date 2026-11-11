@@ -89,22 +89,47 @@ export class SlotManager {
 
     return `
       (() => {
-        let anchors = Array.from(document.querySelectorAll('${slot.selector}'));
-        if (!anchors.length && '${slotId}' === 'aux-pane-tab') {
-          const auxBar = document.querySelector('[data-active-tab-id]') ||
-                         document.querySelector('.shrink-0.flex.items-center.gap-0\\\\.5.border-b') ||
-                         document.querySelector('div[class*="shrink-0"][class*="border-b"]');
-          if (auxBar) {
-            anchors = [auxBar.querySelector('.overflow-x-auto') || auxBar];
+        let anchorEntries = Array.from(document.querySelectorAll('${slot.selector}'))
+          .map(anchor => ({ anchor, strategy: '${slot.strategy}' }));
+
+        if (!anchorEntries.length && '${slotId}' === 'aux-pane-tab') {
+          const sidePanelNewTabBtns = Array.from(document.querySelectorAll('button[data-testid="side-panel-new-tab-button"]'));
+          if (sidePanelNewTabBtns.length) {
+            anchorEntries = sidePanelNewTabBtns.map(anchor => ({ anchor, strategy: 'before' }));
+          } else {
+            let auxBars = Array.from(document.querySelectorAll('[data-active-tab-id], [data-side-panel-strip="true"]'));
+            if (!auxBars.length) {
+              auxBars = Array.from(document.querySelectorAll('.shrink-0.flex.items-center.gap-0\\\\.5.border-b'));
+            }
+            if (!auxBars.length) {
+              auxBars = Array.from(document.querySelectorAll('div[class*="shrink-0"][class*="border-b"]'));
+            }
+            for (const auxBar of auxBars) {
+              const newTabBtn = auxBar.querySelector('button[data-testid="side-panel-new-tab-button"], button[data-testid="aux-pane-new-tab-button"]');
+              if (newTabBtn) {
+                anchorEntries.push({ anchor: newTabBtn, strategy: 'before' });
+              } else {
+                const tabScrollStrip = auxBar.querySelector('.overflow-x-auto');
+                if (tabScrollStrip) {
+                  anchorEntries.push({ anchor: tabScrollStrip, strategy: 'after' });
+                } else {
+                  anchorEntries.push({ anchor: auxBar, strategy: 'append' });
+                }
+              }
+            }
           }
         }
 
         // Clean up any misplaced legacy slot containers that were injected directly inside non-flex wrappers
-        document.querySelectorAll('#${containerId}').forEach(el => {
-          if (el.parentElement && !el.parentElement.className.includes('flex')) {
-            el.remove();
-          }
-        });
+        if ('${slot.strategy}' === 'before' || '${slot.strategy}' === 'after') {
+          document.querySelectorAll('#${containerId}').forEach(el => {
+            const parent = el.parentElement;
+            const parentCls = parent && typeof parent.className === 'string' ? parent.className : '';
+            if (parent && !parentCls.includes('flex') && !parent.hasAttribute('data-active-tab-id') && !parent.hasAttribute('data-side-panel-strip')) {
+              el.remove();
+            }
+          });
+        }
 
         // If containers already exist in the DOM, ensure mod nodes are refreshed immediately
         document.querySelectorAll('#${containerId}').forEach(container => {
@@ -124,13 +149,13 @@ export class SlotManager {
           }
         });
 
-        if (!anchors.length) return;
+        if (!anchorEntries.length) return;
 
-        for (const anchor of anchors) {
+        for (const { anchor, strategy } of anchorEntries) {
           let parent;
           let targetItem = anchor;
 
-          if ('${slot.strategy}' === 'append' || '${slot.strategy}' === 'prepend') {
+          if (strategy === 'append' || strategy === 'prepend') {
             parent = anchor;
           } else {
             parent = anchor.parentElement;
@@ -165,28 +190,32 @@ export class SlotManager {
             container.style.height = '100%';
             container.style.setProperty('app-region', 'no-drag');
 
-            if ('${slot.strategy}' === 'after') {
+            if (strategy === 'after') {
               if (targetItem.nextSibling) {
                 parent.insertBefore(container, targetItem.nextSibling);
               } else {
                 parent.appendChild(container);
               }
-            } else if ('${slot.strategy}' === 'before') {
+            } else if (strategy === 'before') {
               parent.insertBefore(container, targetItem);
-            } else if ('${slot.strategy}' === 'prepend') {
+            } else if (strategy === 'prepend') {
               parent.prepend(container);
             } else {
               parent.appendChild(container);
             }
           } else {
-            // Ensure slot container remains directly in parent flex row, right after targetItem
-            if ('${slot.strategy}' === 'after' && (container.parentElement !== parent || container.previousElementSibling !== targetItem)) {
+            // Ensure slot container remains in the expected position relative to targetItem
+            if (strategy === 'after' && (container.parentElement !== parent || container.previousElementSibling !== targetItem)) {
               if (targetItem.nextSibling) {
                 parent.insertBefore(container, targetItem.nextSibling);
               } else {
                 parent.appendChild(container);
               }
-            } else if (('${slot.strategy}' === 'append' || '${slot.strategy}' === 'prepend') && container.parentElement !== parent) {
+            } else if (strategy === 'before' && (container.parentElement !== parent || container.nextElementSibling !== targetItem)) {
+              parent.insertBefore(container, targetItem);
+            } else if (strategy === 'prepend' && (container.parentElement !== parent || parent.firstElementChild !== container)) {
+              parent.prepend(container);
+            } else if (strategy === 'append' && container.parentElement !== parent) {
               parent.appendChild(container);
             }
           }
