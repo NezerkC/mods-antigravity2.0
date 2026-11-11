@@ -78,19 +78,45 @@ async function handleCli() {
       return;
     }
 
+    if (!isDaemonRunning) {
+      windowsService.clearPid();
+    }
+    if (!isTrayRunning) {
+      windowsService.clearTrayPid();
+    } else if (!isDaemonRunning) {
+      windowsService.stopRunningTray();
+    }
+
     // Ensure VBS launcher and tray runner are installed
     windowsService.install(__filename);
 
     console.log('🚀 Spawning Antigravity Mod Daemon with System Tray in background...');
-    const trayPath = windowsService.getTrayPath();
-    const launchCmd = `Start-Process powershell.exe -ArgumentList '-WindowStyle Hidden -ExecutionPolicy Bypass -NoProfile -File "${trayPath}"'`;
-    spawn('powershell.exe', ['-NoProfile', '-Command', launchCmd], { stdio: 'ignore' });
+    const launcherPath = windowsService.getLauncherPath();
+    const child = spawn('wscript.exe', [launcherPath], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    child.on('error', err => {
+      console.error(`[ModDaemon] Failed to launch background daemon: ${err.message}`);
+    });
+    child.unref();
 
-    // Give it a brief moment to initialize and save PIDs
-    await new Promise(r => setTimeout(r, 1200));
+    // Poll briefly until both PIDs are initialized and running (or timeout)
+    const deadline = Date.now() + 6000;
+    let newPid = null;
+    let newTrayPid = null;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 250));
+      const candidatePid = windowsService.readPid();
+      const candidateTrayPid = windowsService.readTrayPid();
+      newPid = windowsService.isProcessRunning(candidatePid) ? candidatePid : null;
+      newTrayPid = windowsService.isProcessRunning(candidateTrayPid) ? candidateTrayPid : null;
+      if (newPid && newTrayPid) {
+        break;
+      }
+    }
 
-    const newPid = windowsService.readPid();
-    const newTrayPid = windowsService.readTrayPid();
     console.log(`✅ Daemon started with System Tray (Daemon PID: ${newPid || 'initializing'}, Tray PID: ${newTrayPid || 'active'}).`);
     return;
   }
