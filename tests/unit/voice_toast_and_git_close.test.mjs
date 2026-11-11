@@ -322,3 +322,276 @@ test('ModLoader - window.__dockNativeVoiceToast excludes git panel and non-voice
   const result = mockWin.__dockNativeVoiceToast(mockDoc);
   assert.equal(result, null, 'Must ignore End button inside #antigravity-git-panel-host');
 });
+
+test('VoiceHudBoxHtml - renders semantic HTML5 boxes-inside-boxes with XSS escaping', () => {
+  const html = renderVoiceHudBoxHtml({
+    label: 'Voice <script>xss</script>',
+    statusText: 'Mic "Warn"',
+    timerText: '01:24',
+    micMuted: true,
+    agentMuted: false,
+    speed: 1.5,
+    collapsed: false,
+    micWarning: 'No mic <img onerror=1> detected'
+  });
+
+  for (const role of Object.values(VOICE_HUD_BOX_ROLES)) {
+    assert.ok(html.includes(`data-voice-hud-box="${role}"`), `HTML must include ${role} box`);
+  }
+
+  assert.ok(html.includes('<aside'), 'Must wrap outer anchor in <aside>');
+  assert.ok(html.includes('<section'), 'Must use <section> for nested frames/drawer');
+  assert.ok(html.includes('<article'), 'Must use <article> for elevated HUD card');
+  assert.ok(html.includes('<header'), 'Must use <header> for primary control row');
+  assert.ok(html.includes('role="toolbar"'), 'Must configure role="toolbar" on control group');
+  assert.ok(html.includes('focusgroup="toolbar wrap"'), 'Must configure focusgroup="toolbar wrap" on toolbar');
+  assert.ok(html.includes('data-testid="voice-speed-slider"'), 'Must preserve dictation speed range slider');
+  assert.ok(html.includes('data-testid="voice-mic-warning"'), 'Must include mic warning box in tray');
+
+  // Toggle buttons keep aria-pressed, one-shot End action never gets aria-pressed
+  assert.ok(html.includes('data-testid="voice-mute-button"'), 'Must include mic toggle');
+  assert.ok(!/<button[^>]*data-testid="voice-call-end"[^>]*aria-pressed=/.test(html),
+    'One-shot End button must not declare aria-pressed');
+
+  // Strict XSS escaping
+  assert.ok(!html.includes('<script>xss</script>'));
+  assert.ok(!html.includes('<img onerror=1>'));
+  assert.ok(html.includes('&lt;script&gt;xss&lt;/script&gt;'));
+  assert.ok(html.includes('&lt;img onerror=1&gt;'));
+});
+
+function createAttrDomDocument() {
+  function makeNode(tagName, attrs = {}) {
+    const classes = new Set((attrs.className || '').split(/\s+/).filter(Boolean));
+    const attrMap = new Map(Object.entries(attrs).filter(([k]) => !['className', 'textContent', 'rect'].includes(k)));
+    const listeners = new Map();
+    const styleProps = new Map();
+    let _text = attrs.textContent || '';
+    let _rect = attrs.rect || { top: 0, bottom: 40, left: 0, right: 320, width: 320, height: 40 };
+
+    const styleObj = {
+      setProperty(k, v) { styleProps.set(k, String(v)); },
+      getPropertyValue(k) { return styleProps.get(k) || ''; }
+    };
+
+    const node = {
+      tagName: tagName.toUpperCase(),
+      get id() { return attrMap.get('id') || ''; },
+      set id(v) { attrMap.set('id', String(v)); },
+      parentElement: null,
+      children: [],
+      style: styleObj,
+      classList: {
+        add: (...items) => items.forEach((i) => classes.add(i)),
+        remove: (...items) => items.forEach((i) => classes.delete(i)),
+        contains: (item) => classes.has(item)
+      },
+      get textContent() { return _text; },
+      set textContent(v) { _text = String(v); },
+      setRect(r) { _rect = r; },
+      getBoundingClientRect() { return _rect; },
+      getAttribute(k) { return attrMap.has(k) ? String(attrMap.get(k)) : null; },
+      setAttribute(k, v) { attrMap.set(k, String(v)); },
+      removeAttribute(k) { attrMap.delete(k); },
+      appendChild(child) {
+        child.parentElement = node;
+        node.children.push(child);
+        return child;
+      },
+      addEventListener(type, fn) {
+        if (!listeners.has(type)) listeners.set(type, []);
+        listeners.get(type).push(fn);
+      },
+      dispatchEvent(ev) {
+        for (const fn of (listeners.get(ev.type) || [])) fn(ev);
+      },
+      matches(singleSel) {
+        const s = singleSel.trim();
+        if (!s) return false;
+        if (s === 'button') return node.tagName === 'BUTTON';
+        if (s === 'textarea') return node.tagName === 'TEXTAREA';
+        if (s.startsWith('#')) return node.id === s.slice(1);
+        if (s.startsWith('.')) return classes.has(s.slice(1));
+        const exactAttr = s.match(/^\[([a-zA-Z0-9_-]+)="([^"]*)"\]$/);
+        if (exactAttr) return (node.getAttribute(exactAttr[1]) || '') === exactAttr[2];
+        const incAttr = s.match(/^\[([a-zA-Z0-9_-]+)\*="([^"]*)"(?:\s+i)?\]$/);
+        if (incAttr) return (node.getAttribute(incAttr[1]) || '').toLowerCase().includes(incAttr[2].toLowerCase());
+        const btnAttr = s.match(/^button\[([a-zA-Z0-9_-]+)\*="([^"]*)"(?:\s+i)?\]$/i);
+        if (btnAttr) return node.tagName === 'BUTTON' && (node.getAttribute(btnAttr[1]) || '').toLowerCase().includes(btnAttr[2].toLowerCase());
+        if (s === '[data-popover-popup]') return node.getAttribute('data-popover-popup') !== null;
+        return false;
+      },
+      closest(sel) {
+        let curr = node;
+        const parts = sel.split(',').map((x) => x.trim());
+        while (curr) {
+          if (parts.some((p) => curr.matches(p))) return curr;
+          curr = curr.parentElement;
+        }
+        return null;
+      },
+      querySelectorAll(sel) {
+        const parts = sel.split(',').map((x) => x.trim());
+        const out = [];
+        function walk(cur) {
+          for (const ch of cur.children) {
+            if (parts.some((p) => ch.matches(p))) out.push(ch);
+            walk(ch);
+          }
+        }
+        walk(node);
+        return out;
+      },
+      querySelector(sel) {
+        return node.querySelectorAll(sel)[0] || null;
+      }
+    };
+    return node;
+  }
+
+  const head = makeNode('head');
+  const body = makeNode('body');
+  const doc = {
+    hidden: false,
+    head,
+    body,
+    createElement(tag, attrs) { return makeNode(tag, attrs); },
+    makeNode,
+    getElementById(id) {
+      if (id === 'antigravity-mods-styles') return makeNode('style', { id });
+      return null;
+    },
+    addEventListener() {},
+    querySelectorAll(sel) { return body.querySelectorAll(sel); },
+    querySelector(sel) { return body.querySelector(sel); }
+  };
+  return doc;
+}
+
+test('ModLoader - docks v2.31.0 live-docked teleprompter with mic warning, speed popover, and menubar clearance', async () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({});
+  const doc = createAttrDomDocument();
+
+  // Simulate 35px Antigravity top menubar
+  const menuBar = doc.makeNode('div', {
+    'data-testid': 'title-menu-bar',
+    rect: { top: 0, bottom: 35, left: 0, right: 1200, width: 1200, height: 35 }
+  });
+  doc.body.appendChild(menuBar);
+
+  const composerParent = doc.makeNode('div', { className: 'composer-wrapper' });
+  const slot = doc.makeNode('div', {
+    'data-testid': 'voice-teleprompter-slot',
+    rect: { top: 39, bottom: 84, left: 420, right: 820, width: 400, height: 45 }
+  });
+  const frame = doc.makeNode('div');
+  const micWarning = doc.makeNode('div', { 'data-testid': 'voice-mic-warning', textContent: 'No mic audio detected' });
+  const liveDocked = doc.makeNode('section', { 'data-testid': 'live-docked' });
+  const controls = doc.makeNode('div', { 'data-testid': 'voice-call-controls' });
+
+  let speedOpened = false;
+  const speedBtn = doc.makeNode('button', { 'data-testid': 'voice-call-speed', 'aria-label': 'Voice speed, 1x' });
+  speedBtn.addEventListener('click', () => {
+    speedOpened = true;
+    const positioner = doc.makeNode('div', { rect: { top: -120, bottom: 10, left: 500, right: 740, width: 240, height: 130 } });
+    const popup = doc.makeNode('div', { 'data-popover-popup': '' });
+    const panel = doc.makeNode('div', { 'data-testid': 'voice-speed-panel' });
+    popup.appendChild(panel);
+    positioner.appendChild(popup);
+    doc.body.appendChild(positioner);
+  });
+
+  const muteBtn = doc.makeNode('button', { 'data-testid': 'voice-mute-button', 'aria-label': 'Mute mic' });
+  const collapseBtn = doc.makeNode('button', { 'data-testid': 'voice-call-collapse', 'aria-expanded': 'true' });
+  const endBtn = doc.makeNode('button', { 'data-testid': 'voice-call-end', 'aria-label': 'End Voice mode', textContent: 'End' });
+
+  controls.appendChild(muteBtn);
+  controls.appendChild(speedBtn);
+  controls.appendChild(collapseBtn);
+  controls.appendChild(endBtn);
+
+  const replies = doc.makeNode('div', { 'data-testid': 'live-docked-replies' });
+  liveDocked.appendChild(controls);
+  liveDocked.appendChild(replies);
+
+  frame.appendChild(micWarning);
+  frame.appendChild(liveDocked);
+  slot.appendChild(frame);
+  composerParent.appendChild(slot);
+  composerParent.appendChild(doc.makeNode('textarea'));
+  doc.body.appendChild(composerParent);
+
+  const win = { location: { pathname: '/' }, addEventListener() {} };
+  const runner = new Function('window', 'document', 'localStorage', 'ResizeObserver', 'MutationObserver', script);
+  runner(win, doc, { getItem() { return null; } }, class { observe() {} }, class { observe() {} });
+
+  const docked = win.__dockNativeVoiceToast(doc);
+  assert.equal(docked, slot, 'Must dock outer voice-teleprompter-slot to keep mic warning grouped with live-docked');
+  assert.equal(slot.getAttribute('data-voice-hud-variant'), 'teleprompter');
+  assert.equal(slot.getAttribute('data-voice-hud-box'), 'viewport-anchor');
+  assert.equal(liveDocked.getAttribute('data-voice-hud-box'), 'surface');
+  assert.equal(controls.getAttribute('data-voice-hud-box'), 'header');
+  assert.equal(micWarning.getAttribute('data-voice-hud-box'), 'alert');
+  assert.equal(micWarning.getAttribute('data-voice-hud-placement'), 'below');
+  assert.equal(replies.getAttribute('data-voice-hud-box'), 'drawer');
+  assert.equal(slot.style.getPropertyValue('--agy-voice-hud-top'), '39px',
+    'Must dynamically reserve menubar bottom clearance');
+
+  // Verify standalone annotator agrees on hierarchy
+  annotateVoiceHudBoxes(slot);
+  assert.equal(slot.getAttribute('data-voice-hud-box'), 'viewport-anchor');
+
+  // Trigger speed popover and wait for downward reposition guard
+  speedBtn.dispatchEvent({ type: 'click' });
+  assert.equal(speedOpened, true);
+  await new Promise((r) => setTimeout(r, 40));
+
+  const speedPanel = doc.querySelector('[data-testid="voice-speed-panel"]');
+  const positionerEl = speedPanel.parentElement.parentElement;
+  assert.equal(positionerEl.style.top, '92px', 'Must shift top-clipped speed slider portal safely below HUD');
+  assert.equal(positionerEl.style.zIndex, '10020', 'Must keep speed panel above docked HUD z-index');
+});
+
+test('ModLoader - docks v2.31.0 global floating voice-dock in Chats History & Customizations despite internal textarea', () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({});
+  const doc = createAttrDomDocument();
+
+  const voiceDock = doc.makeNode('div', { 'data-testid': 'voice-dock', role: 'region' });
+  const micWarning = doc.makeNode('div', { 'data-testid': 'voice-mic-warning' });
+  const dockComposer = doc.makeNode('div', { 'data-testid': 'voice-dock-composer' });
+  dockComposer.appendChild(doc.makeNode('textarea', { 'data-testid': 'voice-dock-input' }));
+
+  const row = doc.makeNode('div', { className: 'flex items-center gap-1.5' });
+  const muteBtn = doc.makeNode('button', { 'data-testid': 'voice-dock-mute', 'aria-label': 'Mute mic' });
+  let endFired = false;
+  const endBtn = doc.makeNode('button', {
+    'data-testid': 'voice-dock-end',
+    'aria-label': 'End Voice mode',
+    textContent: ''
+  });
+  endBtn.addEventListener('click', () => { endFired = true; });
+
+  row.appendChild(muteBtn);
+  row.appendChild(endBtn);
+  voiceDock.appendChild(micWarning);
+  voiceDock.appendChild(dockComposer);
+  voiceDock.appendChild(row);
+  doc.body.appendChild(voiceDock);
+
+  const win = { location: { pathname: '/customizations' }, addEventListener() {} };
+  const runner = new Function('window', 'document', 'localStorage', 'ResizeObserver', 'MutationObserver', script);
+  runner(win, doc, { getItem() { return null; } }, class { observe() {} }, class { observe() {} });
+
+  const docked = win.__dockNativeVoiceToast(doc);
+  assert.equal(docked, voiceDock, 'Must dock global floating voice-dock even with internal quick-composer textarea');
+  assert.equal(voiceDock.getAttribute('data-voice-hud-variant'), 'dock');
+  assert.equal(voiceDock.getAttribute('data-voice-hud-box'), 'viewport-anchor');
+  assert.equal(micWarning.getAttribute('data-voice-hud-box'), 'alert');
+  assert.equal(dockComposer.getAttribute('data-voice-hud-box'), 'drawer');
+  assert.equal(voiceDock.style.getPropertyValue('--agy-voice-hud-top'), '4px');
+
+  endBtn.dispatchEvent({ type: 'click' });
+  assert.equal(endFired, true, 'Must preserve icon-only voice-dock-end listener');
+});
