@@ -10,6 +10,7 @@ export class CdpPortResolver {
   /**
    * @param {Object} [options]
    * @param {string} [options.logDir] Custom path to Antigravity logs directory.
+   * @param {string} [options.devToolsActivePortPath] Custom path to Electron DevToolsActivePort file.
    * @param {number} [options.defaultPort] Fallback port if auto-discovery fails.
    * @param {number[]} [options.candidatePorts] Candidate ports to probe.
    * @param {number} [options.probeTimeoutMs] Timeout for active HTTP probes in ms.
@@ -18,6 +19,7 @@ export class CdpPortResolver {
   constructor(options = {}) {
     this.host = options.host || '127.0.0.1';
     this.logDir = options.logDir || path.join(os.homedir(), 'AppData', 'Roaming', 'Antigravity', 'logs');
+    this.devToolsActivePortPath = options.devToolsActivePortPath || path.join(path.dirname(this.logDir), 'DevToolsActivePort');
     this.defaultPort = options.defaultPort ?? 53908;
     this.candidatePorts = options.candidatePorts || [56547, 53908, 9222, 9229, 53909, 53910];
     this.probeTimeoutMs = options.probeTimeoutMs ?? 150;
@@ -124,12 +126,37 @@ export class CdpPortResolver {
   }
 
   /**
+   * Synchronously reads Electron's DevToolsActivePort file (line 1 = active port)
+   * and parses it as a valid TCP port (1..65535).
+   * @returns {number|null} Discovered port or null if missing/invalid.
+   */
+  resolvePortFromDevToolsActivePort() {
+    try {
+      if (!this.devToolsActivePortPath || !fs.existsSync(this.devToolsActivePortPath)) {
+        return null;
+      }
+
+      const raw = fs.readFileSync(this.devToolsActivePortPath, 'utf-8');
+      const firstLine = raw.split(/\r?\n/)[0]?.replace(/^\uFEFF/, '').trim();
+      if (!firstLine || !/^\d+$/.test(firstLine)) {
+        return null;
+      }
+
+      const port = Number(firstLine);
+      return Number.isSafeInteger(port) && port >= 1 && port <= 65535 ? port : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Resolves the active CDP port using a tiered cascading strategy:
    * 1. CLI parameter (--cdp-port <port>)
    * 2. Environment variable (ANTIGRAVITY_CDP_PORT)
-   * 3. Active HTTP probe on defaultPort & candidate ports
-   * 4. Passive log tail inspection
-   * 5. Fallback to defaultPort
+   * 3. Electron DevToolsActivePort file (verified via active HTTP probe)
+   * 4. Active HTTP probe on defaultPort & candidate ports
+   * 5. Passive log tail inspection
+   * 6. Fallback to defaultPort
    * @returns {Promise<number>}
    */
   async resolvePort() {
@@ -152,25 +179,31 @@ export class CdpPortResolver {
       }
     }
 
-    // 3. Active HTTP probe on default port
+    // 3. Electron DevToolsActivePort discovery (verified via active HTTP probe)
+    const activePort = this.resolvePortFromDevToolsActivePort();
+    if (activePort && (await this.probePort(activePort))) {
+      return activePort;
+    }
+
+    // 4. Active HTTP probe on default port
     if (await this.probePort(this.defaultPort)) {
       return this.defaultPort;
     }
 
-    // 4. Active HTTP probe across candidate ports
+    // 5. Active HTTP probe across candidate ports
     for (const port of this.candidatePorts) {
       if (port !== this.defaultPort && (await this.probePort(port))) {
         return port;
       }
     }
 
-    // 5. Fallback: Passive log tail inspection
+    // 6. Fallback: Passive log tail inspection
     const logPort = this.resolvePortFromLogs();
     if (logPort) {
       return logPort;
     }
 
-    // 6. Final default fallback
+    // 7. Final default fallback
     return this.defaultPort;
   }
 }
