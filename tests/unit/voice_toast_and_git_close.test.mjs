@@ -4,34 +4,60 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ModLoader } from '../../framework/core/ModLoader.js';
+import { StyleIsolator } from '../../framework/sdk/StyleIsolator.js';
+import {
+  VOICE_HUD_BOX_ROLES,
+  renderVoiceHudBoxHtml,
+  annotateVoiceHudBoxes
+} from '../../mods/voice-assistant/components/VoiceHudBoxHtml.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '../..');
 
-test('Voice Assistant Styles - defines detached bottom-right docked CSS rules for voice toast', () => {
+test('Voice Assistant Styles - defines centered Top HUD box-in-box CSS across views', () => {
   const stylesPath = path.join(rootDir, 'mods/voice-assistant/styles.css');
   assert.ok(fs.existsSync(stylesPath), 'styles.css must exist');
 
   const css = fs.readFileSync(stylesPath, 'utf-8');
 
-  // Must define .antigravity-voice-toast-docked selector
+  // Core viewport-centered HUD anchor rules
   assert.ok(css.includes('.antigravity-voice-toast-docked'), 'Must define .antigravity-voice-toast-docked');
-
-  // Must detach to bottom-right with fixed positioning
   assert.ok(css.includes('position: fixed'), 'Must use position: fixed');
-  assert.ok(css.includes('right: 24px'), 'Must anchor to right: 24px');
-  assert.ok(css.includes('bottom: 24px'), 'Must anchor to bottom: 24px');
+  assert.ok(css.includes('inset-inline: 0'), 'Must center horizontally via logical inset-inline: 0');
+  assert.ok(css.includes('margin-inline: auto'), 'Must center horizontally via margin-inline: auto');
+  assert.ok(css.includes('--agy-voice-hud-top'), 'Must parameterize top HUD offset cleanly');
+  assert.ok(css.includes('body:has([data-testid="title-menu-bar"])'), 'Must adapt cleanly below 35px menubar');
   assert.ok(css.includes('z-index: 9998'), 'Must specify z-index: 9998');
-  assert.ok(css.includes('max-width: min(420px, calc(100vw - 48px))'), 'Must constrain max-width safely');
 
-  // Smooth transitions for minimization states
+  // Boxes-inside-boxes architectural selectors
+  for (const role of ['viewport-anchor', 'frame', 'surface', 'header', 'toolbar', 'controls-well', 'actions', 'drawer', 'tray', 'alert']) {
+    assert.ok(css.includes(`[data-voice-hud-box="${role}"]`), `Must style [data-voice-hud-box="${role}"]`);
+  }
+
+  // Downward popup flip for mic warnings, errors, quick composer, and elevated speed slider portal
+  assert.ok(css.includes('[data-testid="voice-mic-warning"]'), 'Must style mic warning popup below Top HUD');
+  assert.ok(css.includes('[data-testid="voice-dock-composer"]'), 'Must style dock composer drawer below Top HUD');
+  assert.ok(css.includes('top: calc(100% + 8px)'), 'Must flip mic/composer popups downward');
+  assert.ok(css.includes('[data-testid="voice-speed-panel"]'), 'Must elevate portaled voice speed slider popup');
+  assert.ok(css.includes('z-index: 10020'), 'Must place dictation speed popup above docked HUD');
+
+  // Smooth transitions and minimized pill rules
   assert.ok(css.includes('transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease'),
     'Must include smooth transition rules for minimized states');
-
-  // Minimized state rules preserving bottom-right anchor
   assert.ok(css.includes('.is-minimized'), 'Must target .is-minimized');
   assert.ok(css.includes('[data-minimized="true"]'), 'Must target [data-minimized="true"]');
+
+  // StyleIsolator must preserve global body-prefixed HUD rules without mod scoping prefix
+  const scopedCss = StyleIsolator.scopeCss(css, 'voice-assistant');
+  assert.ok(
+    scopedCss.includes('body .antigravity-voice-toast-docked'),
+    'Global body-prefixed Top HUD rules must bypass mod container scoping'
+  );
+  assert.ok(
+    !scopedCss.includes('#antigravity-mod-voice-assistant body .antigravity-voice-toast-docked'),
+    'StyleIsolator must not prepend mod container id before body selectors'
+  );
 });
 
 test('ModLoader - defines window.__dockNativeVoiceToast and invokes it in UI sync cycles', () => {
