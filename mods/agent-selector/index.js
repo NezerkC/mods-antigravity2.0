@@ -69,7 +69,7 @@ export class AgentSelectorMod extends AntigravityMod {
           id="antigravity-caveman-reticle-trigger"
           class="antigravity-caveman-reticle-trigger"
           type="button"
-          title="Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus"
+          title="Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus (Caveman + ADHD)"
           tabindex="0"
         >
           <span id="antigravity-caveman-reticle-box" class="caveman-reticle-box">

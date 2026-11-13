@@ -477,7 +477,7 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
         <button class="agent-close-btn" id="antigravity-agent-close" title="Cerrar">✕</button>
       </div>
 
-      <!-- 1.1 CAVEMAN MODIFIER CARD (FOCUS / EXPLICATIVO) -->
+      <!-- 1.1 CAVEMAN & ADHD MODIFIER CARD (FOCUS / EXPLICATIVO) -->
       <div class="agent-card agent-modifier-card" id="antigravity-caveman-card">
         <div class="agent-modifier-info">
           <div class="agent-modifier-icon">
@@ -489,10 +489,10 @@ export function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents
           </div>
           <div class="agent-modifier-text">
             <div class="agent-modifier-title-row">
-              <span class="agent-modifier-title">Modo Focus (Caveman)</span>
+              <span class="agent-modifier-title">Modo Focus (Caveman + ADHD)</span>
               <span class="agent-modifier-pill" id="antigravity-caveman-pill">EXPLICATIVO</span>
             </div>
-            <div class="agent-modifier-subtitle">Alternar entre Focus y Explicativo</div>
+            <div class="agent-modifier-subtitle">Alternar entre Focus (Caveman + ADHD) y Explicativo</div>
           </div>
         </div>
         <label class="agent-modifier-switch">
