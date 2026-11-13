@@ -12,6 +12,7 @@ import os from 'node:os';
 function cleanModuleCode(filePath) {
   return fs.readFileSync(path.resolve(filePath), 'utf-8')
     .replace(/^import\s+.*?;?\s*$/gm, '')
+    .replace(/^export\s*\{[^}]*\};?\s*$/gm, '')
     .replace(/^export\s+(default\s+)?/gm, '');
 }
 
@@ -75,11 +76,11 @@ async function build() {
     .replace(/const __dirname = .*?;/, '')
     .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(gitGraphCss)};`);
 
-    // 6. Read Voice Assistant Mod sources
-  const voiceButtonHtml = cleanModuleCode('mods/voice-assistant/components/VoiceButtonHtml.js');
+  // 6. Read Voice Assistant Mod sources
   const textSanitizer = cleanModuleCode('mods/voice-assistant/services/TextSanitizer.js');
   const actionNarratorService = cleanModuleCode('mods/voice-assistant/services/ActionNarratorService.js');
   const xttsLocalAdapter = cleanModuleCode('mods/voice-assistant/services/XttsLocalAdapter.js');
+  const voicePromptConditioner = cleanModuleCode('mods/voice-assistant/services/VoicePromptConditioner.js');
   const voiceAssistantCss = fs.readFileSync(path.resolve('mods/voice-assistant/styles.css'), 'utf-8');
 
   const voiceAssistantIndex = cleanModuleCode('mods/voice-assistant/index.js')
@@ -161,7 +162,7 @@ ${actionNarratorService}
 
 ${xttsLocalAdapter}
 
-${voiceButtonHtml}
+${voicePromptConditioner}
 
 ${voiceAssistantIndex}
 
