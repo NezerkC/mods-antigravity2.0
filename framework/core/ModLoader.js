@@ -431,8 +431,8 @@ export class ModLoader {
 
           // Update exterior reticle triggers across panels
           const reticleSvg = window.__renderReticleSvg ? window.__renderReticleSvg(nextVal, 14) : '';
-          const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
-          const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
+          const focusTitle = 'Modo Focus (Caveman + ADHD): Concentracion activa y accion inmediata (~70% ahorro de tokens) - Clic para alternar a Explicativo';
+          const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus (Caveman + ADHD)';
 
           document.querySelectorAll('.antigravity-caveman-reticle-trigger').forEach(triggerEl => {
             const parent = triggerEl.parentElement;
@@ -457,7 +457,7 @@ export class ModLoader {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   cascadeId: cascadeId,
-                  modifiers: { caveman: nextVal }
+                  modifiers: { caveman: nextVal, adhd: nextVal }
                 })
               }).catch(function() {});
             }
@@ -1769,8 +1769,8 @@ export class ModLoader {
             const reticleBtn = group ? group.querySelector('.antigravity-caveman-reticle-trigger') : null;
             if (reticleBtn) {
               const isFocus = window.__resolveCavemanForCascade ? window.__resolveCavemanForCascade(cId) : false;
-              const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
-              const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
+              const focusTitle = 'Modo Focus (Caveman + ADHD): Concentracion activa y accion inmediata (~70% ahorro de tokens) - Clic para alternar a Explicativo';
+              const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus (Caveman + ADHD)';
               reticleBtn.classList.toggle('is-focus', isFocus);
               reticleBtn.setAttribute('title', isFocus ? focusTitle : explicativoTitle);
               const box = reticleBtn.querySelector('.caveman-reticle-box');
@@ -2151,8 +2151,8 @@ export class ModLoader {
             const reticleBtn = group ? group.querySelector('.antigravity-caveman-reticle-trigger') : null;
             if (reticleBtn) {
               const isFocus = window.__resolveCavemanForCascade ? window.__resolveCavemanForCascade(cId) : false;
-              const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
-              const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
+              const focusTitle = 'Modo Focus (Caveman + ADHD): Concentracion activa y accion inmediata (~70% ahorro de tokens) - Clic para alternar a Explicativo';
+              const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus (Caveman + ADHD)';
               reticleBtn.classList.toggle('is-focus', isFocus);
               reticleBtn.setAttribute('title', isFocus ? focusTitle : explicativoTitle);
               const box = reticleBtn.querySelector('.caveman-reticle-box');
