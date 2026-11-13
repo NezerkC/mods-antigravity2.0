@@ -78,12 +78,14 @@ export class ModLoader {
         combinedStyles.push(scopedCss);
       }
 
-      const mountCode = this.slotManager.generateMountCode({
-        slotId,
-        modId,
-        htmlContent: html
-      });
-      mountSnippets.push(mountCode);
+      if (html && html.trim()) {
+        const mountCode = this.slotManager.generateMountCode({
+          slotId,
+          modId,
+          htmlContent: html
+        });
+        mountSnippets.push(mountCode);
+      }
     }
 
     const cssBundle = combinedStyles.join('\n\n');
@@ -606,52 +608,6 @@ export class ModLoader {
           document.querySelectorAll('.antigravity-agent-badge').forEach(syncCompactBadge);
         };
 
-        window.__syncVoiceAssistantButton = function() {
-          const isEnabled = localStorage.getItem('__antigravity_voice_assistant_enabled') !== 'false';
-          document.querySelectorAll('[data-mod-action="toggle-voice"], #antigravity-voice-assistant-btn').forEach(btn => {
-            btn.classList.toggle('state-muted', !isEnabled);
-            btn.classList.toggle('state-idle', isEnabled);
-            btn.setAttribute('title', isEnabled
-              ? 'Asistente de Voz (TTS) - Click para pausar narración'
-              : 'Asistente de Voz (TTS) - Click para activar narración');
-
-            const svg = btn.querySelector('.voice-icon');
-            if (svg) {
-              svg.classList.toggle('state-muted', !isEnabled);
-              svg.classList.toggle('state-idle', isEnabled);
-              const slash = svg.querySelector('.mute-slash');
-              if (!isEnabled) {
-                if (!slash) {
-                  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-                  line.setAttribute('x1', '23');
-                  line.setAttribute('y1', '1');
-                  line.setAttribute('x2', '1');
-                  line.setAttribute('y2', '23');
-                  line.setAttribute('class', 'mute-slash');
-                  svg.appendChild(line);
-                }
-              } else if (slash) {
-                slash.remove();
-              }
-            }
-          });
-        };
-
-        window.__toggleVoiceAssistant = function(e) {
-          if (e) {
-            e.stopPropagation();
-            e.preventDefault();
-          }
-          const currentVal = localStorage.getItem('__antigravity_voice_assistant_enabled') !== 'false';
-          const nextVal = !currentVal;
-          try {
-            localStorage.setItem('__antigravity_voice_assistant_enabled', nextVal ? 'true' : 'false');
-          } catch (err) {}
-          if (typeof window.__syncVoiceAssistantButton === 'function') {
-            window.__syncVoiceAssistantButton();
-          }
-        };
-
         window.__dockNativeVoiceToast = function(rootDoc) {
           const doc = rootDoc || (typeof document !== 'undefined' ? document : null);
           if (!doc) return null;
@@ -888,13 +844,6 @@ export class ModLoader {
         };
 
         window.__applyModsVisibility = function() {
-          const voiceModEnabled = localStorage.getItem('__antigravity_mod_enabled_voice-assistant') !== 'false';
-          document.querySelectorAll('.antigravity-voice-assistant-wrapper, #antigravity-voice-assistant-wrapper').forEach(b => {
-            b.style.display = voiceModEnabled ? 'inline-flex' : 'none';
-          });
-          if (typeof window.__syncVoiceAssistantButton === 'function') {
-            window.__syncVoiceAssistantButton();
-          }
           const tachEnabled = localStorage.getItem('__antigravity_mod_enabled_context-tachometer') !== 'false';
           const agentEnabled = localStorage.getItem('__antigravity_mod_enabled_agent-selector') !== 'false';
 
@@ -1955,14 +1904,6 @@ export class ModLoader {
               }
             }
 
-            const voiceBtn = e.target.closest('[data-mod-action="toggle-voice"], #antigravity-voice-assistant-btn');
-            if (voiceBtn) {
-              e.preventDefault();
-              e.stopPropagation();
-              window.__toggleVoiceAssistant(e);
-              return;
-            }
-
             const reticleBtn = e.target.closest('.antigravity-caveman-reticle-trigger');
             if (reticleBtn) {
               e.preventDefault();
@@ -2047,9 +1988,15 @@ export class ModLoader {
             if (prevAgent) slot.__lastAgentCompact = prevAgent.classList.contains('compact');
           });
 
-          // Permanently remove legacy duplicate unmanaged badges & misplaced slot containers
+          // Permanently remove legacy duplicate unmanaged badges, speaker icon wrappers & misplaced slot containers
           document.querySelectorAll('.antigravity-context-badge').forEach(el => el.remove());
           document.querySelectorAll('.min-w-0 > #antigravity-slot-header-actions, .no-focus-agent-input > #antigravity-slot-header-actions').forEach(el => el.remove());
+          document.querySelectorAll('#antigravity-voice-assistant-wrapper, .antigravity-voice-assistant-wrapper, #antigravity-voice-assistant-btn, #antigravity-mod-voice-assistant').forEach(el => el.remove());
+          document.querySelectorAll('#antigravity-slot-chat-input-actions, .antigravity-slot-chat-input-actions').forEach(slot => {
+            if (!slot.children || slot.children.length === 0) {
+              slot.remove();
+            }
+          });
 
           ${mountSnippets.join('\n')}
 
@@ -2098,22 +2045,12 @@ export class ModLoader {
             });
           });
 
-          // Bind Mods Manager click handler
           // Bind Git Graph Tab trigger
           document.querySelectorAll('#antigravity-git-tab-trigger').forEach(btn => {
             if (btn.__gitClickBound) return;
             btn.__gitClickBound = true;
             btn.addEventListener('click', (e) => {
               window.__toggleGitGraphPanel(e, btn);
-            });
-          });
-
-          // Bind Voice Assistant button click handler
-          document.querySelectorAll('[data-mod-action="toggle-voice"], #antigravity-voice-assistant-btn').forEach(btn => {
-            if (btn.__voiceClickBound) return;
-            btn.__voiceClickBound = true;
-            btn.addEventListener('click', (e) => {
-              window.__toggleVoiceAssistant(e);
             });
           });
 
