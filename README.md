@@ -243,7 +243,7 @@ mods-antigravity2.0/
 │   │   └── styles.css
 │   └── voice-assistant/             # Real-time TTS & action narrator
 │       ├── components/
-│       │   └── VoiceButtonHtml.js   # Dynamic speech toggle button
+│       │   └── VoiceHudBoxHtml.js   # Semantic Top HUD box-in-box markup
 │       ├── services/
 │       │   ├── ActionNarratorService.js # Real-time thought & tool action translator
 │       │   └── TextSanitizer.js     # Code & markdown payload cleaner
