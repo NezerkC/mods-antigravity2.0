@@ -1121,8 +1121,8 @@ class ModLoader {
 
           // Update exterior reticle triggers across panels
           const reticleSvg = window.__renderReticleSvg ? window.__renderReticleSvg(nextVal, 14) : '';
-          const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
-          const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
+          const focusTitle = 'Modo Focus (Caveman + ADHD): Concentracion activa y accion inmediata (~70% ahorro de tokens) - Clic para alternar a Explicativo';
+          const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus (Caveman + ADHD)';
 
           document.querySelectorAll('.antigravity-caveman-reticle-trigger').forEach(triggerEl => {
             const parent = triggerEl.parentElement;
@@ -1147,7 +1147,7 @@ class ModLoader {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   cascadeId: cascadeId,
-                  modifiers: { caveman: nextVal }
+                  modifiers: { caveman: nextVal, adhd: nextVal }
                 })
               }).catch(function() {});
             }
@@ -2459,8 +2459,8 @@ class ModLoader {
             const reticleBtn = group ? group.querySelector('.antigravity-caveman-reticle-trigger') : null;
             if (reticleBtn) {
               const isFocus = window.__resolveCavemanForCascade ? window.__resolveCavemanForCascade(cId) : false;
-              const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
-              const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
+              const focusTitle = 'Modo Focus (Caveman + ADHD): Concentracion activa y accion inmediata (~70% ahorro de tokens) - Clic para alternar a Explicativo';
+              const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus (Caveman + ADHD)';
               reticleBtn.classList.toggle('is-focus', isFocus);
               reticleBtn.setAttribute('title', isFocus ? focusTitle : explicativoTitle);
               const box = reticleBtn.querySelector('.caveman-reticle-box');
@@ -2841,8 +2841,8 @@ class ModLoader {
             const reticleBtn = group ? group.querySelector('.antigravity-caveman-reticle-trigger') : null;
             if (reticleBtn) {
               const isFocus = window.__resolveCavemanForCascade ? window.__resolveCavemanForCascade(cId) : false;
-              const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
-              const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
+              const focusTitle = 'Modo Focus (Caveman + ADHD): Concentracion activa y accion inmediata (~70% ahorro de tokens) - Clic para alternar a Explicativo';
+              const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus (Caveman + ADHD)';
               reticleBtn.classList.toggle('is-focus', isFocus);
               reticleBtn.setAttribute('title', isFocus ? focusTitle : explicativoTitle);
               const box = reticleBtn.querySelector('.caveman-reticle-box');
@@ -4784,7 +4784,7 @@ class AgentSyncServer {
 
   /**
    * Updates an agent entry for a specific conversation cascadeId.
-   * Preserves existing modifiers (like caveman) unless explicitly specified.
+   * Preserves existing modifiers (like caveman and adhd) unless explicitly specified.
    * @param {string} cascadeId
    * @param {Object} agent
    */
@@ -4797,17 +4797,21 @@ class AgentSyncServer {
     const caveman = (agent.caveman !== undefined)
       ? !!agent.caveman
       : ((modifiers.caveman !== undefined) ? !!modifiers.caveman : (existing.caveman ?? false));
+    const adhd = (agent.adhd !== undefined)
+      ? !!agent.adhd
+      : ((modifiers.adhd !== undefined) ? !!modifiers.adhd : (existing.adhd ?? caveman));
 
     current[cascadeId] = {
       ...agent,
-      modifiers: { ...existingModifiers, ...modifiers, caveman },
-      caveman
+      modifiers: { ...existingModifiers, ...modifiers, caveman, adhd },
+      caveman,
+      adhd
     };
     this.writeActiveAgents(current);
   }
 
   /**
-   * Updates modifier flags (such as caveman mode) for a specific cascadeId.
+   * Updates modifier flags (such as caveman and adhd focus modes) for a specific cascadeId.
    * @param {string} cascadeId
    * @param {Object} modifiers
    */
@@ -4820,11 +4824,15 @@ class AgentSyncServer {
     const caveman = (modifiers.caveman !== undefined)
       ? !!modifiers.caveman
       : (existing.caveman ?? false);
+    const adhd = (modifiers.adhd !== undefined)
+      ? !!modifiers.adhd
+      : (modifiers.caveman !== undefined ? !!modifiers.caveman : (existing.adhd ?? caveman));
 
     current[cascadeId] = {
       ...existing,
-      modifiers: nextModifiers,
-      caveman
+      modifiers: { ...nextModifiers, caveman, adhd },
+      caveman,
+      adhd
     };
     this.writeActiveAgents(current);
   }
@@ -6561,7 +6569,7 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
         <button class="agent-close-btn" id="antigravity-agent-close" title="Cerrar">✕</button>
       </div>
 
-      <!-- 1.1 CAVEMAN MODIFIER CARD (FOCUS / EXPLICATIVO) -->
+      <!-- 1.1 CAVEMAN & ADHD MODIFIER CARD (FOCUS / EXPLICATIVO) -->
       <div class="agent-card agent-modifier-card" id="antigravity-caveman-card">
         <div class="agent-modifier-info">
           <div class="agent-modifier-icon">
@@ -6573,10 +6581,10 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
           </div>
           <div class="agent-modifier-text">
             <div class="agent-modifier-title-row">
-              <span class="agent-modifier-title">Modo Focus (Caveman)</span>
+              <span class="agent-modifier-title">Modo Focus (Caveman + ADHD)</span>
               <span class="agent-modifier-pill" id="antigravity-caveman-pill">EXPLICATIVO</span>
             </div>
-            <div class="agent-modifier-subtitle">Alternar entre Focus y Explicativo</div>
+            <div class="agent-modifier-subtitle">Alternar entre Focus (Caveman + ADHD) y Explicativo</div>
           </div>
         </div>
         <label class="agent-modifier-switch">
@@ -6754,7 +6762,7 @@ class AgentSelectorMod extends AntigravityMod {
           id="antigravity-caveman-reticle-trigger"
           class="antigravity-caveman-reticle-trigger"
           type="button"
-          title="Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus"
+          title="Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus (Caveman + ADHD)"
           tabindex="0"
         >
           <span id="antigravity-caveman-reticle-box" class="caveman-reticle-box">
