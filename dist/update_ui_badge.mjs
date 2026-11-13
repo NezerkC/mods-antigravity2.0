@@ -768,12 +768,14 @@ class ModLoader {
         combinedStyles.push(scopedCss);
       }
 
-      const mountCode = this.slotManager.generateMountCode({
-        slotId,
-        modId,
-        htmlContent: html
-      });
-      mountSnippets.push(mountCode);
+      if (html && html.trim()) {
+        const mountCode = this.slotManager.generateMountCode({
+          slotId,
+          modId,
+          htmlContent: html
+        });
+        mountSnippets.push(mountCode);
+      }
     }
 
     const cssBundle = combinedStyles.join('\n\n');
@@ -1296,52 +1298,6 @@ class ModLoader {
           document.querySelectorAll('.antigravity-agent-badge').forEach(syncCompactBadge);
         };
 
-        window.__syncVoiceAssistantButton = function() {
-          const isEnabled = localStorage.getItem('__antigravity_voice_assistant_enabled') !== 'false';
-          document.querySelectorAll('[data-mod-action="toggle-voice"], #antigravity-voice-assistant-btn').forEach(btn => {
-            btn.classList.toggle('state-muted', !isEnabled);
-            btn.classList.toggle('state-idle', isEnabled);
-            btn.setAttribute('title', isEnabled
-              ? 'Asistente de Voz (TTS) - Click para pausar narración'
-              : 'Asistente de Voz (TTS) - Click para activar narración');
-
-            const svg = btn.querySelector('.voice-icon');
-            if (svg) {
-              svg.classList.toggle('state-muted', !isEnabled);
-              svg.classList.toggle('state-idle', isEnabled);
-              const slash = svg.querySelector('.mute-slash');
-              if (!isEnabled) {
-                if (!slash) {
-                  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-                  line.setAttribute('x1', '23');
-                  line.setAttribute('y1', '1');
-                  line.setAttribute('x2', '1');
-                  line.setAttribute('y2', '23');
-                  line.setAttribute('class', 'mute-slash');
-                  svg.appendChild(line);
-                }
-              } else if (slash) {
-                slash.remove();
-              }
-            }
-          });
-        };
-
-        window.__toggleVoiceAssistant = function(e) {
-          if (e) {
-            e.stopPropagation();
-            e.preventDefault();
-          }
-          const currentVal = localStorage.getItem('__antigravity_voice_assistant_enabled') !== 'false';
-          const nextVal = !currentVal;
-          try {
-            localStorage.setItem('__antigravity_voice_assistant_enabled', nextVal ? 'true' : 'false');
-          } catch (err) {}
-          if (typeof window.__syncVoiceAssistantButton === 'function') {
-            window.__syncVoiceAssistantButton();
-          }
-        };
-
         window.__dockNativeVoiceToast = function(rootDoc) {
           const doc = rootDoc || (typeof document !== 'undefined' ? document : null);
           if (!doc) return null;
@@ -1578,13 +1534,6 @@ class ModLoader {
         };
 
         window.__applyModsVisibility = function() {
-          const voiceModEnabled = localStorage.getItem('__antigravity_mod_enabled_voice-assistant') !== 'false';
-          document.querySelectorAll('.antigravity-voice-assistant-wrapper, #antigravity-voice-assistant-wrapper').forEach(b => {
-            b.style.display = voiceModEnabled ? 'inline-flex' : 'none';
-          });
-          if (typeof window.__syncVoiceAssistantButton === 'function') {
-            window.__syncVoiceAssistantButton();
-          }
           const tachEnabled = localStorage.getItem('__antigravity_mod_enabled_context-tachometer') !== 'false';
           const agentEnabled = localStorage.getItem('__antigravity_mod_enabled_agent-selector') !== 'false';
 
@@ -2645,14 +2594,6 @@ class ModLoader {
               }
             }
 
-            const voiceBtn = e.target.closest('[data-mod-action="toggle-voice"], #antigravity-voice-assistant-btn');
-            if (voiceBtn) {
-              e.preventDefault();
-              e.stopPropagation();
-              window.__toggleVoiceAssistant(e);
-              return;
-            }
-
             const reticleBtn = e.target.closest('.antigravity-caveman-reticle-trigger');
             if (reticleBtn) {
               e.preventDefault();
@@ -2737,9 +2678,15 @@ class ModLoader {
             if (prevAgent) slot.__lastAgentCompact = prevAgent.classList.contains('compact');
           });
 
-          // Permanently remove legacy duplicate unmanaged badges & misplaced slot containers
+          // Permanently remove legacy duplicate unmanaged badges, speaker icon wrappers & misplaced slot containers
           document.querySelectorAll('.antigravity-context-badge').forEach(el => el.remove());
           document.querySelectorAll('.min-w-0 > #antigravity-slot-header-actions, .no-focus-agent-input > #antigravity-slot-header-actions').forEach(el => el.remove());
+          document.querySelectorAll('#antigravity-voice-assistant-wrapper, .antigravity-voice-assistant-wrapper, #antigravity-voice-assistant-btn, #antigravity-mod-voice-assistant').forEach(el => el.remove());
+          document.querySelectorAll('#antigravity-slot-chat-input-actions, .antigravity-slot-chat-input-actions').forEach(slot => {
+            if (!slot.children || slot.children.length === 0) {
+              slot.remove();
+            }
+          });
 
           ${mountSnippets.join('\n')}
 
@@ -2788,22 +2735,12 @@ class ModLoader {
             });
           });
 
-          // Bind Mods Manager click handler
           // Bind Git Graph Tab trigger
           document.querySelectorAll('#antigravity-git-tab-trigger').forEach(btn => {
             if (btn.__gitClickBound) return;
             btn.__gitClickBound = true;
             btn.addEventListener('click', (e) => {
               window.__toggleGitGraphPanel(e, btn);
-            });
-          });
-
-          // Bind Voice Assistant button click handler
-          document.querySelectorAll('[data-mod-action="toggle-voice"], #antigravity-voice-assistant-btn').forEach(btn => {
-            if (btn.__voiceClickBound) return;
-            btn.__voiceClickBound = true;
-            btn.addEventListener('click', (e) => {
-              window.__toggleVoiceAssistant(e);
             });
           });
 
@@ -8096,48 +8033,922 @@ class XttsLocalAdapter {
 }
 
 
+
 /**
- * Renders the HTML markup for the Chatbox Voice Assistant action button.
- * Follows Antigravity's native chatbox action icon button design tokens.
- *
- * @param {Object} [options]
- * @param {'idle'|'speaking'|'muted'} [options.state='idle']
- * @param {boolean} [options.enabled=true]
- * @returns {string}
+ * Mode constants for voice-driven agent routing.
  */
-function renderVoiceButtonHtml(options = {}) {
-  const state = options.state || 'idle';
-  const isMuted = options.enabled === false;
-  const stateClass = isMuted ? 'state-muted' : (state === 'speaking' ? 'state-speaking' : 'state-idle');
+const VOICE_MODES = Object.freeze({
+  PLAN: 'PLAN',
+  BUILD: 'BUILD',
+  DEBUG: 'DEBUG',
+  RESEARCH: 'RESEARCH'
+});
 
-  // Speaker icon with dynamic soundwave paths
-  const iconSvg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 text-secondary-foreground voice-icon ${stateClass}">
-      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-      <path class="wave wave-1" d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-      <path class="wave wave-2" d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
-      ${isMuted ? '<line x1="23" y1="1" x2="1" y2="23" class="mute-slash"></line>' : ''}
-    </svg>
-  `.trim();
+/**
+ * Default agent mappings for each primary voice mode.
+ */
+const MODE_DEFAULT_AGENT_ID = Object.freeze({
+  PLAN: 'lead-architect',
+  BUILD: 'sdd-orchestrator',
+  DEBUG: 'sdd-verify',
+  RESEARCH: 'sdd-explore'
+});
 
-  return `
-    <div id="antigravity-voice-assistant-wrapper" class="antigravity-voice-assistant-wrapper">
-      <button
-        type="button"
-        id="antigravity-voice-assistant-btn"
-        class="antigravity-voice-assistant-btn flex items-center rounded-full transition-colors cursor-pointer w-7 h-7 justify-center p-1.5 bg-transparent hover:bg-secondary ${stateClass}"
-        aria-label="Asistente de Voz (TTS)"
-        title="Asistente de Voz (TTS) - Click para activar o pausar narración"
-        data-mod-action="toggle-voice"
-        data-voice-state="${state}"
-        tabindex="0"
-      >
-        ${iconSvg}
-      </button>
-    </div>
-  `.trim();
+/**
+ * Explicit agent mention patterns in Spanish and English voice transcripts.
+ */
+const EXPLICIT_AGENT_MATCHERS = [
+  { id: 'auto', pattern: /\b(modo\s+auto(?:m[aá]tico)?|auto\s+mode|smart\s+router|enrutador\s+autom[aá]tico)\b/i, mode: 'PLAN' },
+  { id: 'lead-architect', pattern: /\b(lead\s+architect|arquitecto\s+principal|arquitecto\s+l[ií]der|plano\s+maestro)\b/i, mode: 'PLAN' },
+  { id: 'sdd-orchestrator', pattern: /\b(sdd\s+orchestrator|orquestador\s+sdd|director\s+de\s+obra)\b/i, mode: 'BUILD' },
+  { id: 'product-manager', pattern: /\b(product\s+manager|gerente\s+de\s+producto|\bprd\b|discovery\s+de\s+producto)\b/i, mode: 'PLAN' },
+  { id: 'scrum-master', pattern: /\b(scrum\s+master|historias\s+de\s+usuario|user\s+stories|refinamiento\s+de\s+backlog)\b/i, mode: 'PLAN' },
+  { id: 'code-reviewer', pattern: /\b(code\s+reviewer|revisor\s+de\s+c[oó]digo|revisi[oó]n\s+de\s+pr|pull\s+request\s+review|pr\s+gate|revis(?:a|ar)\s+las\s+invariantes)\b/i, mode: 'DEBUG' },
+  { id: 'security-engineer', pattern: /\b(security\s+engineer|ingeniero\s+de\s+seguridad|auditor[ií]a\s+owasp|vulnerabilidades?\s+owasp|zero\s+trust)\b/i, mode: 'DEBUG' },
+  { id: 'devops-cloud', pattern: /\b(devops|ci\/cd|pipeline\s+de\s+despliegue|gitops|dockerfile|kubernetes)\b/i, mode: 'BUILD' },
+  { id: 'ui-ux-pro', pattern: /\b(ui\/ux|ui\s+ux|design\s+tokens|sistema\s+de\s+dise[nñ]o\s+visual|accesibilidad\s+a11y)\b/i, mode: 'BUILD' },
+  { id: 'rpa-windows', pattern: /\b(windows\s+rpa|rpa\s+windows|automatizaci[oó]n\s+powershell)\b/i, mode: 'BUILD' },
+  { id: 'sdd-explore', pattern: /\b(sdd\s+explore|explorador\s+sdd|modo\s+exploraci[oó]n)\b/i, mode: 'RESEARCH' },
+  { id: 'sdd-spec', pattern: /\b(sdd\s+spec|especificaci[oó]n\s+bdd|escenarios\s+gherkin|dado\s+cuando\s+entonces)\b/i, mode: 'PLAN' },
+  { id: 'sdd-apply', pattern: /\b(sdd\s+apply|red[\s-]+green[\s-]+refactor|aplicar\s+tdd)\b/i, mode: 'BUILD' },
+  { id: 'sdd-verify', pattern: /\b(sdd\s+verify|verificador\s+sdd|gate\s+de\s+pruebas)\b/i, mode: 'DEBUG' },
+  { id: 'gga-review', pattern: /\b(guardian\s+angel|\bgga\b|gateman|guardi[aá]n\s+de\s+c[oó]digo|pre[\s-]?commit\s+guard)\b/i, mode: 'DEBUG' }
+];
+
+/**
+ * Keyword patterns for the 4 core voice modes.
+ */
+const MODE_PATTERNS = {
+  DEBUG: [
+    /\b(debug(?:gear|uear)?|depur(?:a|ar|aci[oó]n)|corrig(?:e|ir)|arregl(?:a|ar|o)|fix(?:ea|ear)?|bug|errores|error|falla(?:ndo|s)?|fallo(?:s)?|rompi[oó]|roto|excepci[oó]n|stack\s*trace|crash|no\s+funciona|problema\s+con|revis(?:a|ar)\s+(?:el\s+error|las\s+invariantes|el\s+c[oó]digo|el\s+pr)|pr\s+gate|audit(?:a|ar|or[ií]a)|vulnerabilidad(?:es)?|diagnostic(?:a|ar)|diagn[oó]stico\s+de\s+error)\b/i
+  ],
+  RESEARCH: [
+    /\b(investig(?:a|ar|aci[oó]n)|explor(?:a|ar|aci[oó]n)|busc(?:a|ar)|encontr(?:a|ar)|localiz(?:a|ar)|d[oó]nde\s+est[aá]|c[oó]mo\s+funciona|explic(?:a|ar|ame)|expl[ií]came|entiend(?:e|o)|entender|analiz(?:a|ar)\s+el\s+contexto|qu[eé]\s+hace|por\s+qu[eé]\s+pasa|list(?:a|ar)\s+los\s+archivos|lee(?:r)?\s+el\s+archivo|research|explore|investigate|search\s+for)\b/i
+  ],
+  PLAN: [
+    /\b(dise[nñ](?:a|ar|o)|plan(?:ifica|ificar|ificaci[oó]n|ear)?|arquitect(?:ura|o)|estructur(?:a|ar)|diagram(?:a|ar)|rfc|adr|estrategia|roadmap|hoja\s+de\s+ruta|criterio(?:s)?|decisi[oó]n|flujo|propuesta|especific(?:a|ar|aci[oó]n)|escenario(?:s)?\s+bdd|antes\s+de\s+programar|c[oó]mo\s+(?:hacer|estructurar|abordar|organizar|dise[nñ]ar)|evalu(?:a|ar|aci[oó]n)|compar(?:a|ar))\b/i
+  ],
+  BUILD: [
+    /\b(implement(?:a|ar|aci[oó]n)|escrib(?:e|ir)|cre(?:a|ar)|agreg(?:a|ar)|a[nñ]ad(?:e|ir)|refactor(?:iza|izar|ing)?|program(?:a|ar)|actualiz(?:a|ar)|instal(?:a|ar)|ejecut(?:a|ar)|corr(?:e|er)\s+los\s+tests|construy(?:e|ir)|build|modific(?:a|ar)|edit(?:a|ar)|desarroll(?:a|ar)|codific(?:a|ar)|tdd|test\s+unitario)\b/i
+  ]
+};
+
+/**
+ * Gateman & architectural guardrail detection rules.
+ */
+const GATEMAN_RULES = [
+  {
+    id: 'explicit-gateman-guard',
+    level: 'strict',
+    recommendedAgent: 'gga-review',
+    pattern: /\b(gateman|guardian\s+angel|\bgga\b|guardi[aá]n|barrera\s+de\s+permisos|control\s+de\s+permisos|pre[\s-]?commit\s+gate|modo\s+estricto|guardrail(?:s)?)\b/i
+  },
+  {
+    id: 'clean-architecture-invariants',
+    level: 'elevated',
+    recommendedAgent: 'code-reviewer',
+    pattern: /\b(clean\s+architecture|arquitectura\s+limpia|arquitectura\s+hexagonal|hexagonal|invariantes?\s+de\s+arquitectura|puertos\s+y\s+adaptadores|ports\s+and\s+adapters|screaming\s+architecture|separaci[oó]n\s+de\s+capas|regla\s+de\s+dependencia|contrato(?:s)?\s+cdd|pr\s+gate)\b/i
+  },
+  {
+    id: 'security-zero-trust',
+    level: 'strict',
+    recommendedAgent: 'security-engineer',
+    pattern: /\b(owasp|zero\s+trust|vulnerabilidad(?:es)?|inyecci[oó]n\s+sql|xss|csrf|hardening|sanitiz(?:a|ar|aci[oó]n)|credenciales|secretos|tokens?\s+expuestos?|auditor[ií]a\s+de\s+seguridad)\b/i
+  },
+  {
+    id: 'destructive-operation-guard',
+    level: 'strict',
+    recommendedAgent: 'gga-review',
+    pattern: /\b(rm\s+-rf|drop\s+table|truncate\s+table|reset\s+--hard|push\s+--force|force\s+push|borr(?:a|ar)\s+la\s+base\s+de\s+datos|elimin(?:a|ar)\s+producci[oó]n|destructiv[oa])\b/i
+  },
+  {
+    id: 'tdd-verification-gate',
+    level: 'elevated',
+    recommendedAgent: 'sdd-verify',
+    pattern: /\b(red[\s-]+green[\s-]+refactor|cobertura\s+al\s+100|100%\s+pass|gate\s+de\s+calidad|verificaci[oó]n\s+estricta)\b/i
+  }
+];
+
+/**
+ * Patterns to extract global voice routing hints (target project, chat, or workspace).
+ */
+const GLOBAL_ROUTING_PATTERNS = [
+  // Prefix patterns: "En el proyecto X, haz Y" or "En el chat X implementa Y"
+  {
+    position: 'prefix',
+    regex: /^(?:oye\s+|hola\s+|por\s+favor\s+)?(?:en\s+el\s+|para\s+el\s+|del\s+|al\s+|dentro\s+del\s+|sobre\s+el\s+|en\s+la\s+|in\s+(?:the\s+)?|on\s+(?:the\s+)?)(proyecto|chat|conversaci[oó]n|workspace|repositorio|repo|hilo|ventana)\s+(?:de\s+|llamad[oa]\s+)?["'“”]?([a-zA-Z0-9_-]+(?:\s+[a-zA-Z0-9_-]+)?)["'“”]?(?:\s*[,.:;-]\s*|\s+(?=(?:dise[nñ]|plan|implement|crea|agreg|corrig|arregl|revis|analiz|investig|explor|busc|ejecut|modific|actualiz|construy|debug|depur|audit|explic|por\s+favor|necesito|quiero|haz|vamos|activa|cambia)\b))/i
+  },
+  // Suffix or mid-sentence patterns: "... en el proyecto X" or "... en el chat Y"
+  {
+    position: 'inline',
+    regex: /\b(?:en\s+el\s+|para\s+el\s+|hacia\s+el\s+|en\s+la\s+|in\s+(?:the\s+)?)(proyecto|chat|conversaci[oó]n|workspace|repositorio|repo|hilo)\s+(?:de\s+|llamad[oa]\s+)?["'“”]?([a-zA-Z0-9_-]+)["'“”]?/i
+  }
+];
+
+/**
+ * Service that conditions agent selection, operational mode (PLAN, BUILD, DEBUG, RESEARCH),
+ * Gateman architectural guardrails, and multi-chat routing from spoken user transcripts
+ * or `<talker_agent_context>` blocks.
+ */
+class VoicePromptConditioner {
+  /**
+   * @param {Object} [options={}]
+   * @param {string} [options.defaultCascadeId='default']
+   * @param {Array<Object>|Object} [options.cascades]
+   */
+  constructor(options = {}) {
+    this.defaultCascadeId = options.defaultCascadeId || 'default';
+    this.cascades = options.cascades || null;
+  }
+
+  /**
+   * Extracts the latest spoken user utterance from either a `<talker_agent_context>` block
+   * or a raw voice transcript string/object.
+   *
+   * @param {string|Object} input
+   * @returns {string} Clean spoken user prompt, or empty string if none found.
+   */
+  static extractSpokenText(input) {
+    if (!input) return '';
+
+    if (typeof input === 'object') {
+      const candidate = input.transcript ?? input.text ?? input.prompt ?? input.content ?? '';
+      return VoicePromptConditioner.extractSpokenText(String(candidate));
+    }
+
+    if (typeof input !== 'string') return '';
+
+    const raw = input.trim();
+    if (!raw) return '';
+
+    // 1. Check for <talker_agent_context>...</talker_agent_context> blocks
+    const contextBlocks = [...raw.matchAll(/<talker_agent_context>([\s\S]*?)<\/talker_agent_context>/gi)];
+    if (contextBlocks.length > 0) {
+      const combinedContext = contextBlocks.map(m => m[1]).join('\n');
+      const userLine = VoicePromptConditioner._extractLatestUserLine(combinedContext);
+      return userLine;
+    }
+
+    // 2. Check if raw string contains structured `user: "..."` lines without enclosing tags
+    if (/^\s*(?:talker_agent|user)\s*:/im.test(raw)) {
+      const userLine = VoicePromptConditioner._extractLatestUserLine(raw);
+      if (userLine) return userLine;
+      // If only talker_agent lines exist without user lines, return empty string
+      if (/^\s*talker_agent\s*:/im.test(raw) && !/^\s*user\s*:/im.test(raw)) {
+        return '';
+      }
+    }
+
+    // 3. Raw transcript string
+    return raw.replace(/^["'“”]+|["'“”]+$/g, '').trim();
+  }
+
+  /**
+   * Alias for `extractSpokenText`.
+   * @param {string|Object} input
+   * @returns {string}
+   */
+  static extractSpokenPrompt(input) {
+    return VoicePromptConditioner.extractSpokenText(input);
+  }
+
+  /**
+   * Extracts the last `user: "..."` utterance from a dialogue block.
+   * @private
+   * @param {string} blockText
+   * @returns {string}
+   */
+  static _extractLatestUserLine(blockText) {
+    const lines = String(blockText || '').split(/\r?\n/);
+    let latestUserText = '';
+
+    for (const line of lines) {
+      const match = line.match(/^\s*user\s*:\s*(.+)$/i);
+      if (match && match[1]) {
+        let extracted = match[1].trim();
+        // Strip outer quotes ("...", '...', “...”)
+        if (
+          (extracted.startsWith('"') && extracted.endsWith('"')) ||
+          (extracted.startsWith("'") && extracted.endsWith("'")) ||
+          (extracted.startsWith('“') && extracted.endsWith('”'))
+        ) {
+          extracted = extracted.slice(1, -1);
+        }
+        extracted = extracted.replace(/\\"/g, '"').replace(/\\'/g, "'").trim();
+        if (extracted) {
+          latestUserText = extracted;
+        }
+      }
+    }
+
+    return latestUserText;
+  }
+
+  /**
+   * Detects if the user named a target project, chat, or workspace in their voice command.
+   *
+   * @param {string} spokenText
+   * @returns {{
+   *   hasGlobalHint: boolean,
+   *   targetType: 'project'|'chat'|'workspace'|null,
+   *   targetName: string|null,
+   *   cleanedPrompt: string
+   * }}
+   */
+  static extractRoutingHint(spokenText) {
+    const text = String(spokenText || '').trim();
+    if (!text) {
+      return {
+        hasGlobalHint: false,
+        targetType: null,
+        targetName: null,
+        cleanedPrompt: ''
+      };
+    }
+
+    for (const rule of GLOBAL_ROUTING_PATTERNS) {
+      const match = text.match(rule.regex);
+      if (match) {
+        const rawKind = (match[1] || '').toLowerCase();
+        const rawTarget = (match[2] || '').trim().replace(/[.,;:!?]+$/, '');
+
+        // Avoid matching generic stop words as project/chat names
+        if (!rawTarget || /^(actual|este|esta|activo|activa|mismo|misma|aqui|aquí|ahora)$/i.test(rawTarget)) {
+          continue;
+        }
+
+        let targetType = 'project';
+        if (/^(chat|conversaci[oó]n|hilo|ventana)$/i.test(rawKind)) {
+          targetType = 'chat';
+        } else if (/^(workspace|repositorio|repo)$/i.test(rawKind)) {
+          targetType = 'workspace';
+        }
+
+        const cleanedPrompt = text.replace(match[0], ' ').replace(/\s{2,}/g, ' ').trim();
+
+        return {
+          hasGlobalHint: true,
+          targetType,
+          targetName: rawTarget,
+          cleanedPrompt: cleanedPrompt || text
+        };
+      }
+    }
+
+    return {
+      hasGlobalHint: false,
+      targetType: null,
+      targetName: null,
+      cleanedPrompt: text
+    };
+  }
+
+  /**
+   * Resolves the target `cascadeId` from voice routing hints, available cascades, or active DOM state.
+   *
+   * @param {string} spokenText
+   * @param {Object} [options={}]
+   * @param {Array<Object>|Object} [options.cascades] Known cascades list or map
+   * @param {string} [options.activeCascadeId] Current active cascade ID fallback
+   * @param {Object} [options.win] Optional browser window object
+   * @returns {{
+   *   cascadeId: string,
+   *   targetHint: string|null,
+   *   targetType: 'project'|'chat'|'workspace'|null,
+   *   matched: boolean,
+   *   isGlobalRoute: boolean,
+   *   source: 'voice-hint'|'active-fallback'|'default'
+   * }}
+   */
+  static resolveTargetCascade(spokenText, options = {}) {
+    const hint = VoicePromptConditioner.extractRoutingHint(spokenText);
+    const win = options.win || (typeof window !== 'undefined' ? window : null);
+
+    // Determine fallback active cascade ID
+    let fallbackCascadeId = options.activeCascadeId || null;
+    if (!fallbackCascadeId && win) {
+      if (typeof win.__resolveCascadeId === 'function') {
+        const activeBadge = win.document?.querySelector?.('.antigravity-agent-badge') || null;
+        fallbackCascadeId = win.__resolveCascadeId(activeBadge);
+      }
+      if (!fallbackCascadeId && win.document?.querySelector) {
+        const cascadeEl = win.document.querySelector('[data-cascade-id]');
+        if (cascadeEl) {
+          fallbackCascadeId = cascadeEl.getAttribute('data-cascade-id');
+        }
+      }
+    }
+    const effectiveFallback = fallbackCascadeId || options.defaultCascadeId || 'default';
+
+    if (!hint.hasGlobalHint || !hint.targetName) {
+      return {
+        cascadeId: effectiveFallback,
+        targetHint: null,
+        targetType: null,
+        matched: false,
+        isGlobalRoute: false,
+        source: fallbackCascadeId ? 'active-fallback' : 'default'
+      };
+    }
+
+    const normalizedTarget = VoicePromptConditioner._normalizeSlug(hint.targetName);
+    const candidates = VoicePromptConditioner._collectCascadeCandidates(options.cascades, win);
+
+    for (const candidate of candidates) {
+      const idSlug = VoicePromptConditioner._normalizeSlug(candidate.id);
+      const nameSlug = VoicePromptConditioner._normalizeSlug(candidate.name);
+      const projectSlug = VoicePromptConditioner._normalizeSlug(candidate.project);
+      const titleSlug = VoicePromptConditioner._normalizeSlug(candidate.title);
+
+      if (
+        (idSlug && (idSlug === normalizedTarget || idSlug.includes(normalizedTarget))) ||
+        (nameSlug && (nameSlug === normalizedTarget || nameSlug.includes(normalizedTarget))) ||
+        (projectSlug && (projectSlug === normalizedTarget || projectSlug.includes(normalizedTarget))) ||
+        (titleSlug && (titleSlug === normalizedTarget || titleSlug.includes(normalizedTarget)))
+      ) {
+        return {
+          cascadeId: candidate.id,
+          targetHint: hint.targetName,
+          targetType: hint.targetType,
+          matched: true,
+          isGlobalRoute: true,
+          source: 'voice-hint'
+        };
+      }
+    }
+
+    return {
+      cascadeId: effectiveFallback,
+      targetHint: hint.targetName,
+      targetType: hint.targetType,
+      matched: false,
+      isGlobalRoute: true,
+      source: 'active-fallback'
+    };
+  }
+
+  /**
+   * Collects candidate cascade descriptors from options, window globals, and DOM nodes.
+   * @private
+   */
+  static _collectCascadeCandidates(cascadesOption, win) {
+    const list = [];
+
+    const pushCandidate = (id, meta = {}) => {
+      if (!id || typeof id !== 'string') return;
+      list.push({
+        id,
+        name: meta.name || meta.label || '',
+        title: meta.title || '',
+        project: meta.project || meta.workspace || ''
+      });
+    };
+
+    if (Array.isArray(cascadesOption)) {
+      for (const item of cascadesOption) {
+        if (typeof item === 'string') {
+          pushCandidate(item, { name: item });
+        } else if (item && typeof item === 'object') {
+          pushCandidate(item.cascadeId || item.id, item);
+        }
+      }
+    } else if (cascadesOption && typeof cascadesOption === 'object') {
+      for (const [id, meta] of Object.entries(cascadesOption)) {
+        pushCandidate(id, typeof meta === 'object' && meta ? meta : { name: String(meta) });
+      }
+    }
+
+    if (win) {
+      if (Array.isArray(win.__antigravityCascades)) {
+        for (const item of win.__antigravityCascades) {
+          if (item && (item.cascadeId || item.id)) {
+            pushCandidate(item.cascadeId || item.id, item);
+          }
+        }
+      } else if (win.__antigravityCascades && typeof win.__antigravityCascades === 'object') {
+        for (const [id, meta] of Object.entries(win.__antigravityCascades)) {
+          pushCandidate(id, typeof meta === 'object' && meta ? meta : { name: String(meta) });
+        }
+      }
+
+      if (win.document && typeof win.document.querySelectorAll === 'function') {
+        const nodes = win.document.querySelectorAll('[data-cascade-id]');
+        if (nodes && typeof nodes.forEach === 'function') {
+          nodes.forEach(node => {
+            const cId = node.getAttribute?.('data-cascade-id');
+            if (cId) {
+              pushCandidate(cId, {
+                name: node.getAttribute?.('data-chat-name') || node.getAttribute?.('data-project-name') || '',
+                title: node.getAttribute?.('data-chat-title') || node.getAttribute?.('title') || '',
+                project: node.getAttribute?.('data-project') || node.getAttribute?.('data-workspace') || ''
+              });
+            }
+          });
+        }
+      }
+    }
+
+    return list;
+  }
+
+  /**
+   * Normalizes a string for fuzzy project/chat identifier matching.
+   * @private
+   */
+  static _normalizeSlug(value = '') {
+    return String(value || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  /**
+   * Classifies a spoken prompt into a target mode (`PLAN`, `BUILD`, `DEBUG`, `RESEARCH`),
+   * resolves the best-fit Agent from `AGENT_REGISTRY`, and evaluates Gateman guardrails.
+   *
+   * @param {string} spokenText
+   * @returns {{
+   *   mode: 'PLAN'|'BUILD'|'DEBUG'|'RESEARCH',
+   *   effectiveMode: 'PLAN'|'BUILD',
+   *   agent: { id: string, name: string, color: string, levelLabel: string, effectiveMode: 'PLAN'|'BUILD', filePath: string },
+   *   gateman: {
+   *     triggered: boolean,
+   *     level: 'normal'|'elevated'|'strict',
+   *     guardrails: string[],
+   *     requiresApproval: boolean,
+   *     recommendedGateAgent: string|null
+   *   },
+   *   cavemanFocus: boolean|null
+   * }}
+   */
+  static classifyIntent(spokenText) {
+    const raw = String(spokenText || '').trim();
+    const routingHint = VoicePromptConditioner.extractRoutingHint(raw);
+    const text = routingHint.cleanedPrompt || raw;
+
+    // 1. Evaluate Gateman / architectural guardrail triggers
+    const gateman = VoicePromptConditioner.evaluateGateman(raw);
+
+    // 2. Detect Caveman / Focus modifier hints if spoken
+    let cavemanFocus = null;
+    if (/\b(modo\s+focus|modo\s+caveman|respuestas?\s+cortas?|sin\s+explicaciones\s+largas)\b/i.test(raw)) {
+      cavemanFocus = true;
+    } else if (/\b(modo\s+explicativo|explicaci[oó]n\s+detallada|paso\s+a\s+paso\s+detallado)\b/i.test(raw)) {
+      cavemanFocus = false;
+    }
+
+    if (!text) {
+      const defaultAgent = VoicePromptConditioner._buildAgentDescriptor('lead-architect', 'PLAN');
+      return {
+        mode: VOICE_MODES.PLAN,
+        effectiveMode: 'PLAN',
+        agent: defaultAgent,
+        gateman,
+        cavemanFocus
+      };
+    }
+
+    // 3. Check if the user explicitly named an agent role
+    let explicitAgentId = null;
+    let explicitMode = null;
+    for (const matcher of EXPLICIT_AGENT_MATCHERS) {
+      if (matcher.pattern.test(raw)) {
+        explicitAgentId = matcher.id;
+        explicitMode = matcher.mode;
+        break;
+      }
+    }
+
+    // 4. Score the 4 primary modes (PLAN, BUILD, DEBUG, RESEARCH)
+    const scores = {
+      PLAN: 0,
+      BUILD: 0,
+      DEBUG: 0,
+      RESEARCH: 0
+    };
+
+    for (const [modeKey, regexList] of Object.entries(MODE_PATTERNS)) {
+      for (const regex of regexList) {
+        const matches = text.match(new RegExp(regex.source, 'gi'));
+        if (matches) {
+          scores[modeKey] += matches.length;
+        }
+      }
+    }
+
+    // Leading imperative verb boost
+    const lower = text.toLowerCase();
+    if (/^(corrige|arregla|depura|fix|debug|audita|revisa\s+el\s+error|soluciona)\b/i.test(lower)) {
+      scores.DEBUG += 2;
+    } else if (/^(investiga|explora|busca|explica|expl[ií]came|analiza\s+el\s+contexto|d[oó]nde|c[oó]mo\s+funciona|por\s+qu[eé])\b/i.test(lower)) {
+      scores.RESEARCH += 2;
+    } else if (/^(dise[nñ]a|planifica|estructura|arquitectura|prop[oó]n|elabora\s+un\s+plan|c[oó]mo\s+estructurar)\b/i.test(lower)) {
+      scores.PLAN += 2;
+    } else if (/^(implementa|crea|escribe|agrega|a[nñ]ade|refactoriza|programa|actualiza|instala|ejecuta|construye|modifica|edita|haz)\b/i.test(lower)) {
+      scores.BUILD += 2;
+    }
+
+    // Determine winning mode
+    let resolvedMode = explicitMode || VOICE_MODES.PLAN;
+    const maxScore = Math.max(scores.DEBUG, scores.BUILD, scores.RESEARCH, scores.PLAN);
+
+    if (maxScore > 0) {
+      // Priority tie-breaking: DEBUG > BUILD > RESEARCH > PLAN when action verbs are specific
+      if (scores.DEBUG === maxScore) {
+        resolvedMode = VOICE_MODES.DEBUG;
+      } else if (scores.BUILD === maxScore && scores.PLAN < scores.BUILD) {
+        resolvedMode = VOICE_MODES.BUILD;
+      } else if (scores.RESEARCH === maxScore && scores.PLAN < scores.RESEARCH) {
+        resolvedMode = VOICE_MODES.RESEARCH;
+      } else {
+        resolvedMode = VOICE_MODES.PLAN;
+      }
+    }
+
+    const effectiveMode = (resolvedMode === VOICE_MODES.BUILD || resolvedMode === VOICE_MODES.DEBUG)
+      ? 'BUILD'
+      : 'PLAN';
+
+    // 5. Select target agent ID
+    let targetAgentId = explicitAgentId;
+    if (!targetAgentId) {
+      if (gateman.triggered && gateman.level === 'strict' && scores.BUILD === 0 && scores.PLAN === 0) {
+        targetAgentId = gateman.recommendedGateAgent || MODE_DEFAULT_AGENT_ID[resolvedMode];
+      } else if (resolvedMode === VOICE_MODES.BUILD && /\b(tdd|red[\s-]+green|test\s+unitario)\b/i.test(text)) {
+        targetAgentId = 'sdd-apply';
+      } else if (resolvedMode === VOICE_MODES.DEBUG && /\b(pr|pull\s+request|invariantes|clean\s+architecture|arquitectura\s+limpia|code\s+review)\b/i.test(text)) {
+        targetAgentId = 'code-reviewer';
+      } else if (resolvedMode === VOICE_MODES.DEBUG && /\b(seguridad|owasp|vulnerabilidad|zero\s+trust)\b/i.test(text)) {
+        targetAgentId = 'security-engineer';
+      } else {
+        targetAgentId = MODE_DEFAULT_AGENT_ID[resolvedMode] || 'lead-architect';
+      }
+    }
+
+    const agent = VoicePromptConditioner._buildAgentDescriptor(targetAgentId, effectiveMode);
+
+    return {
+      mode: resolvedMode,
+      effectiveMode,
+      agent,
+      gateman,
+      cavemanFocus
+    };
+  }
+
+  /**
+   * Alias for `classifyIntent`.
+   * @param {string} spokenText
+   */
+  static classifyVoiceIntent(spokenText) {
+    return VoicePromptConditioner.classifyIntent(spokenText);
+  }
+
+  /**
+   * Evaluates Gateman and architectural guardrail triggers on the spoken prompt.
+   *
+   * @param {string} text
+   * @returns {{
+   *   triggered: boolean,
+   *   level: 'normal'|'elevated'|'strict',
+   *   guardrails: string[],
+   *   requiresApproval: boolean,
+   *   recommendedGateAgent: string|null
+   * }}
+   */
+  static evaluateGateman(text) {
+    const raw = String(text || '').trim();
+    if (!raw) {
+      return {
+        triggered: false,
+        level: 'normal',
+        guardrails: [],
+        requiresApproval: false,
+        recommendedGateAgent: null
+      };
+    }
+
+    const guardrails = [];
+    let highestLevel = 'normal';
+    let recommendedGateAgent = null;
+
+    for (const rule of GATEMAN_RULES) {
+      if (rule.pattern.test(raw)) {
+        guardrails.push(rule.id);
+        if (rule.level === 'strict') {
+          highestLevel = 'strict';
+          recommendedGateAgent = rule.recommendedAgent;
+        } else if (rule.level === 'elevated' && highestLevel !== 'strict') {
+          highestLevel = 'elevated';
+          recommendedGateAgent = recommendedGateAgent || rule.recommendedAgent;
+        }
+      }
+    }
+
+    const triggered = guardrails.length > 0;
+    return {
+      triggered,
+      level: highestLevel,
+      guardrails,
+      requiresApproval: highestLevel === 'strict',
+      recommendedGateAgent
+    };
+  }
+
+  /**
+   * Builds a normalized agent descriptor matching `AgentSelectorMod` expectations.
+   * @private
+   */
+  static _buildAgentDescriptor(agentId, effectiveMode = 'PLAN') {
+    if (agentId === 'auto') {
+      return {
+        id: AUTO_AGENT.id,
+        name: 'Auto (Plan/Build)',
+        color: getAgentColor('auto'),
+        levelLabel: AUTO_AGENT.levelLabel,
+        effectiveMode,
+        filePath: ''
+      };
+    }
+    if (agentId === 'default') {
+      return {
+        id: DEFAULT_AGENT.id,
+        name: 'Sin Agente',
+        color: getAgentColor('default'),
+        levelLabel: DEFAULT_AGENT.levelLabel,
+        effectiveMode,
+        filePath: ''
+      };
+    }
+
+    const found = AGENT_REGISTRY.find(a => a.id === agentId) || AGENT_REGISTRY[0];
+    return {
+      id: found.id,
+      name: found.name,
+      color: getAgentColor(found.id),
+      levelLabel: found.levelLabel,
+      effectiveMode,
+      filePath: found.filePath || ''
+    };
+  }
+
+  /**
+   * Full conditioning pipeline from raw voice transcript or `<talker_agent_context>` block.
+   *
+   * @param {string|Object} transcriptOrContext
+   * @param {Object} [options={}]
+   * @returns {Object} Conditioning result
+   */
+  condition(transcriptOrContext, options = {}) {
+    return VoicePromptConditioner.condition(transcriptOrContext, {
+      defaultCascadeId: this.defaultCascadeId,
+      cascades: options.cascades || this.cascades,
+      ...options
+    });
+  }
+
+  /**
+   * Static full conditioning pipeline.
+   *
+   * @param {string|Object} transcriptOrContext
+   * @param {Object} [options={}]
+   * @returns {Object} Conditioning result
+   */
+  static condition(transcriptOrContext, options = {}) {
+    const spokenText = VoicePromptConditioner.extractSpokenText(transcriptOrContext);
+    if (!spokenText) {
+      return {
+        conditioned: false,
+        reason: 'empty_prompt',
+        spokenText: '',
+        cleanedPrompt: '',
+        mode: VOICE_MODES.PLAN,
+        effectiveMode: 'PLAN',
+        agent: VoicePromptConditioner._buildAgentDescriptor('default', 'PLAN'),
+        gateman: VoicePromptConditioner.evaluateGateman(''),
+        gatemanTriggered: false,
+        routing: {
+          cascadeId: options.activeCascadeId || options.defaultCascadeId || 'default',
+          targetHint: null,
+          targetType: null,
+          matched: false,
+          isGlobalRoute: false,
+          source: 'default'
+        },
+        cascadeId: options.activeCascadeId || options.defaultCascadeId || 'default',
+        cavemanFocus: null
+      };
+    }
+
+    const routingHint = VoicePromptConditioner.extractRoutingHint(spokenText);
+    const routing = VoicePromptConditioner.resolveTargetCascade(spokenText, options);
+    const classification = VoicePromptConditioner.classifyIntent(spokenText);
+
+    return {
+      conditioned: true,
+      spokenText,
+      cleanedPrompt: routingHint.cleanedPrompt,
+      mode: classification.mode,
+      effectiveMode: classification.effectiveMode,
+      agent: classification.agent,
+      gateman: classification.gateman,
+      gatemanTriggered: classification.gateman.triggered,
+      routing,
+      cascadeId: routing.cascadeId,
+      cavemanFocus: classification.cavemanFocus
+    };
+  }
+
+  /**
+   * Instance helper to attach `__conditionAgentFromVoice` to a browser/DOM window.
+   *
+   * @param {Object} win
+   * @param {Object} [options={}]
+   * @returns {Function|null} The attached `__conditionAgentFromVoice` function.
+   */
+  attachToWindow(win, options = {}) {
+    return VoicePromptConditioner.attachToWindow(win, {
+      defaultCascadeId: this.defaultCascadeId,
+      cascades: options.cascades || this.cascades,
+      ...options
+    });
+  }
+
+  /**
+   * Attaches `win.__conditionAgentFromVoice(transcriptOrContext, callOptions)` to the given window.
+   * Automatically updates `__antigravity_selected_agents_map` in `localStorage`, updates the active
+   * cascade's agent badge in the DOM, and dispatches the `'antigravity:voice-conditioned'` CustomEvent.
+   *
+   * @param {Object} win
+   * @param {Object} [options={}]
+   * @returns {Function|null}
+   */
+  static attachToWindow(win, options = {}) {
+    if (!win || typeof win !== 'object') {
+      return null;
+    }
+
+    const conditionFn = function __conditionAgentFromVoice(transcriptOrContext, callOptions = {}) {
+      const mergedOptions = {
+        ...options,
+        ...callOptions,
+        win
+      };
+
+      const result = VoicePromptConditioner.condition(transcriptOrContext, mergedOptions);
+      if (!result.conditioned) {
+        return result;
+      }
+
+      const cascadeId = result.cascadeId || 'default';
+      const agentPayload = {
+        id: result.agent.id,
+        name: result.agent.name,
+        color: result.agent.color,
+        filePath: result.agent.filePath || '',
+        effectiveMode: result.effectiveMode,
+        mode: result.mode,
+        conditionedBy: 'voice',
+        gateman: result.gateman
+      };
+
+      // 1. Update in-memory active agents map on window
+      win.__antigravityActiveAgents = win.__antigravityActiveAgents || {};
+      win.__antigravityActiveAgents[cascadeId] = agentPayload;
+
+      // 2. Persist in localStorage (__antigravity_selected_agents_map & __antigravity_selected_agent)
+      const storage = win.localStorage || (typeof localStorage !== 'undefined' ? localStorage : null);
+      if (storage && typeof storage.getItem === 'function' && typeof storage.setItem === 'function') {
+        try {
+          const rawMap = storage.getItem('__antigravity_selected_agents_map');
+          const map = rawMap ? JSON.parse(rawMap) : {};
+          map[cascadeId] = agentPayload;
+          storage.setItem('__antigravity_selected_agents_map', JSON.stringify(map));
+          storage.setItem('__antigravity_selected_agent', JSON.stringify(agentPayload));
+        } catch {
+          // Ignore storage quota or serialization errors
+        }
+      }
+
+      // 3. Update Caveman / Focus mode if explicitly requested by voice
+      if (typeof result.cavemanFocus === 'boolean' && typeof win.__toggleCavemanMode === 'function') {
+        try {
+          win.__toggleCavemanMode(result.cavemanFocus);
+        } catch {
+          // Ignore DOM errors
+        }
+      }
+
+      // 4. Update matching agent badge(s) in DOM
+      const doc = win.document;
+      if (doc && typeof doc.querySelectorAll === 'function') {
+        const badges = Array.from(doc.querySelectorAll('.antigravity-agent-badge, #antigravity-agent-badge'));
+        let updatedAny = false;
+
+        for (const badge of badges) {
+          const badgeCascadeEl = typeof badge.closest === 'function' ? badge.closest('[data-cascade-id]') : null;
+          const badgeCascadeId = (badgeCascadeEl && typeof badgeCascadeEl.getAttribute === 'function')
+            ? badgeCascadeEl.getAttribute('data-cascade-id')
+            : (typeof win.__resolveCascadeId === 'function' ? win.__resolveCascadeId(badge) : null);
+
+          if (!badgeCascadeId || badgeCascadeId === cascadeId || badges.length === 1) {
+            VoicePromptConditioner._applyBadgeDomUpdate(win, badge, agentPayload, result);
+            updatedAny = true;
+          }
+        }
+
+        if (!updatedAny && badges.length > 0) {
+          VoicePromptConditioner._applyBadgeDomUpdate(win, badges[0], agentPayload, result);
+        }
+      }
+
+      // 5. Dispatch CustomEvent 'antigravity:voice-conditioned'
+      VoicePromptConditioner._dispatchVoiceEvent(win, result);
+
+      return result;
+    };
+
+    win.__conditionAgentFromVoice = conditionFn;
+    return conditionFn;
+  }
+
+  /**
+   * Updates an `.antigravity-agent-badge` element with the conditioned agent and mode state.
+   * @private
+   */
+  static _applyBadgeDomUpdate(win, badge, agentPayload, result) {
+    if (!badge) return;
+
+    if (typeof win.__applyAgentToBadge === 'function') {
+      win.__applyAgentToBadge(badge, agentPayload);
+    } else {
+      if (typeof badge.setAttribute === 'function') {
+        badge.setAttribute('data-agent-id', agentPayload.id);
+        badge.setAttribute('data-effective-mode', result.effectiveMode);
+        badge.setAttribute('title', `Modo Activo: ${agentPayload.name} (${result.mode})`);
+      }
+      if (badge.style) {
+        badge.style.borderColor = `${agentPayload.color}66`;
+        badge.style.boxShadow = `0 0 8px ${agentPayload.color}33`;
+      }
+      if (typeof badge.querySelector === 'function') {
+        const label = badge.querySelector('.antigravity-active-agent-name, #antigravity-active-agent-name');
+        if (label) {
+          label.textContent = agentPayload.name;
+        }
+        const dot = badge.querySelector('.antigravity-active-agent-dot, #antigravity-active-agent-dot');
+        if (dot && dot.style) {
+          dot.style.background = agentPayload.color;
+          dot.style.boxShadow = `0 0 6px ${agentPayload.color}`;
+        }
+      }
+    }
+
+    if (typeof badge.setAttribute === 'function') {
+      badge.setAttribute('data-voice-mode', result.mode);
+      badge.setAttribute('data-gateman-active', result.gatemanTriggered ? 'true' : 'false');
+    }
+  }
+
+  /**
+   * Dispatches `antigravity:voice-conditioned` on the target window/document.
+   * @private
+   */
+  static _dispatchVoiceEvent(win, detail) {
+    const eventName = 'antigravity:voice-conditioned';
+    let evt = null;
+
+    try {
+      const CustomEventCtor = win.CustomEvent || (typeof CustomEvent !== 'undefined' ? CustomEvent : null);
+      if (typeof CustomEventCtor === 'function') {
+        evt = new CustomEventCtor(eventName, {
+          detail,
+          bubbles: true,
+          cancelable: false
+        });
+      }
+    } catch {
+      evt = null;
+    }
+
+    if (!evt) {
+      evt = {
+        type: eventName,
+        detail,
+        bubbles: true,
+        cancelable: false
+      };
+    }
+
+    if (typeof win.dispatchEvent === 'function') {
+      win.dispatchEvent(evt);
+    } else if (win.document && typeof win.document.dispatchEvent === 'function') {
+      win.document.dispatchEvent(evt);
+    }
+  }
 }
-
 
 
 
@@ -8153,7 +8964,6 @@ function renderVoiceButtonHtml(options = {}) {
 
 const ALLOWED_GLOBAL_SLOTS = new Set(['menubar-actions', 'floating-dock']);
 
-{ TextSanitizer, ActionNarratorService, XttsLocalAdapter, VoicePromptConditioner, VOICE_MODES };
 
 class VoiceAssistantMod extends AntigravityMod {
   constructor(options = {}) {
@@ -8182,7 +8992,7 @@ class VoiceAssistantMod extends AntigravityMod {
     this.ttsAdapter = options.ttsAdapter || new XttsLocalAdapter(options.ttsOptions || {});
     this.promptConditioner = options.promptConditioner || new VoicePromptConditioner(options.conditionerOptions || {});
 
-    this.cachedCss = "/* Voice Assistant Mod Styles */\n.antigravity-slot-chat-input-actions {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  margin-right: 2px;\n}\n\n.antigravity-voice-assistant-wrapper {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  position: relative;\n}\n\n.antigravity-voice-assistant-btn {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  width: 1.75rem;\n  height: 1.75rem;\n  padding: 0.375rem;\n  border-radius: 9999px;\n  background: transparent;\n  color: var(--secondary-foreground, #ececec);\n  border: none;\n  cursor: pointer;\n  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;\n  user-select: none;\n  outline: none;\n}\n\n.antigravity-voice-assistant-btn:hover {\n  background-color: var(--secondary, rgba(255, 255, 255, 0.08));\n}\n\n.antigravity-voice-assistant-btn:focus-visible {\n  outline: 2px solid var(--ring, #3b82f6);\n  outline-offset: 1px;\n}\n\n.antigravity-voice-assistant-btn.state-muted {\n  opacity: 0.45;\n}\n\n.antigravity-voice-assistant-btn.state-speaking {\n  color: #38bdf8;\n  background-color: rgba(56, 189, 248, 0.12);\n}\n\n.antigravity-voice-assistant-btn.state-speaking .wave-1 {\n  animation: voiceWavePulse 1.2s infinite ease-in-out;\n}\n\n.antigravity-voice-assistant-btn.state-speaking .wave-2 {\n  animation: voiceWavePulse 1.2s infinite ease-in-out 0.3s;\n}\n\n@keyframes voiceWavePulse {\n  0%, 100% {\n    opacity: 0.3;\n    transform: scale(0.95);\n    transform-origin: center;\n  }\n  50% {\n    opacity: 1;\n    transform: scale(1.1);\n    transform-origin: center;\n  }\n}\n\n/* ==========================================================================\n   Generalized HTML5 Box-in-Box Voice Mode HUD (Top-Centered Across Views)\n   Box 0: viewport-anchor (.antigravity-voice-toast-docked / .agy-voice-hud)\n   Box 1: frame           ([data-voice-hud-box=\"frame\"])\n   Box 2: surface         ([data-voice-hud-box=\"surface\"] / [data-testid=\"live-docked\"])\n   Box 3: header/toolbar  ([data-voice-hud-box=\"header\"] / [role=\"toolbar\"])\n            -> identity | controls-well | actions | drawer\n   Box 4: tray/alerts     ([data-voice-hud-box=\"tray\"] / mic warning / composer)\n   ========================================================================== */\n\n/* Box 0: Top-Centered Viewport Anchor (Chats, History, and Customizations HUD) */\n.antigravity-voice-toast-docked,\nbody .antigravity-voice-toast-docked,\n:root .antigravity-voice-toast-docked,\n.agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"],\nbody .agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"] {\n  --agy-voice-hud-top: 4px;\n  --agy-voice-outer-radius: var(--nux-radius-lg, 16px);\n  --agy-voice-inner-pad: 4px;\n  --agy-voice-inner-radius: calc(var(--agy-voice-outer-radius) - var(--agy-voice-inner-pad));\n  position: fixed !important;\n  inset-block-start: var(--agy-voice-hud-top) !important;\n  inset-inline: 0 !important;\n  top: var(--agy-voice-hud-top) !important;\n  left: 0 !important;\n  right: 0 !important;\n  bottom: auto !important;\n  margin-inline: auto !important;\n  margin-bottom: 0 !important;\n  width: fit-content !important;\n  min-width: min(260px, calc(100vw - 32px)) !important;\n  max-width: min(440px, max(260px, calc(100vw - 320px)), calc(100vw - 48px)) !important;\n  height: auto !important;\n  padding: 0 !important;\n  transform: none !important;\n  z-index: 9998 !important;\n  box-sizing: border-box !important;\n  overflow: visible !important;\n  pointer-events: auto !important;\n  transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease;\n}\n\n/* Offset cleanly below the 35px menubar when present (Chats & Customizations) */\nbody:has([data-testid=\"title-menu-bar\"]) .antigravity-voice-toast-docked,\n:root:has([data-testid=\"title-menu-bar\"]) .antigravity-voice-toast-docked,\nbody:has([data-testid=\"title-menu-bar\"]) .agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"] {\n  --agy-voice-hud-top: 39px;\n}\n\n/* Multi-layer variant wrappers stack vertically (Header surface above Alert tray) */\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"],\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"dock\"],\nbody .antigravity-voice-toast-docked.agy-voice-hud,\n.agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"] {\n  display: flex !important;\n  flex-direction: column !important;\n  align-items: center !important;\n  gap: 6px !important;\n  pointer-events: none !important;\n}\n\n/* Direct compact/minimized bar keeps pill ergonomics centered at the Top HUD */\n.antigravity-voice-toast-docked.is-minimized,\nbody .antigravity-voice-toast-docked.is-minimized,\n.antigravity-voice-toast-docked[data-minimized=\"true\"],\nbody .antigravity-voice-toast-docked[data-minimized=\"true\"],\n.antigravity-voice-toast-docked.minimized,\nbody .antigravity-voice-toast-docked.minimized {\n  position: fixed !important;\n  inset-block-start: var(--agy-voice-hud-top, 4px) !important;\n  inset-inline: 0 !important;\n  top: var(--agy-voice-hud-top, 4px) !important;\n  left: 0 !important;\n  right: 0 !important;\n  bottom: auto !important;\n  margin-inline: auto !important;\n  transform: none !important;\n  border-radius: var(--nux-radius-pill, 9999px) !important;\n  transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease;\n}\n\n/* Box 1: Frame (normalizes native teleprompter inner wrapper & standalone frame) */\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] > div,\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"frame\"],\n.agy-voice-hud [data-voice-hud-box=\"frame\"] {\n  display: flex !important;\n  flex-direction: column !important;\n  align-items: center !important;\n  gap: 6px !important;\n  width: 100% !important;\n  box-sizing: border-box !important;\n  pointer-events: none !important;\n}\n\n/* Order Box 2 (Surface) above native <c6> inline mic warning inside teleprompter slot */\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] > div > [data-testid=\"live-docked\"],\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"surface\"] {\n  order: 1 !important;\n  width: 100% !important;\n  pointer-events: auto !important;\n}\n\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] > div > :not([data-testid=\"live-docked\"]) {\n  order: 2 !important;\n  justify-content: center !important;\n  margin: 0 !important;\n  pointer-events: auto !important;\n}\n\n/* Box 2: Onyx 4-Sided Glass Card Surface (neutralizes bottom-composer border-b-0 / pb-8) */\nbody .antigravity-voice-toast-docked [data-testid=\"live-docked\"],\nbody[data-agy-theme][data-newux-theme=\"onyx\"] .agy-live-dock-slot.antigravity-voice-toast-docked [data-testid=\"live-docked\"],\nbody[data-agy-theme][data-newux-theme=\"onyx\"] .agy-live-dock-slot:has(+ .surface-composer).antigravity-voice-toast-docked [data-testid=\"live-docked\"],\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"surface\"],\n.agy-voice-hud [data-voice-hud-box=\"surface\"] {\n  background-color: var(--glass, rgba(24, 24, 28, 0.88)) !important;\n  -webkit-backdrop-filter: blur(20px) saturate(1.6) !important;\n  backdrop-filter: blur(20px) saturate(1.6) !important;\n  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14)) !important;\n  border-radius: var(--agy-voice-outer-radius, 16px) !important;\n  box-shadow:\n    inset 0 1px 0 var(--glass-highlight, rgba(255, 255, 255, 0.08)),\n    var(--glass-shadow, 0 14px 34px -10px rgba(0, 0, 0, 0.45)) !important;\n  padding: var(--agy-voice-inner-pad, 4px) 6px !important;\n  margin: 0 !important;\n  box-sizing: border-box !important;\n  pointer-events: auto !important;\n}\n\n/* Minimize bottom padding when standalone/teleprompter is collapsed into a slim HUD capsule */\nbody .antigravity-voice-toast-docked.is-minimized [data-testid=\"live-docked\"],\nbody .antigravity-voice-toast-docked[data-minimized=\"true\"] [data-testid=\"live-docked\"],\n.agy-voice-hud.is-minimized [data-voice-hud-box=\"surface\"] {\n  border-radius: var(--nux-radius-pill, 9999px) !important;\n  padding: 3px 6px !important;\n}\n\n/* Box 3: Header Strip & Inner Pills / Recessed Toolbar Well */\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"header\"],\nbody .antigravity-voice-toast-docked [data-testid=\"voice-call-controls\"],\n.agy-voice-hud [data-voice-hud-box=\"header\"] {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  gap: 8px !important;\n  width: 100% !important;\n  min-width: 0 !important;\n  box-sizing: border-box !important;\n  pointer-events: auto !important;\n}\n\n.agy-voice-hud [data-voice-hud-box=\"identity\"],\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"identity\"] {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-width: 0;\n  padding-inline: 6px;\n  font-size: 12px;\n  font-weight: 500;\n  color: var(--muted-foreground, #a1a1aa);\n}\n\n.agy-voice-hud [data-voice-hud-box=\"toolbar\"] {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  min-width: 0;\n}\n\n.agy-voice-hud [data-voice-hud-box=\"controls-well\"],\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"controls-well\"] {\n  display: inline-flex;\n  align-items: center;\n  gap: 4px;\n  padding: 2px;\n  border-radius: var(--nux-radius-pill, 9999px);\n  background-color: var(--onyx-well, rgba(255, 255, 255, 0.055));\n  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));\n}\n\n.agy-voice-hud [data-voice-hud-box=\"actions\"],\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"actions\"] {\n  display: inline-flex;\n  align-items: center;\n  gap: 4px;\n}\n\n.agy-voice-hud .agy-voice-hud-separator {\n  inline-size: 1px;\n  block-size: 14px;\n  background-color: var(--border, rgba(255, 255, 255, 0.16));\n}\n\n/* Native Floating Voice Dock pill row in Chats History & Customizations */\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"dock\"] {\n  cursor: default !important;\n}\n\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"dock\"] > div:last-child {\n  order: 1 !important;\n  pointer-events: auto !important;\n}\n\n/* Box 3C: Bounded Transcript / Composer Drawer inside Top HUD */\nbody .antigravity-voice-toast-docked [data-testid=\"live-docked-replies\"],\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"drawer\"],\n.agy-voice-hud [data-voice-hud-box=\"drawer\"] {\n  max-height: min(40vh, 260px) !important;\n  overflow-y: auto !important;\n  overscroll-behavior: contain;\n  border-radius: var(--agy-voice-inner-radius, 12px);\n  pointer-events: auto !important;\n}\n\n.agy-voice-hud.is-minimized [data-voice-hud-box=\"drawer\"],\nbody .antigravity-voice-toast-docked.is-minimized [data-testid=\"live-docked-replies\"] {\n  display: none !important;\n}\n\n/* Box 4: Downward Flip for Mic Disconnected, Mic Switched, Error Tips & Quick Composer */\nbody .antigravity-voice-toast-docked [data-testid=\"voice-mic-warning\"],\nbody .antigravity-voice-toast-docked [data-testid=\"voice-mic-switched\"],\nbody .antigravity-voice-toast-docked [data-testid=\"voice-error-tip\"],\nbody .antigravity-voice-toast-docked [data-testid=\"voice-dock-composer\"],\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"alert\"],\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"dock\"] > [role=\"status\"],\n.agy-voice-hud [data-voice-hud-box=\"tray\"] {\n  top: calc(100% + 8px) !important;\n  bottom: auto !important;\n  left: 50% !important;\n  right: auto !important;\n  translate: -50% 0 !important;\n  margin-top: 0 !important;\n  margin-bottom: 0 !important;\n  transform-origin: top center !important;\n  max-width: min(360px, calc(100vw - 32px)) !important;\n  z-index: 9999 !important;\n  pointer-events: auto !important;\n}\n\n/* In-flow <c6> mic warning inside teleprompter slot sits right below surface card */\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] [data-testid=\"voice-mic-warning\"]:not(.absolute),\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] [data-testid=\"voice-mic-switched\"]:not(.absolute),\n.agy-voice-hud [data-voice-hud-box=\"tray\"] > [data-voice-hud-box=\"alert\"] {\n  position: relative !important;\n  top: auto !important;\n  left: auto !important;\n  translate: none !important;\n  order: 2 !important;\n  pointer-events: auto !important;\n}\n\n/* Dictation Speed Panel & Mic Switcher Popover Portals stay above Top HUD (z > 9998) */\nbody [data-popover-popup]:has([data-testid=\"voice-speed-panel\"]),\nbody [class*=\"z-[6000]\"]:has([data-testid=\"voice-speed-panel\"]),\nbody [data-popover-popup]:has([data-testid=\"voice-mic-warning-switch\"]),\nbody [class*=\"z-[6000]\"]:has([data-testid=\"voice-mic-warning-switch\"]) {\n  z-index: 10020 !important;\n  pointer-events: auto !important;\n}\n\n/* Interactive Control Ergonomics, ARIA Pressed State & Accessibility */\n.antigravity-voice-toast-docked button,\nbody .antigravity-voice-toast-docked button,\n.antigravity-voice-toast-docked input,\nbody .antigravity-voice-toast-docked input,\n.antigravity-voice-toast-docked textarea,\nbody .antigravity-voice-toast-docked textarea,\n.agy-voice-hud button,\n.agy-voice-hud input {\n  min-inline-size: 24px;\n  min-block-size: 24px;\n  pointer-events: auto !important;\n}\n\n.agy-voice-hud button[aria-pressed=\"true\"] {\n  background-color: var(--secondary, rgba(255, 255, 255, 0.16));\n  color: var(--foreground, #ffffff);\n  box-shadow: inset 0 0 0 1px var(--border, rgba(255, 255, 255, 0.22));\n}\n\n.antigravity-voice-toast-docked button:focus-visible,\nbody .antigravity-voice-toast-docked button:focus-visible,\n.agy-voice-hud button:focus-visible {\n  outline: 2px solid var(--ring, #3b82f6);\n  outline-offset: 2px;\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .antigravity-voice-toast-docked,\n  body .antigravity-voice-toast-docked,\n  .agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"] {\n    transition: none !important;\n  }\n}\n\n@media (forced-colors: active) {\n  body .antigravity-voice-toast-docked [data-voice-hud-box=\"surface\"],\n  .agy-voice-hud [data-voice-hud-box=\"surface\"] {\n    border: 1px solid CanvasText !important;\n    background-color: Canvas !important;\n    color: CanvasText !important;\n  }\n}\n\n";
+    this.cachedCss = "/* Voice Assistant Mod Styles (Top HUD) */\r\n\r\n/* ==========================================================================\r\n   Generalized HTML5 Box-in-Box Voice Mode HUD (Top-Centered Across Views)\r\n   Box 0: viewport-anchor (.antigravity-voice-toast-docked / .agy-voice-hud)\r\n   Box 1: frame           ([data-voice-hud-box=\"frame\"])\r\n   Box 2: surface         ([data-voice-hud-box=\"surface\"] / [data-testid=\"live-docked\"])\r\n   Box 3: header/toolbar  ([data-voice-hud-box=\"header\"] / [role=\"toolbar\"])\r\n            -> identity | controls-well | actions | drawer\r\n   Box 4: tray/alerts     ([data-voice-hud-box=\"tray\"] / mic warning / composer)\r\n   ========================================================================== */\r\n\r\n/* Box 0: Top-Centered Viewport Anchor (Chats, History, and Customizations HUD) */\r\n.antigravity-voice-toast-docked,\r\nbody .antigravity-voice-toast-docked,\r\n:root .antigravity-voice-toast-docked,\r\n.agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"],\r\nbody .agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"] {\r\n  --agy-voice-hud-top: 4px;\r\n  --agy-voice-outer-radius: var(--nux-radius-lg, 16px);\r\n  --agy-voice-inner-pad: 4px;\r\n  --agy-voice-inner-radius: calc(var(--agy-voice-outer-radius) - var(--agy-voice-inner-pad));\r\n  position: fixed !important;\r\n  inset-block-start: var(--agy-voice-hud-top) !important;\r\n  inset-inline: 0 !important;\r\n  top: var(--agy-voice-hud-top) !important;\r\n  left: 0 !important;\r\n  right: 0 !important;\r\n  bottom: auto !important;\r\n  margin-inline: auto !important;\r\n  margin-bottom: 0 !important;\r\n  width: fit-content !important;\r\n  min-width: min(260px, calc(100vw - 32px)) !important;\r\n  max-width: min(440px, max(260px, calc(100vw - 320px)), calc(100vw - 48px)) !important;\r\n  height: auto !important;\r\n  padding: 0 !important;\r\n  transform: none !important;\r\n  z-index: 9998 !important;\r\n  box-sizing: border-box !important;\r\n  overflow: visible !important;\r\n  pointer-events: auto !important;\r\n  transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease;\r\n}\r\n\r\n/* Offset cleanly below the 35px menubar when present (Chats & Customizations) */\r\nbody:has([data-testid=\"title-menu-bar\"]) .antigravity-voice-toast-docked,\r\n:root:has([data-testid=\"title-menu-bar\"]) .antigravity-voice-toast-docked,\r\nbody:has([data-testid=\"title-menu-bar\"]) .agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"] {\r\n  --agy-voice-hud-top: 39px;\r\n}\r\n\r\n/* Multi-layer variant wrappers stack vertically (Header surface above Alert tray) */\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"],\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"dock\"],\r\nbody .antigravity-voice-toast-docked.agy-voice-hud,\r\n.agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"] {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n/* Direct compact/minimized bar keeps pill ergonomics centered at the Top HUD */\r\n.antigravity-voice-toast-docked.is-minimized,\r\nbody .antigravity-voice-toast-docked.is-minimized,\r\n.antigravity-voice-toast-docked[data-minimized=\"true\"],\r\nbody .antigravity-voice-toast-docked[data-minimized=\"true\"],\r\n.antigravity-voice-toast-docked.minimized,\r\nbody .antigravity-voice-toast-docked.minimized {\r\n  position: fixed !important;\r\n  inset-block-start: var(--agy-voice-hud-top, 4px) !important;\r\n  inset-inline: 0 !important;\r\n  top: var(--agy-voice-hud-top, 4px) !important;\r\n  left: 0 !important;\r\n  right: 0 !important;\r\n  bottom: auto !important;\r\n  margin-inline: auto !important;\r\n  transform: none !important;\r\n  border-radius: var(--nux-radius-pill, 9999px) !important;\r\n  transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease;\r\n}\r\n\r\n/* Box 1: Frame (normalizes native teleprompter inner wrapper & standalone frame) */\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] > div,\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"frame\"],\r\n.agy-voice-hud [data-voice-hud-box=\"frame\"] {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  width: 100% !important;\r\n  box-sizing: border-box !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n/* Order Box 2 (Surface) above native <c6> inline mic warning inside teleprompter slot */\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] > div > [data-testid=\"live-docked\"],\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"surface\"] {\r\n  order: 1 !important;\r\n  width: 100% !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] > div > :not([data-testid=\"live-docked\"]) {\r\n  order: 2 !important;\r\n  justify-content: center !important;\r\n  margin: 0 !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n/* Box 2: Onyx 4-Sided Glass Card Surface (neutralizes bottom-composer border-b-0 / pb-8) */\r\nbody .antigravity-voice-toast-docked [data-testid=\"live-docked\"],\r\nbody[data-agy-theme][data-newux-theme=\"onyx\"] .agy-live-dock-slot.antigravity-voice-toast-docked [data-testid=\"live-docked\"],\r\nbody[data-agy-theme][data-newux-theme=\"onyx\"] .agy-live-dock-slot:has(+ .surface-composer).antigravity-voice-toast-docked [data-testid=\"live-docked\"],\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"surface\"],\r\n.agy-voice-hud [data-voice-hud-box=\"surface\"] {\r\n  background-color: var(--glass, rgba(24, 24, 28, 0.88)) !important;\r\n  -webkit-backdrop-filter: blur(20px) saturate(1.6) !important;\r\n  backdrop-filter: blur(20px) saturate(1.6) !important;\r\n  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14)) !important;\r\n  border-radius: var(--agy-voice-outer-radius, 16px) !important;\r\n  box-shadow:\r\n    inset 0 1px 0 var(--glass-highlight, rgba(255, 255, 255, 0.08)),\r\n    var(--glass-shadow, 0 14px 34px -10px rgba(0, 0, 0, 0.45)) !important;\r\n  padding: var(--agy-voice-inner-pad, 4px) 6px !important;\r\n  margin: 0 !important;\r\n  box-sizing: border-box !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n/* Minimize bottom padding when standalone/teleprompter is collapsed into a slim HUD capsule */\r\nbody .antigravity-voice-toast-docked.is-minimized [data-testid=\"live-docked\"],\r\nbody .antigravity-voice-toast-docked[data-minimized=\"true\"] [data-testid=\"live-docked\"],\r\n.agy-voice-hud.is-minimized [data-voice-hud-box=\"surface\"] {\r\n  border-radius: var(--nux-radius-pill, 9999px) !important;\r\n  padding: 3px 6px !important;\r\n}\r\n\r\n/* Box 3: Header Strip & Inner Pills / Recessed Toolbar Well */\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"header\"],\r\nbody .antigravity-voice-toast-docked [data-testid=\"voice-call-controls\"],\r\n.agy-voice-hud [data-voice-hud-box=\"header\"] {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 8px !important;\r\n  width: 100% !important;\r\n  min-width: 0 !important;\r\n  box-sizing: border-box !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n.agy-voice-hud [data-voice-hud-box=\"identity\"],\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"identity\"] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  min-width: 0;\r\n  padding-inline: 6px;\r\n  font-size: 12px;\r\n  font-weight: 500;\r\n  color: var(--muted-foreground, #a1a1aa);\r\n}\r\n\r\n.agy-voice-hud [data-voice-hud-box=\"toolbar\"] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  min-width: 0;\r\n}\r\n\r\n.agy-voice-hud [data-voice-hud-box=\"controls-well\"],\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"controls-well\"] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 4px;\r\n  padding: 2px;\r\n  border-radius: var(--nux-radius-pill, 9999px);\r\n  background-color: var(--onyx-well, rgba(255, 255, 255, 0.055));\r\n  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));\r\n}\r\n\r\n.agy-voice-hud [data-voice-hud-box=\"actions\"],\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"actions\"] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 4px;\r\n}\r\n\r\n.agy-voice-hud .agy-voice-hud-separator {\r\n  inline-size: 1px;\r\n  block-size: 14px;\r\n  background-color: var(--border, rgba(255, 255, 255, 0.16));\r\n}\r\n\r\n/* Native Floating Voice Dock pill row in Chats History & Customizations */\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"dock\"] {\r\n  cursor: default !important;\r\n}\r\n\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"dock\"] > div:last-child {\r\n  order: 1 !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n/* Box 3C: Bounded Transcript / Composer Drawer inside Top HUD */\r\nbody .antigravity-voice-toast-docked [data-testid=\"live-docked-replies\"],\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"drawer\"],\r\n.agy-voice-hud [data-voice-hud-box=\"drawer\"] {\r\n  max-height: min(40vh, 260px) !important;\r\n  overflow-y: auto !important;\r\n  overscroll-behavior: contain;\r\n  border-radius: var(--agy-voice-inner-radius, 12px);\r\n  pointer-events: auto !important;\r\n}\r\n\r\n.agy-voice-hud.is-minimized [data-voice-hud-box=\"drawer\"],\r\nbody .antigravity-voice-toast-docked.is-minimized [data-testid=\"live-docked-replies\"] {\r\n  display: none !important;\r\n}\r\n\r\n/* Box 4: Downward Flip for Mic Disconnected, Mic Switched, Error Tips & Quick Composer */\r\nbody .antigravity-voice-toast-docked [data-testid=\"voice-mic-warning\"],\r\nbody .antigravity-voice-toast-docked [data-testid=\"voice-mic-switched\"],\r\nbody .antigravity-voice-toast-docked [data-testid=\"voice-error-tip\"],\r\nbody .antigravity-voice-toast-docked [data-testid=\"voice-dock-composer\"],\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"alert\"],\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"dock\"] > [role=\"status\"],\r\n.agy-voice-hud [data-voice-hud-box=\"tray\"] {\r\n  top: calc(100% + 8px) !important;\r\n  bottom: auto !important;\r\n  left: 50% !important;\r\n  right: auto !important;\r\n  translate: -50% 0 !important;\r\n  margin-top: 0 !important;\r\n  margin-bottom: 0 !important;\r\n  transform-origin: top center !important;\r\n  max-width: min(360px, calc(100vw - 32px)) !important;\r\n  z-index: 9999 !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n/* In-flow <c6> mic warning inside teleprompter slot sits right below surface card */\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] [data-testid=\"voice-mic-warning\"]:not(.absolute),\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] [data-testid=\"voice-mic-switched\"]:not(.absolute),\r\n.agy-voice-hud [data-voice-hud-box=\"tray\"] > [data-voice-hud-box=\"alert\"] {\r\n  position: relative !important;\r\n  top: auto !important;\r\n  left: auto !important;\r\n  translate: none !important;\r\n  order: 2 !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n/* Dictation Speed Panel & Mic Switcher Popover Portals stay above Top HUD (z > 9998) */\r\nbody [data-popover-popup]:has([data-testid=\"voice-speed-panel\"]),\r\nbody [class*=\"z-[6000]\"]:has([data-testid=\"voice-speed-panel\"]),\r\nbody [data-popover-popup]:has([data-testid=\"voice-mic-warning-switch\"]),\r\nbody [class*=\"z-[6000]\"]:has([data-testid=\"voice-mic-warning-switch\"]) {\r\n  z-index: 10020 !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n/* Interactive Control Ergonomics, ARIA Pressed State & Accessibility */\r\n.antigravity-voice-toast-docked button,\r\nbody .antigravity-voice-toast-docked button,\r\n.antigravity-voice-toast-docked input,\r\nbody .antigravity-voice-toast-docked input,\r\n.antigravity-voice-toast-docked textarea,\r\nbody .antigravity-voice-toast-docked textarea,\r\n.agy-voice-hud button,\r\n.agy-voice-hud input {\r\n  min-inline-size: 24px;\r\n  min-block-size: 24px;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n.agy-voice-hud button[aria-pressed=\"true\"] {\r\n  background-color: var(--secondary, rgba(255, 255, 255, 0.16));\r\n  color: var(--foreground, #ffffff);\r\n  box-shadow: inset 0 0 0 1px var(--border, rgba(255, 255, 255, 0.22));\r\n}\r\n\r\n.antigravity-voice-toast-docked button:focus-visible,\r\nbody .antigravity-voice-toast-docked button:focus-visible,\r\n.agy-voice-hud button:focus-visible {\r\n  outline: 2px solid var(--ring, #3b82f6);\r\n  outline-offset: 2px;\r\n}\r\n\r\n@media (prefers-reduced-motion: reduce) {\r\n  .antigravity-voice-toast-docked,\r\n  body .antigravity-voice-toast-docked,\r\n  .agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"] {\r\n    transition: none !important;\r\n  }\r\n}\r\n\r\n@media (forced-colors: active) {\r\n  body .antigravity-voice-toast-docked [data-voice-hud-box=\"surface\"],\r\n  .agy-voice-hud [data-voice-hud-box=\"surface\"] {\r\n    border: 1px solid CanvasText !important;\r\n    background-color: Canvas !important;\r\n    color: CanvasText !important;\r\n  }\r\n}\r\n\r\n";
   }
 
   get id() {
@@ -8202,16 +9012,13 @@ class VoiceAssistantMod extends AntigravityMod {
   }
 
   /**
-   * Renders the voice assistant button markup and scoped stylesheet.
+   * Returns scoped Voice Mode HUD stylesheets without mounting a chat-input speaker button.
    * @param {Object} [context={}]
    * @returns {{ html: string, css: string }}
    */
   render(context = {}) {
-    const state = context.voiceState || 'idle';
-    const enabled = context.voiceEnabled !== false;
-
     return {
-      html: renderVoiceButtonHtml({ state, enabled }),
+      html: '',
       css: this.cachedCss
     };
   }
