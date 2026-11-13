@@ -68,7 +68,7 @@ export class AgentSyncServer {
 
   /**
    * Updates an agent entry for a specific conversation cascadeId.
-   * Preserves existing modifiers (like caveman) unless explicitly specified.
+   * Preserves existing modifiers (like caveman and adhd) unless explicitly specified.
    * @param {string} cascadeId
    * @param {Object} agent
    */
@@ -81,17 +81,21 @@ export class AgentSyncServer {
     const caveman = (agent.caveman !== undefined)
       ? !!agent.caveman
       : ((modifiers.caveman !== undefined) ? !!modifiers.caveman : (existing.caveman ?? false));
+    const adhd = (agent.adhd !== undefined)
+      ? !!agent.adhd
+      : ((modifiers.adhd !== undefined) ? !!modifiers.adhd : (existing.adhd ?? caveman));
 
     current[cascadeId] = {
       ...agent,
-      modifiers: { ...existingModifiers, ...modifiers, caveman },
-      caveman
+      modifiers: { ...existingModifiers, ...modifiers, caveman, adhd },
+      caveman,
+      adhd
     };
     this.writeActiveAgents(current);
   }
 
   /**
-   * Updates modifier flags (such as caveman mode) for a specific cascadeId.
+   * Updates modifier flags (such as caveman and adhd focus modes) for a specific cascadeId.
    * @param {string} cascadeId
    * @param {Object} modifiers
    */
@@ -104,11 +108,15 @@ export class AgentSyncServer {
     const caveman = (modifiers.caveman !== undefined)
       ? !!modifiers.caveman
       : (existing.caveman ?? false);
+    const adhd = (modifiers.adhd !== undefined)
+      ? !!modifiers.adhd
+      : (modifiers.caveman !== undefined ? !!modifiers.caveman : (existing.adhd ?? caveman));
 
     current[cascadeId] = {
       ...existing,
-      modifiers: nextModifiers,
-      caveman
+      modifiers: { ...nextModifiers, caveman, adhd },
+      caveman,
+      adhd
     };
     this.writeActiveAgents(current);
   }

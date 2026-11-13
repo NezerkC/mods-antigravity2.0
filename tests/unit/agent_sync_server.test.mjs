@@ -97,12 +97,14 @@ describe('AgentSyncServer', () => {
     assert.equal(fetchData.success, true);
   });
 
-  it('updates modifiers (caveman mode) for cascade and handles POST /active-agent/modifier', async () => {
+  it('updates modifiers (caveman and adhd mode) for cascade and handles POST /active-agent/modifier', async () => {
     // 1. Direct method call
     server.updateModifiersForCascade('cascade-123', { caveman: true });
     let onDisk = server.readActiveAgents();
     assert.equal(onDisk['cascade-123'].caveman, true);
+    assert.equal(onDisk['cascade-123'].adhd, true);
     assert.equal(onDisk['cascade-123'].modifiers.caveman, true);
+    assert.equal(onDisk['cascade-123'].modifiers.adhd, true);
 
     // 2. HTTP POST endpoint
     const postRes = await fetch('http://127.0.0.1:53913/active-agent/modifier', {
@@ -110,7 +112,7 @@ describe('AgentSyncServer', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         cascadeId: 'cascade-456',
-        modifiers: { caveman: true }
+        modifiers: { caveman: true, adhd: true }
       })
     });
     assert.equal(postRes.status, 200);
@@ -120,7 +122,9 @@ describe('AgentSyncServer', () => {
 
     onDisk = server.readActiveAgents();
     assert.equal(onDisk['cascade-456'].caveman, true);
+    assert.equal(onDisk['cascade-456'].adhd, true);
     assert.equal(onDisk['cascade-456'].modifiers.caveman, true);
+    assert.equal(onDisk['cascade-456'].modifiers.adhd, true);
 
     // 3. Toggle back to false
     const toggleOff = await fetch('http://127.0.0.1:53913/active-agent/modifier', {
@@ -128,13 +132,15 @@ describe('AgentSyncServer', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         cascadeId: 'cascade-456',
-        modifiers: { caveman: false }
+        modifiers: { caveman: false, adhd: false }
       })
     });
     assert.equal(toggleOff.status, 200);
     onDisk = server.readActiveAgents();
     assert.equal(onDisk['cascade-456'].caveman, false);
+    assert.equal(onDisk['cascade-456'].adhd, false);
     assert.equal(onDisk['cascade-456'].modifiers.caveman, false);
+    assert.equal(onDisk['cascade-456'].modifiers.adhd, false);
   });
 
   it('rejects POST /active-agent payloads larger than 64KB with 413', async () => {
