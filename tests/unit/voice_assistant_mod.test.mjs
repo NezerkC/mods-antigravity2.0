@@ -6,7 +6,6 @@ import {
   ActionNarratorService,
   XttsLocalAdapter
 } from '../../mods/voice-assistant/index.js';
-import { renderVoiceButtonHtml } from '../../mods/voice-assistant/components/VoiceButtonHtml.js';
 
 test('VoiceAssistantMod - loads correct manifest metadata', () => {
   const mod = new VoiceAssistantMod();
@@ -16,25 +15,14 @@ test('VoiceAssistantMod - loads correct manifest metadata', () => {
   assert.equal(mod.priority, 40);
 });
 
-test('VoiceAssistantMod - renders voice button and scoped styles', () => {
+test('VoiceAssistantMod - renders Top HUD styles without mounting a speaker button', () => {
   const mod = new VoiceAssistantMod();
   const output = mod.render({ voiceState: 'idle' });
 
-  assert.ok(output.html);
-  assert.ok(output.html.includes('antigravity-voice-assistant-btn'));
-  assert.ok(output.html.includes('data-mod-action="toggle-voice"'));
-  assert.ok(output.html.includes('aria-label="Asistente de Voz (TTS)"'));
-  assert.ok(output.css.includes('.antigravity-voice-assistant-btn'));
-});
-
-test('renderVoiceButtonHtml - handles speaking and muted states correctly', () => {
-  const speakingHtml = renderVoiceButtonHtml({ state: 'speaking', enabled: true });
-  assert.ok(speakingHtml.includes('state-speaking'));
-  assert.ok(speakingHtml.includes('data-voice-state="speaking"'));
-
-  const mutedHtml = renderVoiceButtonHtml({ state: 'idle', enabled: false });
-  assert.ok(mutedHtml.includes('state-muted'));
-  assert.ok(mutedHtml.includes('mute-slash'));
+  assert.equal(output.html, '');
+  assert.ok(!output.html.includes('antigravity-voice-assistant-btn'));
+  assert.ok(!output.css.includes('.antigravity-voice-assistant-btn'));
+  assert.ok(output.css.includes('.antigravity-voice-toast-docked'));
 });
 
 test('TextSanitizer - cleans code blocks, markdown links, images and URLs', () => {

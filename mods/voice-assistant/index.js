@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AntigravityMod } from '../../framework/sdk/AntigravityMod.js';
-import { renderVoiceButtonHtml } from './components/VoiceButtonHtml.js';
 import { TextSanitizer } from './services/TextSanitizer.js';
 import { ActionNarratorService } from './services/ActionNarratorService.js';
 import { XttsLocalAdapter } from './services/XttsLocalAdapter.js';
@@ -70,16 +69,13 @@ export class VoiceAssistantMod extends AntigravityMod {
   }
 
   /**
-   * Renders the voice assistant button markup and scoped stylesheet.
+   * Returns scoped Voice Mode HUD stylesheets without mounting a chat-input speaker button.
    * @param {Object} [context={}]
    * @returns {{ html: string, css: string }}
    */
   render(context = {}) {
-    const state = context.voiceState || 'idle';
-    const enabled = context.voiceEnabled !== false;
-
     return {
-      html: renderVoiceButtonHtml({ state, enabled }),
+      html: '',
       css: this.cachedCss
     };
   }
