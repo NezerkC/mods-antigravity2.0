@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import vm from 'node:vm';
 
 import {
   BASE_MODELS,
@@ -331,6 +332,82 @@ describe('AgentSyncServer - Model Slots State & HTTP Endpoints', () => {
     assert.equal(onDisk.planner, 'gemini-3.8-flash-high');
     assert.equal(onDisk.builder, 'gpt-oss-120b-medium');
   });
+
+  it('readSubagentSessionSlots returns null for unknown session and {} when empty', () => {
+    assert.equal(server.readSubagentSessionSlots('unknown-session'), null);
+    assert.deepEqual(server.readSubagentSessionSlots(), {});
+  });
+
+  it('updateSubagentSessionSlots persists per-session slots atomically and preserves global slots', () => {
+    const savedA = server.updateSubagentSessionSlots('session-alpha', {
+      builder: 'claude-opus-5-5-high'
+    });
+    assert.equal(savedA.builder, 'claude-opus-5-5-high');
+    assert.equal(savedA.planner, 'gemini-3.8-flash-high');
+    assert.ok(savedA.updatedAt);
+
+    const savedB = server.updateSubagentSessionSlots('session-beta', {
+      planner: 'gemini-4-argon-low',
+      builder: 'gemini-4-hydrogen-low'
+    });
+    assert.equal(savedB.planner, 'gemini-4-argon-low');
+    assert.equal(savedB.builder, 'gemini-4-hydrogen-low');
+
+    // Global update must preserve sessions dictionary
+    server.updateModelSlots({ builder: 'claude-sonnet-5-5-medium' });
+    const allSessions = server.readSubagentSessionSlots();
+    assert.equal(allSessions['session-alpha'].builder, 'claude-opus-5-5-high');
+    assert.equal(allSessions['session-beta'].builder, 'gemini-4-hydrogen-low');
+  });
+
+  it('handles HTTP GET /subagent-model-slots for single session and all sessions map', async () => {
+    const singleRes = await fetch(`http://127.0.0.1:${testPort}/subagent-model-slots?sessionId=session-alpha`);
+    assert.equal(singleRes.status, 200);
+    const singleData = await singleRes.json();
+    assert.equal(singleData.builder, 'claude-opus-5-5-high');
+
+    const unknownRes = await fetch(`http://127.0.0.1:${testPort}/subagent-model-slots?sessionId=does-not-exist`);
+    assert.equal(unknownRes.status, 200);
+    const unknownData = await unknownRes.json();
+    assert.equal(unknownData.isDefault, true);
+    assert.equal(unknownData.builder, 'claude-sonnet-5-5-medium');
+
+    const allRes = await fetch(`http://127.0.0.1:${testPort}/subagent-model-slots`);
+    assert.equal(allRes.status, 200);
+    const allData = await allRes.json();
+    assert.equal(allData['session-alpha'].builder, 'claude-opus-5-5-high');
+    assert.equal(allData['session-beta'].builder, 'gemini-4-hydrogen-low');
+  });
+
+  it('handles HTTP POST /subagent-model-slots and validates payload', async () => {
+    const res = await fetch(`http://127.0.0.1:${testPort}/subagent-model-slots`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId: 'session-gamma',
+        slots: {
+          planner: 'gemini-4-argon-high',
+          builder: 'gpt-oss-120b-medium'
+        }
+      })
+    });
+
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.success, true);
+    assert.equal(data.sessionId, 'session-gamma');
+    assert.equal(data.slots.builder, 'gpt-oss-120b-medium');
+
+    const persisted = server.readSubagentSessionSlots('session-gamma');
+    assert.equal(persisted.builder, 'gpt-oss-120b-medium');
+
+    const badRes = await fetch(`http://127.0.0.1:${testPort}/subagent-model-slots`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: '', slots: null })
+    });
+    assert.equal(badRes.status, 400);
+  });
 });
 
 describe('ModDaemon & ModLoader - Integration', () => {
@@ -347,6 +424,7 @@ describe('ModDaemon & ModLoader - Integration', () => {
     const loader = new ModLoader();
     const script = loader.buildInjectionPayload({});
 
+    assert.doesNotThrow(() => new Function(script), 'Generated client injection payload must be valid JS');
     assert.ok(
       script.includes('__BASE_MODELS'),
       'Script must expose __BASE_MODELS'
@@ -376,8 +454,292 @@ describe('ModDaemon & ModLoader - Integration', () => {
       'Script must contain __renderSubagentModelPill'
     );
     assert.ok(
+      script.includes('__resolveSubagentSessionId'),
+      'Script must contain __resolveSubagentSessionId'
+    );
+    assert.ok(
+      script.includes('__getSavedSubagentSessionSlots'),
+      'Script must contain __getSavedSubagentSessionSlots'
+    );
+    assert.ok(
+      script.includes('__saveSubagentSessionSlots'),
+      'Script must contain __saveSubagentSessionSlots'
+    );
+    assert.ok(
+      script.includes('__antigravity_subagent_model_slots_map'),
+      'Script must use __antigravity_subagent_model_slots_map storage key'
+    );
+    assert.ok(
       script.includes('mod-toggle-model-slots'),
       'Script must contain mod-toggle-model-slots toggle wiring'
+    );
+  });
+
+  it('ModLoader runtime isolates and syncs per-session subagent badges and menubar Builder slot', () => {
+    const loader = new ModLoader();
+    const script = loader.buildInjectionPayload({
+      modelSlots: {
+        planner: 'gemini-4-argon-high',
+        builder: 'gemini-4-hydrogen-high',
+        sessions: {
+          'conv-session-1': { planner: 'gemini-4-argon-high', builder: 'claude-opus-5-5-high' }
+        }
+      }
+    });
+
+    function createMockEl(tag, attrs = {}, parent = null) {
+      const el = {
+        tagName: tag.toUpperCase(),
+        nodeType: 1,
+        attributes: { ...attrs },
+        children: [],
+        parentElement: parent,
+        style: {},
+        classList: {
+          _set: new Set((attrs.class || '').split(/\s+/).filter(Boolean)),
+          add(c) { this._set.add(c); },
+          remove(c) { this._set.delete(c); },
+          contains(c) { return this._set.has(c); },
+          toggle(c, force) {
+            if (force === undefined) {
+              if (this._set.has(c)) { this._set.delete(c); return false; }
+              this._set.add(c); return true;
+            }
+            if (force) { this._set.add(c); return true; }
+            this._set.delete(c); return false;
+          }
+        },
+        textContent: '',
+        _innerHTML: '',
+        setAttribute(k, v) {
+          this.attributes[k] = String(v);
+          if (k === 'class') {
+            this.classList._set = new Set(String(v).split(/\s+/).filter(Boolean));
+          }
+        },
+        getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attributes, k) ? this.attributes[k] : null; },
+        hasAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attributes, k); },
+        removeAttribute(k) { delete this.attributes[k]; },
+        appendChild(child) { child.parentElement = this; this.children.push(child); return child; },
+        remove() {
+          if (this.parentElement) {
+            this.parentElement.children = this.parentElement.children.filter(c => c !== this);
+            this.parentElement = null;
+          }
+        },
+        after(node) {
+          if (!this.parentElement) return;
+          const idx = this.parentElement.children.indexOf(this);
+          node.parentElement = this.parentElement;
+          this.parentElement.children.splice(idx + 1, 0, node);
+        },
+        contains(target) {
+          if (target === this) return true;
+          return this.children.some(c => c.contains(target));
+        },
+        closest(selector) {
+          const selectors = selector.split(',').map(s => s.trim());
+          let cur = this;
+          while (cur) {
+            for (const s of selectors) {
+              const attrMatch = s.match(/^\[([^\]]+)\]$/);
+              if (attrMatch && cur.hasAttribute(attrMatch[1])) return cur;
+              if (s.startsWith('.') && cur.classList.contains(s.slice(1))) return cur;
+            }
+            cur = cur.parentElement;
+          }
+          return null;
+        },
+        querySelectorAll(selector) {
+          const results = [];
+          const selectors = selector.split(',').map(s => s.trim());
+          const matchSingle = (node, sel) => {
+            if (sel === 'span') return node.tagName === 'SPAN';
+            if (sel === 'div[title="Subagent"]') return node.tagName === 'DIV' && node.getAttribute('title') === 'Subagent';
+            if (sel.startsWith('.antigravity-model-slot-btn[data-slot-role="')) {
+              const role = sel.match(/data-slot-role="([^"]+)"/)?.[1];
+              return node.classList.contains('antigravity-model-slot-btn') && node.getAttribute('data-slot-role') === role;
+            }
+            if (sel.startsWith('.')) return node.classList.contains(sel.slice(1));
+            if (sel.startsWith('#')) return node.getAttribute('id') === sel.slice(1);
+            return false;
+          };
+          const walk = (node) => {
+            for (const child of node.children) {
+              if (selectors.some(sel => matchSingle(child, sel))) results.push(child);
+              walk(child);
+            }
+          };
+          walk(this);
+          return results;
+        },
+        querySelector(selector) { return this.querySelectorAll(selector)[0] || null; },
+        addEventListener() {}
+      };
+      Object.defineProperty(el, 'innerHTML', {
+        get() { return this._innerHTML; },
+        set(val) {
+          this._innerHTML = val;
+          this.children = [];
+          if (val && val.includes('antigravity-subagent-model-pill')) {
+            const pill = createMockEl('span', { id: 'antigravity-subagent-model-pill', class: 'antigravity-subagent-model-pill' }, el);
+            const dot = createMockEl('span', { class: 'subagent-model-dot' }, pill);
+            const label = createMockEl('span', { class: 'subagent-model-label' }, pill);
+            const modelIdMatch = val.match(/data-model-id="([^"]+)"/);
+            if (modelIdMatch) pill.setAttribute('data-model-id', modelIdMatch[1]);
+            const labelMatch = val.match(/<span class="subagent-model-label">([^<]*)<\/span>/);
+            if (labelMatch) label.textContent = labelMatch[1];
+            pill.appendChild(dot);
+            pill.appendChild(label);
+            el.children.push(pill);
+          }
+        }
+      });
+      Object.defineProperty(el, 'firstElementChild', {
+        get() { return this.children[0] || null; }
+      });
+      return el;
+    }
+
+    const head = createMockEl('head');
+    const body = createMockEl('body');
+    const docEl = createMockEl('html');
+    docEl.appendChild(head);
+    docEl.appendChild(body);
+
+    // Menubar Builder button
+    const builderBtn = createMockEl('button', { class: 'antigravity-model-slot-btn', 'data-slot-role': 'builder' }, body);
+    const builderDot = createMockEl('span', { class: 'model-slot-dot' }, builderBtn);
+    const builderVal = createMockEl('span', { class: 'model-slot-value' }, builderBtn);
+    builderBtn.appendChild(builderDot);
+    builderBtn.appendChild(builderVal);
+    body.appendChild(builderBtn);
+
+    // Container 1 with explicit data-conversation-id
+    const container1 = createMockEl('div', { 'data-conversation-id': 'conv-session-1' }, body);
+    const badge1 = createMockEl('div', { title: 'Subagent' }, container1);
+    const span1 = createMockEl('span', {}, badge1);
+    span1.textContent = 'self';
+    badge1.appendChild(span1);
+    container1.appendChild(badge1);
+    body.appendChild(container1);
+
+    // Container 2 with data-cascade-id
+    const container2 = createMockEl('div', { 'data-cascade-id': 'cascade-session-2' }, body);
+    const badge2 = createMockEl('div', { title: 'Subagent' }, container2);
+    const span2 = createMockEl('span', {}, badge2);
+    span2.textContent = 'self';
+    badge2.appendChild(span2);
+    container2.appendChild(badge2);
+    body.appendChild(container2);
+
+    // Container 3 with NO id attribute (should receive stable generated data-subagent-session-id)
+    const badge3 = createMockEl('div', { title: 'Subagent' }, body);
+    const span3 = createMockEl('span', {}, badge3);
+    span3.textContent = 'self';
+    badge3.appendChild(span3);
+    body.appendChild(badge3);
+
+    const store = new Map();
+    const fetchCalls = [];
+    const documentMock = {
+      head,
+      body,
+      documentElement: docEl,
+      activeElement: badge1,
+      getElementById(id) { return docEl.querySelector(`#${id}`); },
+      querySelector(sel) { return docEl.querySelector(sel); },
+      querySelectorAll(sel) { return docEl.querySelectorAll(sel); },
+      createElement(tag) { return createMockEl(tag); },
+      addEventListener() {}
+    };
+    const windowMock = {
+      location: { pathname: '/', search: '' },
+      innerWidth: 1280,
+      document: documentMock,
+      ResizeObserver: class { observe() {} disconnect() {} },
+      MutationObserver: class { observe() {} disconnect() {} }
+    };
+    windowMock.window = windowMock;
+
+    const sandbox = vm.createContext({
+      window: windowMock,
+      document: documentMock,
+      localStorage: {
+        getItem(k) { return store.has(k) ? store.get(k) : null; },
+        setItem(k, v) { store.set(k, String(v)); },
+        removeItem(k) { store.delete(k); }
+      },
+      fetch(url, opts) {
+        fetchCalls.push({ url, opts });
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      },
+      ResizeObserver: windowMock.ResizeObserver,
+      MutationObserver: windowMock.MutationObserver,
+      setTimeout,
+      clearTimeout,
+      setInterval: () => 0,
+      clearInterval: () => {}
+    });
+
+    vm.runInContext(script, sandbox);
+
+    // 1. Session ID resolution checks
+    assert.equal(windowMock.__resolveSubagentSessionId(badge1), 'conv-session-1');
+    assert.equal(windowMock.__resolveSubagentSessionId(badge2), 'cascade-session-2');
+    const generatedId1 = windowMock.__resolveSubagentSessionId(badge3);
+    const generatedId2 = windowMock.__resolveSubagentSessionId(badge3);
+    assert.ok(generatedId1 && generatedId1.startsWith('subagent-'));
+    assert.equal(generatedId1, generatedId2, 'Generated session id must remain stable across calls');
+    assert.equal(badge3.getAttribute('data-subagent-session-id'), generatedId1);
+
+    // URL fallback check when element has no container id
+    windowMock.location.pathname = '/c/url-path-session';
+    const bareEl = createMockEl('div', {});
+    assert.equal(windowMock.__resolveSubagentSessionId(bareEl), 'url-path-session');
+    windowMock.location.pathname = '/';
+    windowMock.location.search = '?conversationId=query-session-99';
+    assert.equal(windowMock.__resolveSubagentSessionId(bareEl), 'query-session-99');
+    windowMock.location.search = '';
+
+    // 2. Sync badges: badge1 uses server-hydrated Opus 5.5 High, badge2/badge3 initialize with global Hydrogen High
+    windowMock.__syncSubagentModelBadges();
+
+    const pill1 = badge1.querySelector('.antigravity-subagent-model-pill');
+    const pill2 = badge2.querySelector('.antigravity-subagent-model-pill');
+    assert.ok(pill1, 'badge1 must render pill');
+    assert.ok(pill2, 'badge2 must render pill');
+    assert.equal(pill1.getAttribute('data-session-id'), 'conv-session-1');
+    assert.equal(pill1.getAttribute('data-model-id'), 'claude-opus-5-5-high');
+    assert.equal(pill1.querySelector('.subagent-model-label').textContent, 'Opus 5.5 High');
+
+    assert.equal(pill2.getAttribute('data-session-id'), 'cascade-session-2');
+    assert.equal(pill2.getAttribute('data-model-id'), 'gemini-4-hydrogen-high');
+    assert.equal(pill2.querySelector('.subagent-model-label').textContent, 'Hydrogen High');
+
+    // 3. Menubar Builder button must reflect active/focused badge1 (Opus 5.5 High)
+    windowMock.__syncModelSlotsUI();
+    assert.equal(builderBtn.getAttribute('data-model-id'), 'claude-opus-5-5-high');
+    assert.equal(builderVal.textContent, 'Opus 5.5 High');
+
+    // 4. Switching focus to badge2 updates menubar Builder button symmetrically
+    documentMock.activeElement = badge2;
+    windowMock.__syncModelSlotsUI();
+    assert.equal(builderBtn.getAttribute('data-model-id'), 'gemini-4-hydrogen-high');
+    assert.equal(builderVal.textContent, 'Hydrogen High');
+
+    // 5. Selecting a model via __selectModelForSlot while badge2 is focused persists to badge2 only
+    windowMock.__selectModelForSlot('builder', 'gpt-oss-120b-medium');
+    assert.equal(pill2.getAttribute('data-model-id'), 'gpt-oss-120b-medium');
+    assert.equal(pill2.querySelector('.subagent-model-label').textContent, 'GPT-OSS 120B');
+    assert.equal(pill1.getAttribute('data-model-id'), 'claude-opus-5-5-high', 'badge1 must stay isolated from badge2 change');
+
+    const savedMap = JSON.parse(store.get('__antigravity_subagent_model_slots_map'));
+    assert.equal(savedMap['cascade-session-2'].builder, 'gpt-oss-120b-medium');
+    assert.equal(windowMock.__getSavedSubagentSessionSlots('conv-session-1').builder, 'claude-opus-5-5-high');
+    assert.ok(
+      fetchCalls.some(c => c.url === 'http://127.0.0.1:53912/subagent-model-slots' && c.opts.method === 'POST'),
+      'Must dispatch POST to /subagent-model-slots'
     );
   });
 });

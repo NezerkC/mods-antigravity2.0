@@ -558,6 +558,10 @@ export class ModLoader {
         window.__BASE_MODELS = ${JSON.stringify(BASE_MODELS)};
         window.__MODEL_CATALOG = ${JSON.stringify(MODEL_CATALOG)};
         window.__DEFAULT_MODEL_SLOTS = ${JSON.stringify(DEFAULT_MODEL_SLOTS)};
+        window.__antigravitySubagentSessionSlots = Object.assign(
+          window.__antigravitySubagentSessionSlots || {},
+          ${JSON.stringify((context.modelSlots && context.modelSlots.sessions) ? context.modelSlots.sessions : {})}
+        );
         window.__getModelById = function(modelId, catalog) { const list = catalog || window.__MODEL_CATALOG || []; return list.find(m => m.id === modelId) || list[0]; };
         window.getModelById = window.__getModelById;
         window.__renderModelSlotDropdownHtml = ${renderModelSlotDropdownHtml.toString()};
@@ -576,25 +580,269 @@ export class ModLoader {
           return { ...window.__DEFAULT_MODEL_SLOTS };
         };
 
-        window.__syncSubagentModelBadges = function() {
-          const slots = (typeof window.__getSavedModelSlots === 'function')
-            ? window.__getSavedModelSlots()
-            : { builder: 'gemini-4-hydrogen-high' };
-          const builderModelId = slots.builder || 'gemini-4-hydrogen-high';
-          const model = (typeof window.__getModelById === 'function')
-            ? window.__getModelById(builderModelId)
-            : { id: builderModelId, name: builderModelId, shortName: builderModelId, color: '#34d399' };
+        window.__resolveSubagentSessionId = function(el) {
+          if (el && typeof el.closest === 'function') {
+            const convEl = el.closest('[data-conversation-id]');
+            const convId = convEl ? convEl.getAttribute('data-conversation-id') : null;
+            if (convId) return convId;
 
-          let badges = [];
-          try {
-            badges = Array.from(document.querySelectorAll('div[title="Subagent"], .text-secondary-foreground:has(> span)'));
-          } catch (e) {
-            badges = Array.from(document.querySelectorAll('div[title="Subagent"], .text-secondary-foreground'));
+            const cascadeEl = el.closest('[data-cascade-id]');
+            const cascadeId = cascadeEl ? cascadeEl.getAttribute('data-cascade-id') : null;
+            if (cascadeId) return cascadeId;
+
+            const existingEl = el.closest('[data-subagent-session-id]');
+            const existingId = existingEl ? existingEl.getAttribute('data-subagent-session-id') : null;
+            if (existingId) return existingId;
+          } else if (el && typeof el.getAttribute === 'function') {
+            const directConv = el.getAttribute('data-conversation-id');
+            if (directConv) return directConv;
+            const directCascade = el.getAttribute('data-cascade-id');
+            if (directCascade) return directCascade;
+            const directSession = el.getAttribute('data-subagent-session-id');
+            if (directSession) return directSession;
           }
+
+          const urlPath = (typeof window !== 'undefined' && window.location && window.location.pathname)
+            ? window.location.pathname
+            : '';
+          const pathParts = urlPath.split('/c/');
+          const urlPathId = (pathParts.length > 1 && pathParts[1]) ? pathParts[1].split('/')[0].split('?')[0] : null;
+          if (urlPathId) return urlPathId;
+
+          const urlSearch = (typeof window !== 'undefined' && window.location && window.location.search)
+            ? window.location.search
+            : '';
+          const searchMatch = urlSearch.match(/[?&](?:conversationId|focused)=([0-9a-zA-Z_-]+)/);
+          if (searchMatch && searchMatch[1]) return searchMatch[1];
+
+          if (!el) return null;
+
+          const generatedId = 'subagent-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+          if (typeof el.setAttribute === 'function') {
+            const target = (typeof el.closest === 'function' && el.closest('[data-subagent-container], .subagent-container')) || el;
+            target.setAttribute('data-subagent-session-id', generatedId);
+          }
+          return generatedId;
+        };
+
+        window.__hasSavedSubagentSessionSlots = function(sessionId) {
+          if (!sessionId) return false;
+          try {
+            const rawMap = localStorage.getItem('__antigravity_subagent_model_slots_map');
+            if (rawMap) {
+              const map = JSON.parse(rawMap);
+              if (map && typeof map === 'object' && map[sessionId] && typeof map[sessionId] === 'object') {
+                return true;
+              }
+            }
+          } catch (e) {}
+          const serverSessions = window.__antigravitySubagentSessionSlots;
+          return Boolean(
+            serverSessions &&
+            typeof serverSessions === 'object' &&
+            serverSessions[sessionId] &&
+            typeof serverSessions[sessionId] === 'object'
+          );
+        };
+
+        window.__getSavedSubagentSessionSlots = function(sessionId) {
+          const globalSlots = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+          if (!sessionId) {
+            return { ...globalSlots };
+          }
+          try {
+            const rawMap = localStorage.getItem('__antigravity_subagent_model_slots_map');
+            if (rawMap) {
+              const map = JSON.parse(rawMap);
+              if (map && typeof map === 'object' && map[sessionId] && typeof map[sessionId] === 'object') {
+                return { ...globalSlots, ...map[sessionId] };
+              }
+            }
+          } catch (e) {}
+          try {
+            const serverSessions = window.__antigravitySubagentSessionSlots;
+            if (serverSessions && typeof serverSessions === 'object' && serverSessions[sessionId] && typeof serverSessions[sessionId] === 'object') {
+              return { ...globalSlots, ...serverSessions[sessionId] };
+            }
+          } catch (e) {}
+          return { ...globalSlots };
+        };
+
+        window.__saveSubagentSessionSlots = function(sessionId, slots) {
+          if (!sessionId || !slots || typeof slots !== 'object') return null;
+          const globalSlots = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+
+          let map = {};
+          try {
+            const rawMap = localStorage.getItem('__antigravity_subagent_model_slots_map');
+            if (rawMap) {
+              const parsed = JSON.parse(rawMap);
+              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                map = parsed;
+              }
+            }
+          } catch (e) {}
+
+          const existing = (map[sessionId] && typeof map[sessionId] === 'object')
+            ? map[sessionId]
+            : ((window.__antigravitySubagentSessionSlots && window.__antigravitySubagentSessionSlots[sessionId]) || {});
+
+          const nextSession = {
+            ...existing,
+            ...slots,
+            planner: slots.planner || existing.planner || globalSlots.planner,
+            builder: slots.builder || existing.builder || globalSlots.builder,
+            updatedAt: Date.now()
+          };
+
+          map[sessionId] = nextSession;
+          window.__antigravitySubagentSessionSlots = window.__antigravitySubagentSessionSlots || {};
+          window.__antigravitySubagentSessionSlots[sessionId] = nextSession;
+
+          try {
+            localStorage.setItem('__antigravity_subagent_model_slots_map', JSON.stringify(map));
+          } catch (e) {}
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/subagent-model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  sessionId: sessionId,
+                  slots: nextSession
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+
+          return nextSession;
+        };
+
+        window.__isElementVisible = function(el) {
+          if (!el) return false;
+          let cur = el;
+          while (cur && cur.nodeType === 1) {
+            if (cur.hasAttribute && cur.hasAttribute('hidden')) return false;
+            if (cur.style && (cur.style.display === 'none' || cur.style.visibility === 'hidden')) return false;
+            if (typeof window !== 'undefined' && typeof window.getComputedStyle === 'function') {
+              try {
+                const cs = window.getComputedStyle(cur);
+                if (cs && (cs.display === 'none' || cs.visibility === 'hidden')) return false;
+              } catch (e) {}
+            }
+            cur = cur.parentElement;
+          }
+          return true;
+        };
+
+        window.__getSubagentBadges = function() {
+          let candidates = [];
+          try {
+            candidates = Array.from(document.querySelectorAll('div[title="Subagent"], .text-secondary-foreground:has(> span)'));
+          } catch (e) {
+            candidates = Array.from(document.querySelectorAll('div[title="Subagent"], .text-secondary-foreground'));
+          }
+          return candidates.filter(badge =>
+            Array.from(badge.querySelectorAll('span')).some(s => s.textContent.trim() === 'self')
+          );
+        };
+
+        window.__findActiveSubagentSession = function() {
+          const badges = window.__getSubagentBadges ? window.__getSubagentBadges() : [];
+          const visibleBadges = badges.filter(b => window.__isElementVisible(b));
+          const activeEl = (typeof document !== 'undefined') ? document.activeElement : null;
+
+          if (visibleBadges.length > 0) {
+            if (activeEl && activeEl !== document.body && activeEl !== document.documentElement) {
+              for (const badge of visibleBadges) {
+                const container = (badge.closest && badge.closest('[data-conversation-id], [data-cascade-id], [data-subagent-session-id], [data-subagent-container]')) || badge.parentElement;
+                if (container && (container === activeEl || (typeof container.contains === 'function' && container.contains(activeEl)))) {
+                  return { badge, sessionId: window.__resolveSubagentSessionId(badge) };
+                }
+              }
+            }
+            const selectedBadge = visibleBadges[visibleBadges.length - 1];
+            return { badge: selectedBadge, sessionId: window.__resolveSubagentSessionId(selectedBadge) };
+          }
+
+          if (activeEl && activeEl !== document.body && activeEl !== document.documentElement && typeof activeEl.closest === 'function') {
+            const focusedSub = activeEl.closest('[data-subagent-session-id], [data-subagent-container]');
+            if (focusedSub && window.__isElementVisible(focusedSub)) {
+              return { badge: focusedSub, sessionId: window.__resolveSubagentSessionId(focusedSub) };
+            }
+          }
+
+          return null;
+        };
+
+        window.__getActiveMenubarSlotModels = function() {
+          const globalSlots = window.__getSavedModelSlots();
+          const activeSubagent = (typeof window.__findActiveSubagentSession === 'function')
+            ? window.__findActiveSubagentSession()
+            : null;
+          if (activeSubagent && activeSubagent.sessionId && typeof window.__getSavedSubagentSessionSlots === 'function') {
+            const sessionSlots = window.__getSavedSubagentSessionSlots(activeSubagent.sessionId);
+            return {
+              ...globalSlots,
+              builder: sessionSlots.builder || globalSlots.builder,
+              activeSessionId: activeSubagent.sessionId
+            };
+          }
+          return { ...globalSlots, activeSessionId: null };
+        };
+
+        window.__updateMenubarSlotButtons = function(slots) {
+          const effectiveSlots = slots || window.__getActiveMenubarSlotModels();
+          ['planner', 'builder'].forEach(role => {
+            const modelId = effectiveSlots[role];
+            const model = window.__getModelById ? window.__getModelById(modelId) : null;
+            if (!model) return;
+            document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="' + role + '"]').forEach(btn => {
+              btn.setAttribute('data-model-id', model.id);
+              if (role === 'builder' && effectiveSlots.activeSessionId) {
+                btn.setAttribute('data-session-id', effectiveSlots.activeSessionId);
+              } else {
+                btn.removeAttribute('data-session-id');
+              }
+              btn.setAttribute('title', (role === 'planner' ? 'Planner Model: ' : 'Builder Model: ') + model.name);
+              const valEl = btn.querySelector('.model-slot-value');
+              if (valEl) valEl.textContent = model.shortName || model.name;
+              const dotEl = btn.querySelector('.model-slot-dot');
+              if (dotEl) {
+                dotEl.style.background = model.color;
+                dotEl.style.boxShadow = '0 0 6px ' + model.color;
+              }
+            });
+          });
+        };
+
+        window.__syncSubagentModelBadges = function() {
+          const badges = window.__getSubagentBadges ? window.__getSubagentBadges() : [];
 
           badges.forEach(badge => {
             const selfSpan = Array.from(badge.querySelectorAll('span')).find(s => s.textContent.trim() === 'self');
             if (!selfSpan) return;
+
+            const sessionId = window.__resolveSubagentSessionId(badge);
+            const hasSaved = window.__hasSavedSubagentSessionSlots ? window.__hasSavedSubagentSessionSlots(sessionId) : false;
+            const sessionSlots = window.__getSavedSubagentSessionSlots(sessionId);
+
+            if (sessionId && !hasSaved && typeof window.__saveSubagentSessionSlots === 'function') {
+              window.__saveSubagentSessionSlots(sessionId, {
+                planner: sessionSlots.planner,
+                builder: sessionSlots.builder
+              });
+            }
+
+            const builderModelId = sessionSlots.builder || 'gemini-4-hydrogen-high';
+            const model = (typeof window.__getModelById === 'function')
+              ? window.__getModelById(builderModelId)
+              : { id: builderModelId, name: builderModelId, shortName: builderModelId, color: '#34d399' };
 
             let pill = badge.querySelector('#antigravity-subagent-model-pill');
             if (!pill) {
@@ -603,6 +851,9 @@ export class ModLoader {
 
             if (pill) {
               pill.setAttribute('data-model-id', model.id);
+              if (sessionId) {
+                pill.setAttribute('data-session-id', sessionId);
+              }
               pill.setAttribute('title', 'Subagent Builder Model: ' + model.name);
               pill.style.borderColor = model.color + '55';
               pill.style.background = model.color + '18';
@@ -621,31 +872,23 @@ export class ModLoader {
               temp.innerHTML = window.__renderSubagentModelPill(builderModelId, window.__MODEL_CATALOG);
               const newPill = temp.firstElementChild;
               if (newPill) {
+                if (sessionId) {
+                  newPill.setAttribute('data-session-id', sessionId);
+                }
                 selfSpan.after(newPill);
               }
             }
           });
+
+          if (typeof window.__updateMenubarSlotButtons === 'function') {
+            window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+          }
         };
 
         window.__syncModelSlotsUI = function() {
-          const slots = window.__getSavedModelSlots();
-          ['planner', 'builder'].forEach(role => {
-            const modelId = slots[role];
-            const model = window.__getModelById ? window.__getModelById(modelId) : null;
-            if (!model) return;
-            document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="' + role + '"]').forEach(btn => {
-              btn.setAttribute('data-model-id', model.id);
-              btn.setAttribute('title', (role === 'planner' ? 'Planner Model: ' : 'Builder Model: ') + model.name);
-              const valEl = btn.querySelector('.model-slot-value');
-              if (valEl) valEl.textContent = model.shortName || model.name;
-              const dotEl = btn.querySelector('.model-slot-dot');
-              if (dotEl) {
-                dotEl.style.background = model.color;
-                dotEl.style.boxShadow = '0 0 6px ' + model.color;
-              }
-            });
-          });
-
+          if (typeof window.__updateMenubarSlotButtons === 'function') {
+            window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+          }
           if (typeof window.__syncSubagentModelBadges === 'function') {
             window.__syncSubagentModelBadges();
           }
@@ -660,17 +903,17 @@ export class ModLoader {
             localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
           } catch (e) {}
 
-          const model = window.__getModelById ? window.__getModelById(modelId) : { id: modelId, name: modelId, shortName: modelId, color: '#38bdf8' };
+          const activeSubagent = (typeof window.__findActiveSubagentSession === 'function')
+            ? window.__findActiveSubagentSession()
+            : null;
+          if (activeSubagent && activeSubagent.sessionId && typeof window.__saveSubagentSessionSlots === 'function') {
+            window.__saveSubagentSessionSlots(activeSubagent.sessionId, { [role]: modelId });
+          }
+
+          if (typeof window.__updateMenubarSlotButtons === 'function') {
+            window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+          }
           document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="' + role + '"]').forEach(btn => {
-            btn.setAttribute('data-model-id', model.id);
-            btn.setAttribute('title', (role === 'planner' ? 'Planner Model: ' : 'Builder Model: ') + model.name);
-            const valEl = btn.querySelector('.model-slot-value');
-            if (valEl) valEl.textContent = model.shortName || model.name;
-            const dotEl = btn.querySelector('.model-slot-dot');
-            if (dotEl) {
-              dotEl.style.background = model.color;
-              dotEl.style.boxShadow = '0 0 6px ' + model.color;
-            }
             btn.classList.remove('open');
           });
 
@@ -685,15 +928,17 @@ export class ModLoader {
           }
 
           try {
-            fetch('http://127.0.0.1:53912/model-slots', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                planner: current.planner,
-                builder: current.builder,
-                enabled: current.enabled !== false
-              })
-            }).catch(function() {});
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  planner: current.planner,
+                  builder: current.builder,
+                  enabled: current.enabled !== false
+                })
+              }).catch(function() {});
+            }
           } catch (e) {}
         };
 
@@ -746,7 +991,9 @@ export class ModLoader {
             btn.classList.add('open');
             portal.__currentBtn = btn;
 
-            const savedSlots = window.__getSavedModelSlots();
+            const savedSlots = (typeof window.__getActiveMenubarSlotModels === 'function')
+              ? window.__getActiveMenubarSlotModels()
+              : window.__getSavedModelSlots();
             const currentSelectedId = savedSlots[slotRole] || btn.getAttribute('data-model-id');
 
             if (window.__renderModelSlotDropdownHtml) {
@@ -1956,6 +2203,12 @@ export class ModLoader {
                 msPortal.__currentBtn = null;
               }
               document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+            }
+          }, true);
+
+          document.addEventListener('focusin', () => {
+            if (typeof window.__updateMenubarSlotButtons === 'function' && typeof window.__getActiveMenubarSlotModels === 'function') {
+              window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
             }
           }, true);
         }

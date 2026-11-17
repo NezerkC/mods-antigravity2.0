@@ -52,13 +52,21 @@ export class AgentSyncServer {
    * @returns {Object}
    */
   readModelSlots() {
-    const defaults = { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high', enabled: true };
+    const defaults = {
+      planner: 'gemini-4-argon-high',
+      builder: 'gemini-4-hydrogen-high',
+      enabled: true,
+      sessions: {}
+    };
     try {
       if (fs.existsSync(this.modelSlotsPath)) {
         const raw = fs.readFileSync(this.modelSlotsPath, 'utf-8');
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          return { ...defaults, ...parsed };
+          const sessions = (parsed.sessions && typeof parsed.sessions === 'object' && !Array.isArray(parsed.sessions))
+            ? parsed.sessions
+            : {};
+          return { ...defaults, ...parsed, sessions };
         }
       }
     } catch {}
@@ -96,7 +104,7 @@ export class AgentSyncServer {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      const tmpPath = `${this.modelSlotsPath}.tmp.${Date.now()}`;
+      const tmpPath = `${this.modelSlotsPath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
       fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
       fs.renameSync(tmpPath, this.modelSlotsPath);
     } catch (err) {
@@ -114,13 +122,71 @@ export class AgentSyncServer {
    */
   updateModelSlots(patch = {}) {
     const current = this.readModelSlots();
+    const nextSessions = (patch.sessions && typeof patch.sessions === 'object' && !Array.isArray(patch.sessions))
+      ? { ...(current.sessions || {}), ...patch.sessions }
+      : (current.sessions || {});
     const updated = {
       ...current,
       ...patch,
+      sessions: nextSessions,
       updatedAt: Date.now()
     };
     this.writeModelSlots(updated);
     return updated;
+  }
+
+  /**
+   * Reads saved model slots for a specific subagent sessionId, or all sessions map if omitted.
+   * @param {string} [sessionId]
+   * @returns {Object|null}
+   */
+  readSubagentSessionSlots(sessionId) {
+    const current = this.readModelSlots();
+    const sessions = (current.sessions && typeof current.sessions === 'object' && !Array.isArray(current.sessions))
+      ? current.sessions
+      : {};
+    if (!sessionId) {
+      return { ...sessions };
+    }
+    const entry = sessions[sessionId];
+    return (entry && typeof entry === 'object' && !Array.isArray(entry)) ? { ...entry } : null;
+  }
+
+  /**
+   * Updates and persists model slots for a specific subagent sessionId atomically.
+   * @param {string} sessionId
+   * @param {Object} [slots]
+   * @returns {Object|null}
+   */
+  updateSubagentSessionSlots(sessionId, slots = {}) {
+    if (!sessionId || typeof sessionId !== 'string') return null;
+    const cleanId = sessionId.trim();
+    if (!cleanId || !slots || typeof slots !== 'object' || Array.isArray(slots)) return null;
+
+    const current = this.readModelSlots();
+    const sessions = (current.sessions && typeof current.sessions === 'object' && !Array.isArray(current.sessions))
+      ? { ...current.sessions }
+      : {};
+    const existing = (sessions[cleanId] && typeof sessions[cleanId] === 'object' && !Array.isArray(sessions[cleanId]))
+      ? sessions[cleanId]
+      : {};
+
+    const nextSession = {
+      ...existing,
+      ...slots,
+      planner: slots.planner || existing.planner || current.planner,
+      builder: slots.builder || existing.builder || current.builder,
+      updatedAt: Date.now()
+    };
+
+    sessions[cleanId] = nextSession;
+    const updated = {
+      ...current,
+      sessions,
+      updatedAt: Date.now()
+    };
+    this.writeModelSlots(updated);
+    return nextSession;
   }
 
   /**
@@ -282,6 +348,69 @@ export class AgentSyncServer {
               res.writeHead(200, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({ success: true, slots }));
               return;
+            } catch {}
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid payload' }));
+          });
+          return;
+        }
+
+        if (req.method === 'GET' && (req.url === '/subagent-model-slots' || req.url.startsWith('/subagent-model-slots?'))) {
+          let sessionId = null;
+          try {
+            const urlObj = new URL(req.url, 'http://127.0.0.1');
+            sessionId = urlObj.searchParams.get('sessionId');
+          } catch {}
+
+          if (sessionId) {
+            const sessionSlots = this.readSubagentSessionSlots(sessionId);
+            const globalSlots = this.readModelSlots();
+            const payload = sessionSlots || {
+              planner: globalSlots.planner,
+              builder: globalSlots.builder,
+              isDefault: true
+            };
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(payload));
+            return;
+          }
+
+          const allSessions = this.readSubagentSessionSlots();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(allSessions));
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/subagent-model-slots') {
+          let body = '';
+          let exceeded = false;
+          req.on('data', chunk => {
+            body += chunk;
+            if (body.length > 65536) {
+              exceeded = true;
+              res.writeHead(413, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Payload too large' }));
+              req.destroy();
+            }
+          });
+          req.on('end', () => {
+            if (exceeded || res.writableEnded) return;
+            try {
+              const payload = JSON.parse(body || '{}');
+              if (
+                payload &&
+                typeof payload.sessionId === 'string' &&
+                payload.sessionId.trim() &&
+                payload.slots &&
+                typeof payload.slots === 'object' &&
+                !Array.isArray(payload.slots)
+              ) {
+                const cleanId = payload.sessionId.trim();
+                const slots = this.updateSubagentSessionSlots(cleanId, payload.slots);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, sessionId: cleanId, slots }));
+                return;
+              }
             } catch {}
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Invalid payload' }));
