@@ -91,6 +91,9 @@ export class ModLoader {
     return `
       (() => {
         window.__antigravityMods = window.__antigravityMods || {};
+        if (${JSON.stringify(context.repoPath || '')}) {
+          window.__antigravityActiveRepoPath = ${JSON.stringify(context.repoPath || '')};
+        }
 
         // 0. Permanently terminate any legacy unmanaged loops
         if (window.__multiContextTrackerLoop) clearInterval(window.__multiContextTrackerLoop);
@@ -589,21 +592,84 @@ export class ModLoader {
         const renderReticleSvg = ${renderReticleSvg.toString()};
         window.__renderReticleSvg = renderReticleSvg;
 
+        const syncReticleTrigger = (reticleBtn, cascadeId) => {
+          if (!reticleBtn) return;
+          const isFocus = window.__resolveCavemanForCascade ? window.__resolveCavemanForCascade(cascadeId) : false;
+          const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
+          const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
+          const nextTitle = isFocus ? focusTitle : explicativoTitle;
+          if (reticleBtn.classList.contains('is-focus') !== isFocus) {
+            reticleBtn.classList.toggle('is-focus', isFocus);
+          }
+          if (reticleBtn.getAttribute('title') !== nextTitle) {
+            reticleBtn.setAttribute('title', nextTitle);
+          }
+          const box = reticleBtn.querySelector('.caveman-reticle-box');
+          const focusKey = isFocus ? '1' : '0';
+          if (box && window.__renderReticleSvg && (!box.firstElementChild || box.getAttribute('data-focus') !== focusKey)) {
+            box.innerHTML = window.__renderReticleSvg(isFocus, 14);
+            box.setAttribute('data-focus', focusKey);
+          }
+        };
+
+        const resolveChatboxFooter = (node) => {
+          if (!node) return null;
+          return node.closest?.('[class*="input-footer"]') ||
+            node.closest?.('.flex.items-center.justify-between') ||
+            node.parentElement ||
+            node;
+        };
+
+        const applyCompactToChatboxScope = (scopeEl, explicitWidth) => {
+          if (document.hidden || window.innerWidth <= 0 || !scopeEl) return;
+          const compactSetting = localStorage.getItem('__antigravity_compact_chatbox_mods');
+          const footer = resolveChatboxFooter(scopeEl);
+          const rawWidth = typeof explicitWidth === 'number'
+            ? explicitWidth
+            : (footer ? (footer.offsetWidth || footer.getBoundingClientRect?.().width || 0) : 0);
+          const width = rawWidth > 0 ? rawWidth : 0;
+          if (compactSetting !== 'true' && compactSetting !== 'false' && width <= 0) return;
+
+          const tach = scopeEl.classList?.contains('antigravity-tachometer-badge')
+            ? scopeEl
+            : (scopeEl.querySelector?.('.antigravity-tachometer-badge') || scopeEl.parentElement?.querySelector?.('.antigravity-tachometer-badge') || null);
+          const agent = scopeEl.classList?.contains('antigravity-agent-badge')
+            ? scopeEl
+            : (scopeEl.querySelector?.('.antigravity-agent-badge') || scopeEl.parentElement?.querySelector?.('.antigravity-agent-badge') || null);
+
+          const isCurrentlyCompact = Boolean(
+            tach?.classList?.contains('compact') ||
+            agent?.classList?.contains('compact') ||
+            scopeEl.querySelector?.('.antigravity-tachometer-badge.compact')
+          );
+          const threshold = isCurrentlyCompact ? 590 : 540;
+          const isNarrow = (width > 0 && width < threshold) || window.innerWidth < 800;
+          const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
+
+          const slot = scopeEl.classList?.contains('antigravity-slot-container')
+            ? scopeEl
+            : (scopeEl.querySelector?.('.antigravity-slot-container') || null);
+          if (slot) {
+            slot.__lastTachCompact = shouldCompact;
+            slot.__lastAgentCompact = shouldCompact;
+          }
+          if (tach && tach.classList.contains('compact') !== shouldCompact) {
+            tach.classList.toggle('compact', shouldCompact);
+          }
+          if (agent && agent.classList.contains('compact') !== shouldCompact) {
+            agent.classList.toggle('compact', shouldCompact);
+          }
+        };
+
         window.__applyChatboxModsCompact = function() {
           if (document.hidden || window.innerWidth <= 0) return;
-          const compactSetting = localStorage.getItem('__antigravity_compact_chatbox_mods');
-          const syncCompactBadge = (el) => {
-            const footer = el.closest('[class*="input-footer"]') || el.closest('.flex.items-center.justify-between') || el.parentElement;
-            const footerWidth = footer ? (footer.offsetWidth || footer.getBoundingClientRect?.().width || 0) : 0;
-            if (compactSetting !== 'true' && compactSetting !== 'false' && footerWidth <= 0) return;
-            const isNarrow = (footerWidth > 0 && footerWidth < 380) || window.innerWidth < 800;
-            const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
-            if (el.classList.contains('compact') !== shouldCompact) {
-              el.classList.toggle('compact', shouldCompact);
-            }
-          };
-          document.querySelectorAll('.antigravity-tachometer-badge').forEach(syncCompactBadge);
-          document.querySelectorAll('.antigravity-agent-badge').forEach(syncCompactBadge);
+          const chatboxSlots = document.querySelectorAll('#antigravity-slot-header-actions, .antigravity-slot-header-actions');
+          if (chatboxSlots.length) {
+            chatboxSlots.forEach(slot => applyCompactToChatboxScope(slot));
+            return;
+          }
+          document.querySelectorAll('.antigravity-tachometer-badge').forEach(el => applyCompactToChatboxScope(el));
+          document.querySelectorAll('.antigravity-agent-badge').forEach(el => applyCompactToChatboxScope(el));
         };
 
         window.__syncVoiceAssistantButton = function() {
@@ -908,6 +974,9 @@ export class ModLoader {
           document.querySelectorAll('#antigravity-git-tab-trigger, .antigravity-git-tab-trigger').forEach(b => {
             b.style.display = gitGraphEnabled ? 'inline-flex' : 'none';
           });
+          if (!gitGraphEnabled && typeof window.__closeGitGraphPanel === 'function') {
+            window.__closeGitGraphPanel();
+          }
         };
 
         window.__toggleModsManagerPanel = function(e, btnEl) {
@@ -1196,8 +1265,81 @@ export class ModLoader {
           }
         };
 
+        const isStubVcsData = function(d) {
+          if (!d || typeof d !== 'object') return true;
+          const hasBranch = !!(d.status && d.status.branch);
+          const hasCommits = Array.isArray(d.commits) && d.commits.length > 0;
+          const hasGh = !!(d.github && d.github.isGitHub);
+          const hasLocalBranches = !!(d.branches && Array.isArray(d.branches.local) && d.branches.local.length > 0);
+          const hasRemoteBranches = !!(d.branches && Array.isArray(d.branches.remote) && d.branches.remote.length > 0);
+          return !hasBranch && !hasCommits && !hasGh && !hasLocalBranches && !hasRemoteBranches;
+        };
+
+        const computeVcsDataSignature = function(d) {
+          if (!d || typeof d !== 'object') return 'empty';
+          const gh = d.github || {};
+          const st = d.status || {};
+          const pr = d.pullRequest || {};
+          const br = d.branches || {};
+          const commits = Array.isArray(d.commits) ? d.commits : [];
+          const commitSig = commits.map(function(c) {
+            return (c.hash || '') + ':' + (c.pushed === false ? '0' : '1') + ':' + (c.syncStatus || '') + ':' + (c.expanded ? '1' : '0');
+          }).join(',');
+          const checks = pr.checksSummary || {};
+          return [
+            d.activeRepo || '',
+            st.branch || '',
+            st.ahead || 0,
+            st.behind || 0,
+            st.isClean ? '1' : '0',
+            gh.isGitHub ? '1' : '0',
+            gh.fullName || '',
+            pr.number || '',
+            checks.status || '',
+            Array.isArray(br.local) ? br.local.length : 0,
+            Array.isArray(br.remote) ? br.remote.length : 0,
+            commitSig
+          ].join('|');
+        };
+
+        const getVcsOverviewUrl = function() {
+          const rp = (window.__antigravityVcsData && window.__antigravityVcsData.repoPath) || window.__antigravityActiveRepoPath || '';
+          return rp
+            ? ('http://127.0.0.1:53912/vcs/overview?repoPath=' + encodeURIComponent(rp))
+            : 'http://127.0.0.1:53912/vcs/overview';
+        };
+
+        const applyGitFilterSelection = function(hostEl, filterType) {
+          if (!hostEl) return;
+          const targetFilter = filterType || window.__antigravityGitFilter || 'all';
+          window.__antigravityGitFilter = targetFilter;
+          if (typeof hostEl.querySelectorAll === 'function') {
+            hostEl.querySelectorAll('.git-filter-pill').forEach(function(p) {
+              const pType = (typeof p.getAttribute === 'function' ? p.getAttribute('data-branch-filter') : null) || 'all';
+              if (p.classList) {
+                p.classList.toggle('active', pType === targetFilter);
+              }
+            });
+            hostEl.querySelectorAll('.git-commit-item').forEach(function(item) {
+              const type = typeof item.getAttribute === 'function' ? item.getAttribute('data-commit-type') : null;
+              if (targetFilter === 'all') {
+                item.style.display = '';
+              } else if (targetFilter === 'local') {
+                item.style.display = type === 'local' ? '' : 'none';
+              } else if (targetFilter === 'remote') {
+                item.style.display = type === 'remote' ? '' : 'none';
+              }
+            });
+          }
+          if (typeof window.__antigravityRefreshGitSvg === 'function') {
+            window.__antigravityRefreshGitSvg(hostEl);
+          }
+        };
+
         window.__antigravityUpdateVcsData = function(data) {
           if (!data || typeof data !== 'object') return;
+          if (isStubVcsData(data) && !isStubVcsData(window.__antigravityVcsData)) return;
+
           const prevMap = {};
           if (window.__antigravityVcsData && Array.isArray(window.__antigravityVcsData.commits)) {
             window.__antigravityVcsData.commits.forEach(function(c) {
@@ -1213,17 +1355,68 @@ export class ModLoader {
               }
             });
           }
+          if (!data.repoPath && window.__antigravityActiveRepoPath) {
+            data.repoPath = window.__antigravityActiveRepoPath;
+          }
           window.__antigravityVcsData = data;
+          const nextSig = computeVcsDataSignature(data);
+          window.__antigravityVcsSig = nextSig;
 
           if (typeof window.__antigravityRenderGitPanel === 'function') {
             const html = window.__antigravityRenderGitPanel(data);
             const tpl = document.getElementById('antigravity-git-panel-template');
-            if (tpl) tpl.innerHTML = html;
+            const prevTplSig = (tpl && typeof tpl.getAttribute === 'function') ? tpl.getAttribute('data-vcs-sig') : null;
+            if (tpl && prevTplSig !== nextSig) {
+              tpl.innerHTML = html;
+              if (typeof tpl.setAttribute === 'function') tpl.setAttribute('data-vcs-sig', nextSig);
+            }
             const hostEl = document.getElementById('antigravity-git-panel-host');
-            if (hostEl && hostEl.style.display !== 'none') {
+            const isHostOpen = !!(hostEl && hostEl.style && hostEl.style.display !== 'none' && (typeof hostEl.getAttribute !== 'function' || hostEl.getAttribute('data-open') !== 'false'));
+            if (isHostOpen) {
+              const curHostSig = typeof hostEl.getAttribute === 'function' ? hostEl.getAttribute('data-vcs-sig') : null;
+              const hasContent = hostEl.children ? hostEl.children.length > 0 : !!hostEl.innerHTML;
+              if (curHostSig === nextSig && hasContent) {
+                return;
+              }
+              const activePill = typeof hostEl.querySelector === 'function' ? hostEl.querySelector('.git-filter-pill.active') : null;
+              const savedFilter = activePill && typeof activePill.getAttribute === 'function'
+                ? (activePill.getAttribute('data-branch-filter') || window.__antigravityGitFilter || 'all')
+                : (window.__antigravityGitFilter || 'all');
+              const branchesDrawerEl = typeof hostEl.querySelector === 'function' ? hostEl.querySelector('#antigravity-git-branches-drawer') : null;
+              const branchesDrawerOpen = !!(branchesDrawerEl && branchesDrawerEl.style && branchesDrawerEl.style.display !== 'none');
+              const prDrawerEl = typeof hostEl.querySelector === 'function' ? hostEl.querySelector('#antigravity-git-pr-drawer') : null;
+              const prDrawerOpen = !!(prDrawerEl && prDrawerEl.style && prDrawerEl.style.display !== 'none');
+              const ciAccordionEl = typeof hostEl.querySelector === 'function' ? hostEl.querySelector('#antigravity-git-ci-accordion') : null;
+              const ciAccordionOpen = !!(ciAccordionEl && ciAccordionEl.style && ciAccordionEl.style.display !== 'none');
+              const graphContainerEl = typeof hostEl.querySelector === 'function' ? hostEl.querySelector('.git-graph-container') : null;
+              const savedScrollTop = graphContainerEl ? (graphContainerEl.scrollTop || 0) : 0;
+
               hostEl.__skipInitialStateParse = true;
               hostEl.innerHTML = html;
+              if (typeof hostEl.setAttribute === 'function') hostEl.setAttribute('data-vcs-sig', nextSig);
               window.__bindGitPanelEvents(hostEl);
+              applyGitFilterSelection(hostEl, savedFilter);
+
+              if (branchesDrawerOpen && typeof hostEl.querySelector === 'function') {
+                const newDrawer = hostEl.querySelector('#antigravity-git-branches-drawer');
+                if (newDrawer) newDrawer.style.display = 'block';
+                const caret = hostEl.querySelector('#antigravity-git-branches-drawer-btn .git-drawer-caret');
+                if (caret) caret.textContent = '▴';
+              }
+              if (prDrawerOpen && typeof hostEl.querySelector === 'function') {
+                const newPrDrawer = hostEl.querySelector('#antigravity-git-pr-drawer');
+                if (newPrDrawer) newPrDrawer.style.display = 'block';
+              }
+              if (ciAccordionOpen && typeof hostEl.querySelector === 'function') {
+                const newCiAcc = hostEl.querySelector('#antigravity-git-ci-accordion');
+                if (newCiAcc) newCiAcc.style.display = 'block';
+                const caret = hostEl.querySelector('#antigravity-git-ci-rollup-trigger .git-ci-caret');
+                if (caret) caret.textContent = '▴';
+              }
+              if (savedScrollTop > 0 && typeof hostEl.querySelector === 'function') {
+                const newGraphContainer = hostEl.querySelector('.git-graph-container');
+                if (newGraphContainer) newGraphContainer.scrollTop = savedScrollTop;
+              }
             }
           }
         };
@@ -1278,7 +1471,7 @@ export class ModLoader {
               window.open(result.output, '_blank');
             }
 
-            const ovRes = await fetch('http://127.0.0.1:53912/vcs/overview');
+            const ovRes = await fetch(getVcsOverviewUrl());
             if (ovRes.ok) {
               const freshData = await ovRes.json();
               window.__antigravityUpdateVcsData(freshData);
@@ -1298,7 +1491,10 @@ export class ModLoader {
             const stateScript = hostEl.querySelector('#antigravity-git-vcs-state');
             if (stateScript && stateScript.textContent) {
               try {
-                window.__antigravityVcsData = JSON.parse(stateScript.textContent);
+                const parsedState = JSON.parse(stateScript.textContent);
+                if (!(isStubVcsData(parsedState) && !isStubVcsData(window.__antigravityVcsData))) {
+                  window.__antigravityVcsData = parsedState;
+                }
               } catch (e) {}
             }
           }
@@ -1449,22 +1645,9 @@ export class ModLoader {
           // Branch filter pills (Todas / Locales / GitHub) with synchronized SVG re-projection
           hostEl.querySelectorAll('.git-filter-pill').forEach(function(pill) {
             pill.onclick = function(e) {
-              e.stopPropagation();
-              hostEl.querySelectorAll('.git-filter-pill.active').forEach(function(p) { p.classList.remove('active'); });
-              pill.classList.add('active');
-
+              if (e) e.stopPropagation();
               const filterType = pill.getAttribute('data-branch-filter') || 'all';
-              hostEl.querySelectorAll('.git-commit-item').forEach(function(item) {
-                const type = item.getAttribute('data-commit-type');
-                if (filterType === 'all') {
-                  item.style.display = '';
-                } else if (filterType === 'local') {
-                  item.style.display = type === 'local' ? '' : 'none';
-                } else if (filterType === 'remote') {
-                  item.style.display = type === 'remote' ? '' : 'none';
-                }
-              });
-              window.__antigravityRefreshGitSvg(hostEl);
+              applyGitFilterSelection(hostEl, filterType);
             };
           });
 
@@ -1525,7 +1708,7 @@ export class ModLoader {
               setTimeout(function() { refreshBtn.style.transform = ''; }, 500);
 
               try {
-                const res = await fetch('http://127.0.0.1:53912/vcs/overview');
+                const res = await fetch(getVcsOverviewUrl());
                 if (res.ok) {
                   const data = await res.json();
                   if (window.__antigravityUpdateVcsData) {
@@ -1544,22 +1727,78 @@ export class ModLoader {
           const closeBtn = hostEl.querySelector('#antigravity-git-close-btn');
           if (closeBtn) {
             closeBtn.onclick = function(e) {
-              e.stopPropagation();
-              window.__toggleGitGraphPanel();
+              if (e) {
+                e.stopPropagation();
+                e.preventDefault();
+              }
+              if (typeof window.__closeGitGraphPanel === 'function') {
+                window.__closeGitGraphPanel();
+              } else if (typeof window.__toggleGitGraphPanel === 'function') {
+                window.__toggleGitGraphPanel();
+              }
             };
           }
         };
 
+        window.__closeGitGraphPanel = function() {
+          window.__antigravityGitPanelOpen = false;
+          window.__antigravityVcsReqSeq = (window.__antigravityVcsReqSeq || 0) + 1;
+          const hosts = typeof document.querySelectorAll === 'function'
+            ? Array.from(document.querySelectorAll('#antigravity-git-panel-host'))
+            : [];
+          if (hosts.length === 0 && typeof document.getElementById === 'function') {
+            const fallbackHost = document.getElementById('antigravity-git-panel-host');
+            if (fallbackHost) hosts.push(fallbackHost);
+          }
+          hosts.forEach(function(host, idx) {
+            if (idx > 0 && typeof host.remove === 'function') {
+              host.remove();
+              return;
+            }
+            if (host && host.style) host.style.display = 'none';
+            if (host && typeof host.setAttribute === 'function') host.setAttribute('data-open', 'false');
+          });
+          if (typeof document.querySelectorAll === 'function') {
+            document.querySelectorAll('#antigravity-git-tab-trigger, .antigravity-git-tab-btn').forEach(function(triggerBtn) {
+              if (triggerBtn && triggerBtn.classList) triggerBtn.classList.remove('active');
+            });
+          }
+        };
+
+        if (!window.__antigravityGitEscBound && typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+          window.__antigravityGitEscBound = true;
+          document.addEventListener('keydown', function(ev) {
+            if (ev && ev.key === 'Escape' && window.__antigravityGitPanelOpen && typeof window.__closeGitGraphPanel === 'function') {
+              window.__closeGitGraphPanel();
+            }
+          });
+        }
+
         window.__toggleGitGraphPanel = function(e, btnEl) {
           if (e) {
-            e.stopPropagation();
-            e.preventDefault();
+            if (typeof e.stopPropagation === 'function') e.stopPropagation();
+            if (typeof e.preventDefault === 'function') e.preventDefault();
           }
-          const btn = btnEl || (e ? e.currentTarget : document.querySelector('#antigravity-git-tab-trigger'));
-          if (!btn) return;
+          const btn = btnEl || (e && e.currentTarget ? e.currentTarget : (typeof document.querySelector === 'function' ? document.querySelector('#antigravity-git-tab-trigger') : null));
+          const hosts = typeof document.querySelectorAll === 'function'
+            ? Array.from(document.querySelectorAll('#antigravity-git-panel-host'))
+            : [];
+          if (hosts.length === 0 && typeof document.getElementById === 'function') {
+            const singleHost = document.getElementById('antigravity-git-panel-host');
+            if (singleHost) hosts.push(singleHost);
+          }
+          const hostVisible = hosts.some(function(h) {
+            return !!(h && h.style && h.style.display !== 'none' && (typeof h.getAttribute !== 'function' || h.getAttribute('data-open') !== 'false'));
+          });
+          const isCurrentActive = !!window.__antigravityGitPanelOpen || hostVisible || !!(btn && btn.classList && btn.classList.contains('active'));
 
-          const isCurrentActive = btn.classList.contains('active');
-          btn.classList.toggle('active', !isCurrentActive);
+          if (isCurrentActive) {
+            window.__closeGitGraphPanel();
+            return;
+          }
+          if (!btn) return;
+          window.__antigravityGitPanelOpen = true;
+          if (btn.classList) btn.classList.add('active');
 
           const trigger = btn || document.querySelector('#antigravity-git-tab-trigger');
           let auxContainer = trigger ? (trigger.closest('.h-full.w-full.flex.flex-col') || trigger.closest('.flex.flex-col')) : null;
@@ -1587,33 +1826,44 @@ export class ModLoader {
           }
 
           if (hostEl.parentElement === auxBody) {
-            hostEl.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:' + (isCurrentActive ? 'none' : 'flex') + '; flex-direction:column; overflow:hidden; z-index:50; background:#0f111a;';
+            hostEl.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:flex; flex-direction:column; overflow:hidden; z-index:50; background:#0f111a;';
           } else {
-            hostEl.style.cssText = 'position:fixed; right:0; top:40px; bottom:24px; width:420px; display:' + (isCurrentActive ? 'none' : 'flex') + '; flex-direction:column; overflow:hidden; z-index:99999; background:#0f111a; box-shadow:-12px 0 30px rgba(0,0,0,0.7); border-left:1px solid #1e2438;';
+            hostEl.style.cssText = 'position:fixed; right:0; top:40px; bottom:24px; width:420px; display:flex; flex-direction:column; overflow:hidden; z-index:99999; background:#0f111a; box-shadow:-12px 0 30px rgba(0,0,0,0.7); border-left:1px solid #1e2438;';
           }
 
-          if (!isCurrentActive) {
-            if (window.__antigravityVcsData && typeof window.__antigravityRenderGitPanel === 'function') {
+          hostEl.style.display = 'flex';
+          if (typeof hostEl.setAttribute === 'function') hostEl.setAttribute('data-open', 'true');
+
+          if (!isStubVcsData(window.__antigravityVcsData) && typeof window.__antigravityRenderGitPanel === 'function') {
+            const cachedSig = computeVcsDataSignature(window.__antigravityVcsData);
+            const curHostSig = typeof hostEl.getAttribute === 'function' ? hostEl.getAttribute('data-vcs-sig') : null;
+            const hasContent = hostEl.children ? hostEl.children.length > 0 : !!hostEl.innerHTML;
+            if (curHostSig !== cachedSig || !hasContent) {
               hostEl.__skipInitialStateParse = true;
               hostEl.innerHTML = window.__antigravityRenderGitPanel(window.__antigravityVcsData);
-            } else {
-              const template = document.getElementById('antigravity-git-panel-template');
-              if (template) {
-                hostEl.innerHTML = template.innerHTML;
-              }
+              if (typeof hostEl.setAttribute === 'function') hostEl.setAttribute('data-vcs-sig', cachedSig);
+              window.__bindGitPanelEvents(hostEl);
+              applyGitFilterSelection(hostEl, window.__antigravityGitFilter || 'all');
             }
-            hostEl.style.display = 'flex';
-            window.__bindGitPanelEvents(hostEl);
-
-            fetch('http://127.0.0.1:53912/vcs/overview')
-              .then(function(r) { return r.ok ? r.json() : null; })
-              .then(function(liveData) {
-                if (liveData && window.__antigravityUpdateVcsData) {
-                  window.__antigravityUpdateVcsData(liveData);
-                }
-              })
-              .catch(function() {});
+          } else {
+            const template = document.getElementById('antigravity-git-panel-template');
+            const hasContent = hostEl.children ? hostEl.children.length > 0 : !!hostEl.innerHTML;
+            if (template && (!hasContent || isStubVcsData(window.__antigravityVcsData))) {
+              hostEl.innerHTML = template.innerHTML;
+              window.__bindGitPanelEvents(hostEl);
+            }
           }
+
+          const reqSeq = (window.__antigravityVcsReqSeq = (window.__antigravityVcsReqSeq || 0) + 1);
+          fetch(getVcsOverviewUrl())
+            .then(function(r) { return r && r.ok ? r.json() : null; })
+            .then(function(liveData) {
+              if (!window.__antigravityGitPanelOpen || reqSeq !== window.__antigravityVcsReqSeq) return;
+              if (liveData && window.__antigravityUpdateVcsData) {
+                window.__antigravityUpdateVcsData(liveData);
+              }
+            })
+            .catch(function() {});
         };
 
         window.__toggleTachometerPopover = function(e, badgeEl) {
@@ -1766,18 +2016,7 @@ export class ModLoader {
 
             // Sync exterior reticle trigger in the same group
             const group = badge.closest('.antigravity-agent-selector-group');
-            const reticleBtn = group ? group.querySelector('.antigravity-caveman-reticle-trigger') : null;
-            if (reticleBtn) {
-              const isFocus = window.__resolveCavemanForCascade ? window.__resolveCavemanForCascade(cId) : false;
-              const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
-              const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
-              reticleBtn.classList.toggle('is-focus', isFocus);
-              reticleBtn.setAttribute('title', isFocus ? focusTitle : explicativoTitle);
-              const box = reticleBtn.querySelector('.caveman-reticle-box');
-              if (box && window.__renderReticleSvg) {
-                box.innerHTML = window.__renderReticleSvg(isFocus, 14);
-              }
-            }
+            syncReticleTrigger(group ? group.querySelector('.antigravity-caveman-reticle-trigger') : null, cId);
           });
         };
 
@@ -2039,6 +2278,9 @@ export class ModLoader {
 
         // 3. Mount individual mods into target slots across all conversations
         function mountAllMods() {
+          if (window.__antigravityIsMountingMods) return;
+          window.__antigravityIsMountingMods = true;
+          try {
           // Preserve last known compact state before slot innerHTML updates
           document.querySelectorAll('.antigravity-slot-container').forEach(slot => {
             const prevTach = slot.querySelector('.antigravity-tachometer-badge');
@@ -2047,9 +2289,9 @@ export class ModLoader {
             if (prevAgent) slot.__lastAgentCompact = prevAgent.classList.contains('compact');
           });
 
-          // Permanently remove legacy duplicate unmanaged badges & misplaced slot containers
+          // Permanently remove legacy duplicate unmanaged badges & misplaced non-flex slot containers
           document.querySelectorAll('.antigravity-context-badge').forEach(el => el.remove());
-          document.querySelectorAll('.min-w-0 > #antigravity-slot-header-actions, .no-focus-agent-input > #antigravity-slot-header-actions').forEach(el => el.remove());
+          document.querySelectorAll('.min-w-0:not(.flex) > #antigravity-slot-header-actions, .no-focus-agent-input > #antigravity-slot-header-actions').forEach(el => el.remove());
 
           ${mountSnippets.join('\n')}
 
@@ -2062,7 +2304,7 @@ export class ModLoader {
             document.body.appendChild(agentPortal);
           }
           const agentTemplate = document.querySelector('.antigravity-agent-dropdown-template');
-          if (agentTemplate && !agentPortal.classList.contains('open')) {
+          if (agentTemplate && !agentPortal.classList.contains('open') && (!agentPortal.firstElementChild || agentPortal.getAttribute('data-v') !== '2')) {
             agentPortal.innerHTML = agentTemplate.innerHTML;
             agentPortal.setAttribute('data-v', '2');
           }
@@ -2099,8 +2341,11 @@ export class ModLoader {
           });
 
           // Bind Mods Manager click handler
-          // Bind Git Graph Tab trigger
+          // Bind Git Graph Tab trigger and keep .active synced with panel visibility
           document.querySelectorAll('#antigravity-git-tab-trigger').forEach(btn => {
+            if (btn.classList) {
+              btn.classList.toggle('active', !!window.__antigravityGitPanelOpen);
+            }
             if (btn.__gitClickBound) return;
             btn.__gitClickBound = true;
             btn.addEventListener('click', (e) => {
@@ -2128,13 +2373,19 @@ export class ModLoader {
           // Restore saved mod visibility states
           window.__applyModsVisibility();
 
-          // Refresh active Git panel host if currently open
+          // Preserve active Git panel host if currently open; never overwrite hydrated data with stub template
           const activeGitHost = document.getElementById('antigravity-git-panel-host');
           const gitTemplate = document.getElementById('antigravity-git-panel-template');
-          if (activeGitHost && activeGitHost.style.display !== 'none' && gitTemplate) {
-            activeGitHost.innerHTML = gitTemplate.innerHTML;
-            if (window.__bindGitPanelEvents) {
-              window.__bindGitPanelEvents(activeGitHost);
+          const isGitHostVisible = !!(activeGitHost && activeGitHost.style && activeGitHost.style.display !== 'none' && (typeof activeGitHost.getAttribute !== 'function' || activeGitHost.getAttribute('data-open') !== 'false'));
+          if (isGitHostVisible && window.__antigravityGitPanelOpen) {
+            if (!isStubVcsData(window.__antigravityVcsData) && typeof window.__antigravityUpdateVcsData === 'function') {
+              window.__antigravityUpdateVcsData(window.__antigravityVcsData);
+            } else if (gitTemplate && (!activeGitHost.children || activeGitHost.children.length === 0)) {
+              activeGitHost.__skipInitialStateParse = true;
+              activeGitHost.innerHTML = gitTemplate.innerHTML;
+              if (window.__bindGitPanelEvents) {
+                window.__bindGitPanelEvents(activeGitHost);
+              }
             }
           }
 
@@ -2148,27 +2399,18 @@ export class ModLoader {
             }
             // Sync exterior reticle trigger in the same group immediately upon mount
             const group = badge.closest('.antigravity-agent-selector-group');
-            const reticleBtn = group ? group.querySelector('.antigravity-caveman-reticle-trigger') : null;
-            if (reticleBtn) {
-              const isFocus = window.__resolveCavemanForCascade ? window.__resolveCavemanForCascade(cId) : false;
-              const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
-              const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
-              reticleBtn.classList.toggle('is-focus', isFocus);
-              reticleBtn.setAttribute('title', isFocus ? focusTitle : explicativoTitle);
-              const box = reticleBtn.querySelector('.caveman-reticle-box');
-              if (box && window.__renderReticleSvg) {
-                box.innerHTML = window.__renderReticleSvg(isFocus, 14);
-              }
-            }
+            syncReticleTrigger(group ? group.querySelector('.antigravity-caveman-reticle-trigger') : null, cId);
           });
 
           // Apply current telemetry
           window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})});
 
-          // Observe stable parent containers for responsive auto-collapse (guarded against RDP/minimize zero-dimension states & layout thrashing)
+          // Observe stable chatbox footer containers for responsive auto-collapse (guarded against RDP/minimize zero-dimension states & layout thrashing)
           document.querySelectorAll('.antigravity-slot-container').forEach(slot => {
-            const footer = slot.closest('[class*="input-footer"]') || slot.closest('.flex.items-center.justify-between') || slot.parentElement || slot;
-            if (window.__antigravityResizeObserver && footer && footer !== slot) {
+            if (slot.id && slot.id !== 'antigravity-slot-header-actions') return;
+            const footer = resolveChatboxFooter(slot);
+            if (window.__antigravityResizeObserver && footer && footer !== slot && footer.__antigravityObservedBy !== window.__antigravityResizeObserver) {
+              footer.__antigravityObservedBy = window.__antigravityResizeObserver;
               window.__antigravityResizeObserver.observe(footer);
             }
             const tach = slot.querySelector('.antigravity-tachometer-badge');
@@ -2183,65 +2425,58 @@ export class ModLoader {
               }
               return;
             }
-            const compactSetting = localStorage.getItem('__antigravity_compact_chatbox_mods');
-            const isNarrow = footerWidth < 380 || window.innerWidth < 800;
-            const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
-            slot.__lastTachCompact = shouldCompact;
-            slot.__lastAgentCompact = shouldCompact;
-            if (tach && tach.classList.contains('compact') !== shouldCompact) {
-              tach.classList.toggle('compact', shouldCompact);
-            }
-            if (agent && agent.classList.contains('compact') !== shouldCompact) {
-              agent.classList.toggle('compact', shouldCompact);
-            }
+            applyCompactToChatboxScope(slot, footerWidth);
           });
 
           if (typeof window.__dockNativeVoiceToast === 'function') {
             window.__dockNativeVoiceToast(document);
           }
+          } finally {
+            window.__antigravityIsMountingMods = false;
+          }
         }
 
-        // Initialize ResizeObserver for responsive auto-collapse
+        // Initialize ResizeObserver for responsive auto-collapse (coalesced per animation frame)
         if (window.__antigravityResizeObserver) {
           window.__antigravityResizeObserver.disconnect();
           window.__antigravityResizeObserver = null;
         }
 
+        const pendingResizeTargets = new Map();
+        let resizeRafScheduled = false;
+
+        const flushPendingResizeTargets = () => {
+          resizeRafScheduled = false;
+          if (document.hidden || window.innerWidth <= 0) {
+            pendingResizeTargets.clear();
+            return;
+          }
+          pendingResizeTargets.forEach((rawWidth, container) => {
+            const width = rawWidth > 0 ? rawWidth : 0;
+            if (width <= 0) return;
+            applyCompactToChatboxScope(container, width);
+          });
+          pendingResizeTargets.clear();
+        };
+
         window.__antigravityResizeObserver = new ResizeObserver((entries) => {
           if (document.hidden || window.innerWidth <= 0) return;
           for (const entry of entries) {
             const container = entry.target;
-            const compactSetting = localStorage.getItem('__antigravity_compact_chatbox_mods');
-            const footer = container.closest('[class*="input-footer"]') || container.closest('.flex.items-center.justify-between') || container.parentElement || container;
+            const footer = resolveChatboxFooter(container);
             const rawWidth = (entry.contentRect && typeof entry.contentRect.width === 'number')
               ? entry.contentRect.width
               : (footer.getBoundingClientRect?.().width || footer.offsetWidth || 0);
             const width = rawWidth > 0 ? rawWidth : 0;
             if (width <= 0) continue;
-
-            // Hysteresis threshold to prevent vibration: 380px collapse, 430px expand
-            const isCurrentlyCompact = Boolean(container.querySelector('.antigravity-tachometer-badge.compact'));
-            const threshold = isCurrentlyCompact ? 430 : 380;
-            const isNarrow = width < threshold || window.innerWidth < 800;
-            const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
-
-            const slot = container.classList?.contains('antigravity-slot-container')
-              ? container
-              : (container.querySelector?.('.antigravity-slot-container') || null);
-            if (slot) {
-              slot.__lastTachCompact = shouldCompact;
-              slot.__lastAgentCompact = shouldCompact;
-            }
-
-            const tach = container.querySelector('.antigravity-tachometer-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-tachometer-badge') : null);
-            if (tach && tach.classList.contains('compact') !== shouldCompact) {
-              tach.classList.toggle('compact', shouldCompact);
-            }
-
-            const agent = container.querySelector('.antigravity-agent-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-agent-badge') : null);
-            if (agent && agent.classList.contains('compact') !== shouldCompact) {
-              agent.classList.toggle('compact', shouldCompact);
-            }
+            pendingResizeTargets.set(container, width);
+          }
+          if (!pendingResizeTargets.size || resizeRafScheduled) return;
+          if (typeof requestAnimationFrame === 'function') {
+            resizeRafScheduled = true;
+            requestAnimationFrame(flushPendingResizeTargets);
+          } else {
+            flushPendingResizeTargets();
           }
         });
 
@@ -2266,22 +2501,76 @@ export class ModLoader {
               }
             }
           };
+          let resizeSyncRaf = null;
+          const handleWindowResizeSync = () => {
+            if (document.hidden || window.innerWidth <= 0) return;
+            const applyResize = () => {
+              resizeSyncRaf = null;
+              if (document.hidden || window.innerWidth <= 0) return;
+              const hasTrigger = document.querySelector('button[data-testid="model-selector-trigger"]');
+              const hasSlot = document.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions');
+              if (hasTrigger && !hasSlot) {
+                handleRdpAndVisibilityRecovery();
+              } else if (typeof window.__applyChatboxModsCompact === 'function') {
+                window.__applyChatboxModsCompact();
+              }
+            };
+            if (typeof requestAnimationFrame === 'function') {
+              if (resizeSyncRaf !== null) return;
+              resizeSyncRaf = requestAnimationFrame(applyResize);
+            } else {
+              applyResize();
+            }
+          };
           document.addEventListener('visibilitychange', handleRdpAndVisibilityRecovery);
           window.addEventListener('focus', handleRdpAndVisibilityRecovery);
-          window.addEventListener('resize', handleRdpAndVisibilityRecovery);
+          window.addEventListener('resize', handleWindowResizeSync);
         }
 
-        // 4. Observe DOM mutations with smart slot check to avoid DOM thrashing
+        // 4. Observe DOM mutations with smart slot check & self-mutation exclusion to avoid DOM thrashing
         if (window.__antigravityModObserver) {
           window.__antigravityModObserver.disconnect();
           window.__antigravityModObserver = null;
         }
 
+        const isOwnedModNode = (node) => {
+          if (!node || node.nodeType !== 1) return false;
+          return Boolean(
+            node.classList?.contains('antigravity-slot-container') ||
+            node.classList?.contains('antigravity-voice-dock') ||
+            (typeof node.id === 'string' && node.id.startsWith('antigravity-')) ||
+            node.closest?.('.antigravity-slot-container, .antigravity-voice-dock, [id^="antigravity-"]')
+          );
+        };
+
+        const hasExternalDomChanges = (mutations) => {
+          if (!Array.isArray(mutations) || !mutations.length) return true;
+          for (const m of mutations) {
+            if (m.removedNodes && m.removedNodes.length) {
+              for (const removed of m.removedNodes) {
+                if (removed?.nodeType === 1 && (
+                  removed.classList?.contains('antigravity-slot-container') ||
+                  removed.querySelector?.('.antigravity-slot-container')
+                )) {
+                  return true;
+                }
+              }
+            }
+            if (!isOwnedModNode(m.target)) {
+              return true;
+            }
+          }
+          return false;
+        };
+
         let mountDebounce = null;
-        window.__antigravityModObserver = new MutationObserver(() => {
+        window.__antigravityModObserver = new MutationObserver((mutations) => {
+          if (window.__antigravityIsMountingMods) return;
+          if (!hasExternalDomChanges(mutations)) return;
           if (mountDebounce) return;
           mountDebounce = setTimeout(() => {
             mountDebounce = null;
+            if (window.__antigravityIsMountingMods) return;
             if (typeof window.__dockNativeVoiceToast === 'function') {
               window.__dockNativeVoiceToast(document);
             }
@@ -2302,13 +2591,13 @@ export class ModLoader {
 
             if (!missingSlot) {
               const auxBtn = document.querySelector('button[data-testid="aux-pane-new-tab-button"]') || document.querySelector('.aux-pane-new-tab-button');
-              if (auxBtn && !document.querySelector('.antigravity-slot-aux-pane-tabs, #antigravity-slot-aux-pane-tabs')) {
+              if (auxBtn && !document.querySelector('.antigravity-slot-aux-pane-tab, #antigravity-slot-aux-pane-tab')) {
                 missingSlot = true;
               }
             }
             if (!missingSlot) {
               const sidebarSlot = document.querySelector('.shrink-0 > .bg-sidebar');
-              if (sidebarSlot && !document.querySelector('.antigravity-slot-sidebar-header, #antigravity-slot-sidebar-header')) {
+              if (sidebarSlot && !document.querySelector('.antigravity-slot-menubar-actions, #antigravity-slot-menubar-actions')) {
                 missingSlot = true;
               }
             }

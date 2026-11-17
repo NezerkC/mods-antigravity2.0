@@ -19,7 +19,7 @@
   font-size: 11px;
   line-height: 28px;
   color: #f4f4f5;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
   position: relative;
   flex-shrink: 0;
@@ -30,7 +30,7 @@
   height: 6px;
   border-radius: 9999px;
   flex-shrink: 0;
-  transition: all 0.3s ease;
+  transition: background 0.25s ease, box-shadow 0.25s ease;
 }
 
 .antigravity-agent-badge:hover {
@@ -53,6 +53,8 @@
   letter-spacing: -0.01em;
   color: #e4e4e7;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .agent-caret {
@@ -81,11 +83,11 @@
 }
 
 @media (max-width: 960px) {
-  .agent-label,
-  .agent-caret {
+  .antigravity-agent-badge.compact .agent-label,
+  .antigravity-agent-badge.compact .agent-caret {
     display: none !important;
   }
-  .antigravity-agent-badge {
+  .antigravity-agent-badge.compact {
     height: 28px !important;
     box-sizing: border-box !important;
     padding: 0 7px !important;
@@ -660,6 +662,8 @@
   display: inline-flex !important;
   align-items: center !important;
   gap: 5px !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
 }
 
 .antigravity-caveman-reticle-trigger {

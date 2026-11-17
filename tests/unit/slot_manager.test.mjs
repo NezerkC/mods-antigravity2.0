@@ -61,3 +61,112 @@ test('SlotManager - generates mounting snippet for slot and mod targeting all ma
   assert.ok(snippet.includes('antigravity-slot-header-actions'));
   assert.ok(snippet.includes('antigravity-mod-tachometer'));
 });
+
+test('SlotManager - sets flex minWidth/maxWidth guards and avoids innerHTML churn on unchanged remounts', () => {
+  const manager = new SlotManager();
+  const sig1 = SlotManager.computeHtmlSignature('<span>27.6k</span>');
+  const sig2 = SlotManager.computeHtmlSignature('<span>28.0k</span>');
+  assert.notEqual(sig1, sig2);
+  assert.equal(sig1, SlotManager.computeHtmlSignature('<span>27.6k</span>'));
+
+  let innerHtmlSets = 0;
+  let existingModNode = null;
+  const makeNode = () => {
+    let html = '';
+    const attrs = {};
+    const el = {
+      id: '',
+      className: '',
+      style: { setProperty() {} },
+      children: [],
+      firstElementChild: null,
+      parentElement: null,
+      get innerHTML() { return html; },
+      set innerHTML(v) {
+        innerHtmlSets++;
+        html = v;
+        el.firstElementChild = { tagName: 'DIV' };
+      },
+      setAttribute(k, v) { attrs[k] = String(v); },
+      getAttribute(k) { return attrs[k] ?? null; },
+      appendChild(child) {
+        child.parentElement = el;
+        el.children.push(child);
+        return child;
+      },
+      insertBefore(child) {
+        return el.appendChild(child);
+      },
+      querySelector(sel) {
+        if (sel === '#antigravity-mod-context-tachometer') return existingModNode;
+        if (sel === '#antigravity-slot-header-actions') return slotEl;
+        return null;
+      }
+    };
+    return el;
+  };
+
+  let slotCreated = false;
+  const flexParent = {
+    className: 'flex items-center gap-1 min-w-0',
+    contains() { return true; },
+    closest(sel) { return sel === '.flex.items-center.gap-1' ? flexParent : null; },
+    appendChild(child) {
+      slotCreated = true;
+      child.parentElement = flexParent;
+      return child;
+    },
+    insertBefore(child) {
+      slotCreated = true;
+      child.parentElement = flexParent;
+      return child;
+    },
+    querySelector(sel) {
+      return (slotCreated && sel === '#antigravity-slot-header-actions') ? slotEl : null;
+    }
+  };
+  const slotEl = makeNode();
+  slotEl.id = 'antigravity-slot-header-actions';
+  slotEl.parentElement = flexParent;
+  const modNode = makeNode();
+  existingModNode = null;
+
+  const anchor = {
+    parentElement: flexParent,
+    nextSibling: null
+  };
+
+  slotEl.querySelector = (sel) => (sel === '#antigravity-mod-context-tachometer' ? existingModNode : null);
+  slotEl.appendChild = (child) => {
+    existingModNode = child;
+    child.parentElement = slotEl;
+    return child;
+  };
+
+  const mockDoc = {
+    createElement() { return slotCreated ? modNode : slotEl; },
+    querySelectorAll(sel) {
+      if (sel === 'button[data-testid="model-selector-trigger"]') return [anchor];
+      if (sel === '#antigravity-slot-header-actions') return slotCreated ? [slotEl] : [];
+      return [];
+    },
+    querySelector() { return null; }
+  };
+
+  const snippet = manager.generateMountCode({
+    slotId: 'header-actions',
+    modId: 'context-tachometer',
+    htmlContent: '<div class="antigravity-tachometer-badge">0k</div>'
+  });
+  const runner = new Function('document', snippet);
+
+  runner(mockDoc);
+  assert.equal(slotEl.style.minWidth, '0');
+  assert.equal(slotEl.style.maxWidth, '100%');
+  assert.equal(innerHtmlSets, 1);
+
+  // Simulate live telemetry mutation before second mountAllMods run
+  slotEl.previousElementSibling = anchor;
+  runner(mockDoc);
+  assert.equal(innerHtmlSets, 1, 'Live-state mod innerHTML must not be wiped on subsequent mounts');
+});

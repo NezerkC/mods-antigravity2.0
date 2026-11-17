@@ -77,6 +77,20 @@ export class SlotManager {
   }
 
   /**
+   * Computes a deterministic content signature to skip redundant innerHTML writes.
+   * @param {string} html
+   * @returns {string}
+   */
+  static computeHtmlSignature(html) {
+    const text = String(html || '');
+    let hash = 5381;
+    for (let i = 0; i < text.length; i++) {
+      hash = ((hash << 5) + hash) ^ text.charCodeAt(i);
+    }
+    return `${text.length}:${(hash >>> 0).toString(36)}`;
+  }
+
+  /**
    * Generates browser-executable JavaScript to mount a mod within a target slot
    * across ALL conversation tabs and split panels matching the selector.
    * @param {Object} params
@@ -89,6 +103,7 @@ export class SlotManager {
     const slot = this.getSlot(slotId);
     const containerId = this.getContainerId(slotId);
     const modWrapperId = `antigravity-mod-${modId}`;
+    const htmlSig = SlotManager.computeHtmlSignature(htmlContent);
 
     return `
       (() => {
@@ -109,8 +124,13 @@ export class SlotManager {
           }
         });
 
-        // If containers already exist in the DOM, ensure mod nodes are refreshed immediately
-        document.querySelectorAll('#${containerId}').forEach(container => {
+        const ensureSlotSizing = (container) => {
+          if (container.style.minWidth !== '0') container.style.minWidth = '0';
+          if (container.style.maxWidth !== '100%') container.style.maxWidth = '100%';
+        };
+
+        const syncModNode = (container) => {
+          ensureSlotSizing(container);
           let modNode = container.querySelector('#${modWrapperId}');
           if (!modNode) {
             modNode = document.createElement('div');
@@ -119,13 +139,25 @@ export class SlotManager {
             modNode.style.display = 'inline-flex';
             modNode.style.alignItems = 'center';
             modNode.style.height = '28px';
+            if ('${slotId}' === 'header-actions') {
+              modNode.style.minWidth = '0';
+              modNode.style.maxWidth = '100%';
+            }
             container.appendChild(modNode);
           }
-          modNode.setAttribute('data-version', '2');
-          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
-            modNode.innerHTML = ${JSON.stringify(htmlContent)};
+          if (modNode.getAttribute('data-version') !== '2') {
+            modNode.setAttribute('data-version', '2');
           }
-        });
+          const prevSig = modNode.getAttribute('data-sig');
+          const isLiveStateMod = '${modId}' === 'agent-selector' || '${modId}' === 'context-tachometer';
+          if (!modNode.firstElementChild || (!isLiveStateMod && prevSig !== '${htmlSig}')) {
+            modNode.innerHTML = ${JSON.stringify(htmlContent)};
+            modNode.setAttribute('data-sig', '${htmlSig}');
+          }
+        };
+
+        // If containers already exist in the DOM, ensure mod nodes are hydrated without redundant innerHTML churn
+        document.querySelectorAll('#${containerId}').forEach(syncModNode);
 
         if (!anchors.length) return;
 
@@ -166,6 +198,8 @@ export class SlotManager {
             container.style.alignItems = 'center';
             container.style.gap = '6px';
             container.style.height = '100%';
+            container.style.minWidth = '0';
+            container.style.maxWidth = '100%';
             container.style.setProperty('app-region', 'no-drag');
 
             if ('${slot.strategy}' === 'after') {
@@ -194,20 +228,7 @@ export class SlotManager {
             }
           }
 
-          let modNode = container.querySelector('#${modWrapperId}');
-          if (!modNode) {
-            modNode = document.createElement('div');
-            modNode.id = '${modWrapperId}';
-            modNode.className = '${modWrapperId}';
-            modNode.style.display = 'inline-flex';
-            modNode.style.alignItems = 'center';
-            modNode.style.height = '28px';
-            container.appendChild(modNode);
-          }
-          modNode.setAttribute('data-version', '2');
-          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
-            modNode.innerHTML = ${JSON.stringify(htmlContent)};
-          }
+          syncModNode(container);
         }
       })();
     `;
