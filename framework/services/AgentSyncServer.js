@@ -19,6 +19,7 @@ export class AgentSyncServer {
    * @param {number} [options.port] Port to listen on (default 53912)
    * @param {string} [options.host] Host address (default 127.0.0.1)
    * @param {string} [options.configPath] Path to active_agents.json
+   * @param {string} [options.modelSlotsPath] Path to model_slots.json
    * @param {VcsOrchestrator} [options.vcsOrchestrator] Custom VCS orchestrator
    * @param {string} [options.repoPath] Path to git repository
    */
@@ -26,6 +27,7 @@ export class AgentSyncServer {
     this.port = options.port ?? 53912;
     this.host = options.host || '127.0.0.1';
     this.configPath = options.configPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'active_agents.json');
+    this.modelSlotsPath = options.modelSlotsPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'model_slots.json');
     this.repoPath = options.repoPath || process.cwd();
     this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ repoPath: this.repoPath });
     this.server = null;
@@ -43,6 +45,24 @@ export class AgentSyncServer {
       }
     } catch {}
     return {};
+  }
+
+  /**
+   * Reads model slots from disk or returns default configuration.
+   * @returns {Object}
+   */
+  readModelSlots() {
+    const defaults = { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high', enabled: true };
+    try {
+      if (fs.existsSync(this.modelSlotsPath)) {
+        const raw = fs.readFileSync(this.modelSlotsPath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return { ...defaults, ...parsed };
+        }
+      }
+    } catch {}
+    return defaults;
   }
 
   /**
@@ -64,6 +84,43 @@ export class AgentSyncServer {
         fs.writeFileSync(this.configPath, JSON.stringify(data, null, 2), 'utf-8');
       } catch {}
     }
+  }
+
+  /**
+   * Saves model slots configuration to disk atomically.
+   * @param {Object} data
+   */
+  writeModelSlots(data) {
+    try {
+      const dir = path.dirname(this.modelSlotsPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const tmpPath = `${this.modelSlotsPath}.tmp.${Date.now()}`;
+      fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+      fs.renameSync(tmpPath, this.modelSlotsPath);
+    } catch (err) {
+      // Fallback direct write
+      try {
+        fs.writeFileSync(this.modelSlotsPath, JSON.stringify(data, null, 2), 'utf-8');
+      } catch {}
+    }
+  }
+
+  /**
+   * Updates model slots config with partial patch.
+   * @param {Object} [patch]
+   * @returns {Object}
+   */
+  updateModelSlots(patch = {}) {
+    const current = this.readModelSlots();
+    const updated = {
+      ...current,
+      ...patch,
+      updatedAt: Date.now()
+    };
+    this.writeModelSlots(updated);
+    return updated;
   }
 
   /**
@@ -195,6 +252,40 @@ export class AgentSyncServer {
           const data = this.readActiveAgents();
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(data));
+          return;
+        }
+
+        if (req.method === 'GET' && req.url === '/model-slots') {
+          const data = this.readModelSlots();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(data));
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/model-slots') {
+          let body = '';
+          let exceeded = false;
+          req.on('data', chunk => {
+            body += chunk;
+            if (body.length > 65536) {
+              exceeded = true;
+              res.writeHead(413, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Payload too large' }));
+              req.destroy();
+            }
+          });
+          req.on('end', () => {
+            if (exceeded || res.writableEnded) return;
+            try {
+              const payload = JSON.parse(body || '{}');
+              const slots = this.updateModelSlots(payload);
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: true, slots }));
+              return;
+            } catch {}
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid payload' }));
+          });
           return;
         }
 

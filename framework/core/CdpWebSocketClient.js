@@ -28,11 +28,18 @@ export class CdpWebSocketClient {
 
   /**
    * Finds the primary browser page target among the reported CDP targets.
-   * @param {Array<{ type: string, webSocketDebuggerUrl?: string }>} targets
-   * @returns {{ type: string, webSocketDebuggerUrl?: string } | undefined}
+   * Prioritizes the main Antigravity window before secondary pages.
+   * @param {Array<{ type: string, webSocketDebuggerUrl?: string, title?: string, url?: string }>} targets
+   * @returns {{ type: string, webSocketDebuggerUrl?: string, title?: string, url?: string } | undefined}
    */
   static findPageTarget(targets) {
     if (!Array.isArray(targets)) return undefined;
+    const agTarget = targets.find(t =>
+      t.type === 'page' &&
+      typeof t.webSocketDebuggerUrl === 'string' &&
+      (t.title?.includes('Antigravity') || t.url?.includes('127.0.0.1'))
+    );
+    if (agTarget) return agTarget;
     return targets.find(t => t.type === 'page' && typeof t.webSocketDebuggerUrl === 'string');
   }
 

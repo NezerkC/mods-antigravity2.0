@@ -1,0 +1,483 @@
+/* =========================================================================
+   ANTIGRAVITY PLANNER & BUILDER MODEL SLOTS MOD - STYLES
+   ========================================================================= */
+
+/* Menubar Buttons Container */
+.antigravity-model-slots-group {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  app-region: no-drag !important;
+  user-select: none !important;
+}
+
+/* Individual Slot Selector Button */
+.antigravity-model-slot-btn {
+  height: 26px !important;
+  padding: 0 8px !important;
+  font-size: 11.5px !important;
+  font-weight: 500 !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  color: rgba(255, 255, 255, 0.85) !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  transition: all 0.15s ease !important;
+  app-region: no-drag !important;
+  user-select: none !important;
+  line-height: 1 !important;
+  box-sizing: border-box !important;
+}
+
+.antigravity-model-slot-btn:hover {
+  background: rgba(255, 255, 255, 0.09) !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+  color: #ffffff !important;
+}
+
+.antigravity-model-slot-btn.open {
+  background: rgba(255, 255, 255, 0.13) !important;
+  border-color: rgba(56, 189, 248, 0.45) !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.15) !important;
+}
+
+/* Menubar Button Elements */
+.antigravity-model-slot-btn .model-slot-dot {
+  width: 6px !important;
+  height: 6px !important;
+  border-radius: 50% !important;
+  flex-shrink: 0 !important;
+  pointer-events: none !important;
+}
+
+.antigravity-model-slot-btn .model-slot-role {
+  font-weight: 600 !important;
+  font-size: 10px !important;
+  color: rgba(255, 255, 255, 0.5) !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.3px !important;
+  pointer-events: none !important;
+}
+
+.antigravity-model-slot-btn .model-slot-value {
+  font-weight: 500 !important;
+  color: #ffffff !important;
+  pointer-events: none !important;
+}
+
+.antigravity-model-slot-btn .model-slot-caret {
+  font-size: 8px !important;
+  opacity: 0.5 !important;
+  pointer-events: none !important;
+  margin-left: 1px !important;
+}
+
+/* Floating Portal Dropdown */
+.antigravity-model-slot-dropdown-portal {
+  position: fixed !important;
+  z-index: 1000001 !important;
+  width: 250px !important;
+  max-height: none !important;
+  overflow: visible !important;
+  background: #161822 !important;
+  background-color: #161822 !important;
+  background-image: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;
+  opacity: 1 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;
+  padding: 10px !important;
+  color: #c0caf5 !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  display: none;
+  flex-direction: column !important;
+  box-sizing: border-box !important;
+  animation: modelSlotPopIn 0.15s cubic-bezier(0, 0, 0.2, 1) forwards;
+}
+
+.antigravity-model-slot-dropdown-portal.open {
+  display: flex !important;
+}
+
+@keyframes modelSlotPopIn {
+  from {
+    opacity: 0;
+    transform: translateY(-5px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Dropdown Header */
+.model-slot-dropdown-header {
+  padding-bottom: 8px !important;
+  margin-bottom: 8px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+}
+
+.model-slot-dropdown-title-row {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+}
+
+.model-slot-dropdown-title {
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  color: #ffffff !important;
+  letter-spacing: -0.2px !important;
+}
+
+.model-slot-dropdown-role-badge {
+  font-size: 9px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.4px !important;
+  padding: 1px 6px !important;
+  border-radius: 4px !important;
+  text-transform: uppercase !important;
+}
+
+.model-slot-dropdown-role-badge.planner {
+  background: rgba(56, 189, 248, 0.15) !important;
+  color: #38bdf8 !important;
+  border: 1px solid rgba(56, 189, 248, 0.3) !important;
+}
+
+.model-slot-dropdown-role-badge.builder {
+  background: rgba(52, 211, 153, 0.15) !important;
+  color: #34d399 !important;
+  border: 1px solid rgba(52, 211, 153, 0.3) !important;
+}
+
+.model-slot-dropdown-sub {
+  font-size: 10.5px !important;
+  color: rgba(255, 255, 255, 0.45) !important;
+}
+
+/* Hierarchical Base Model Options List */
+.model-slot-options-list {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+  overflow: visible !important;
+}
+
+/* Base Model Row */
+.model-slot-row {
+  position: relative !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  width: 100% !important;
+  padding: 6px 8px !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  transition: all 0.12s ease !important;
+  user-select: none !important;
+  font-family: inherit !important;
+  box-sizing: border-box !important;
+}
+
+.model-slot-row:hover {
+  background: rgba(255, 255, 255, 0.07) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.model-slot-row.active {
+  background: rgba(56, 189, 248, 0.08) !important;
+  border-color: rgba(56, 189, 248, 0.25) !important;
+}
+
+.model-slot-row.open {
+  background: rgba(255, 255, 255, 0.1) !important;
+  border-color: rgba(56, 189, 248, 0.3) !important;
+}
+
+.model-slot-row-left {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  min-width: 0 !important;
+  pointer-events: none !important;
+}
+
+.model-slot-row-dot {
+  width: 7px !important;
+  height: 7px !important;
+  border-radius: 50% !important;
+  flex-shrink: 0 !important;
+  pointer-events: none !important;
+}
+
+.model-slot-row-name {
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  color: #ffffff !important;
+  white-space: nowrap !important;
+  pointer-events: none !important;
+}
+
+.model-slot-row-right {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  flex-shrink: 0 !important;
+  pointer-events: none !important;
+}
+
+.model-slot-active-badge {
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  padding: 1px 5px !important;
+  border-radius: 4px !important;
+  background: rgba(56, 189, 248, 0.15) !important;
+  color: #38bdf8 !important;
+  border: 1px solid rgba(56, 189, 248, 0.3) !important;
+  letter-spacing: 0.2px !important;
+  pointer-events: none !important;
+}
+
+.model-slot-chevron {
+  font-size: 14px !important;
+  line-height: 1 !important;
+  color: rgba(255, 255, 255, 0.45) !important;
+  pointer-events: none !important;
+  transition: color 0.12s ease !important;
+}
+
+.model-slot-row:hover .model-slot-chevron,
+.model-slot-row.open .model-slot-chevron {
+  color: #ffffff !important;
+}
+
+/* Effort Submenu Flyout */
+.model-slot-submenu {
+  position: absolute !important;
+  left: 100% !important;
+  top: -4px !important;
+  margin-left: 0 !important;
+  min-width: 120px !important;
+  display: none;
+  z-index: 1000002 !important;
+  background: #161822 !important;
+  background-color: #161822 !important;
+  background-image: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;
+  opacity: 1 !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;
+  padding: 4px !important;
+  box-sizing: border-box !important;
+}
+
+.model-slot-submenu::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -8px;
+  width: 8px;
+}
+
+.model-slot-row:hover > .model-slot-submenu,
+.model-slot-row.open > .model-slot-submenu {
+  display: block !important;
+}
+
+.model-slot-submenu.submenu-left {
+  right: 100% !important;
+  left: auto !important;
+  margin-right: 0 !important;
+  margin-left: 0 !important;
+}
+
+.model-slot-submenu.submenu-left::before {
+  left: auto;
+  right: -8px;
+}
+
+/* Effort Level Option Button */
+.model-effort-option {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  width: 100% !important;
+  padding: 5px 8px !important;
+  margin-bottom: 2px !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  border-radius: 5px !important;
+  cursor: pointer !important;
+  text-align: left !important;
+  font-family: inherit !important;
+  box-sizing: border-box !important;
+  transition: all 0.12s ease !important;
+}
+
+.model-effort-option:last-child {
+  margin-bottom: 0 !important;
+}
+
+.model-effort-option:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+.model-effort-option.active {
+  background: rgba(56, 189, 248, 0.12) !important;
+  border-color: rgba(56, 189, 248, 0.35) !important;
+}
+
+.model-effort-name {
+  font-size: 11.5px !important;
+  font-weight: 500 !important;
+  color: #ffffff !important;
+  pointer-events: none !important;
+}
+
+.model-effort-option.active .model-effort-name {
+  color: #38bdf8 !important;
+  font-weight: 600 !important;
+}
+
+.model-effort-check {
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  color: #38bdf8 !important;
+  width: 14px !important;
+  text-align: right !important;
+  pointer-events: none !important;
+}
+
+/* Legacy option styles retained for compatibility */
+.model-slot-option {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  width: 100% !important;
+  padding: 6px 8px !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  text-align: left !important;
+  transition: all 0.12s ease !important;
+  user-select: none !important;
+  font-family: inherit !important;
+  box-sizing: border-box !important;
+}
+
+.model-slot-option:hover {
+  background: rgba(255, 255, 255, 0.065) !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.model-slot-option.active {
+  background: rgba(56, 189, 248, 0.1) !important;
+  border-color: rgba(56, 189, 248, 0.3) !important;
+}
+
+.model-slot-option-dot {
+  width: 8px !important;
+  height: 8px !important;
+  border-radius: 50% !important;
+  flex-shrink: 0 !important;
+  pointer-events: none !important;
+}
+
+.model-slot-option-info {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 1px !important;
+  flex: 1 !important;
+  min-width: 0 !important;
+  pointer-events: none !important;
+}
+
+.model-slot-option-name {
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  color: #ffffff !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+.model-slot-option-family {
+  font-size: 10px !important;
+  color: rgba(255, 255, 255, 0.42) !important;
+}
+
+.model-slot-option-badge {
+  font-size: 9.5px !important;
+  padding: 1px 5px !important;
+  border-radius: 4px !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: rgba(255, 255, 255, 0.6) !important;
+  flex-shrink: 0 !important;
+  pointer-events: none !important;
+}
+
+.model-slot-option-check {
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  color: #38bdf8 !important;
+  width: 14px !important;
+  text-align: center !important;
+  flex-shrink: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Mods Manager Icon Box for Model Slots */
+.mod-icon-box.slots-icon {
+  background: rgba(56, 189, 248, 0.12) !important;
+  color: #38bdf8 !important;
+  border: 1px solid rgba(56, 189, 248, 0.25) !important;
+}
+
+/* Subagent Model Pill Badge */
+.antigravity-subagent-model-pill {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  height: 18px !important;
+  padding: 0 6px !important;
+  margin-left: 6px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  border-radius: 4px !important;
+  border: 1px solid !important;
+  user-select: none !important;
+  vertical-align: middle !important;
+  box-sizing: border-box !important;
+  transition: all 0.15s ease !important;
+}
+
+.antigravity-subagent-model-pill .subagent-model-dot {
+  width: 5px !important;
+  height: 5px !important;
+  border-radius: 50% !important;
+  flex-shrink: 0 !important;
+  pointer-events: none !important;
+}
+
+.antigravity-subagent-model-pill .subagent-model-label {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  letter-spacing: 0.2px !important;
+  pointer-events: none !important;
+  white-space: nowrap !important;
+}
+

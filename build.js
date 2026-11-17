@@ -86,7 +86,16 @@ async function build() {
     .replace(/const __dirname = .*?;/, '')
     .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(voiceAssistantCss)};`);
 
-  // 7. Assemble Standalone Bundle
+  // 7. Read Model Slots Mod sources
+  const modelSlotsHtml = cleanModuleCode('mods/model-slots/components/ModelSlotsHtml.js');
+  const modelSlotsCss = fs.readFileSync(path.resolve('mods/model-slots/styles.css'), 'utf-8');
+
+  const modelSlotsIndex = cleanModuleCode('mods/model-slots/index.js')
+    .replace(/const __filename = .*?;/, '')
+    .replace(/const __dirname = .*?;/, '')
+    .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(modelSlotsCss)};`);
+
+  // 8. Assemble Standalone Bundle
   const bundle = `// Antigravity Mod Framework Runtime Host (Bundle)
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -162,6 +171,11 @@ ${voiceButtonHtml}
 
 ${voiceAssistantIndex}
 
+// ===================== Model Slots Mod =====================
+${modelSlotsHtml}
+
+${modelSlotsIndex}
+
 // ======================= Entrypoint Execution =======================
 async function main() {
   try {
@@ -169,6 +183,7 @@ async function main() {
     host.registerMod(new ContextTachometerMod());
     host.registerMod(new AgentSelectorMod());
     host.registerMod(new ModsManagerMod());
+    host.registerMod(new ModelSlotsMod());
 
     // Lazy VCS: Avoid running 20+ git/gh processes synchronously on every hook execution.
     // Full VCS overview will be fetched on demand by GitGraph via the local HTTP bridge.

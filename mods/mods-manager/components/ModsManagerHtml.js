@@ -136,6 +136,27 @@ export function renderModsManagerPanelHtml() {
         </label>
       </div>
 
+      <!-- Mod Card: Slots Planner & Builder -->
+      <div class="mod-card">
+        <div class="mod-info">
+          <div class="mod-icon-box slots-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+              <line x1="8" y1="21" x2="16" y2="21"></line>
+              <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+          </div>
+          <div class="mod-text">
+            <div class="mod-title">Slots Planner & Builder</div>
+            <div class="mod-desc">Selectores duales en menubar para asignar modelos a roles Plan y Build.</div>
+          </div>
+        </div>
+        <label class="mod-switch">
+          <input type="checkbox" id="mod-toggle-model-slots" data-mod="model-slots" checked>
+          <span class="mod-slider"></span>
+        </label>
+      </div>
+
       <!-- Mod Card: Background Persistence (Daemon Kill-Switch) -->
       <div class="mod-card daemon-card">
         <div class="mod-info">

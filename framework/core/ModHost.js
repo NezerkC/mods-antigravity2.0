@@ -47,6 +47,22 @@ export class ModHost {
   }
 
   /**
+   * Returns registered mods from the mod loader.
+   * @returns {Array<import('../sdk/AntigravityMod.js').AntigravityMod>}
+   */
+  getMods() {
+    return this.modLoader.getRegisteredMods();
+  }
+
+  /**
+   * Returns registered mods from the mod loader.
+   * @returns {Array<import('../sdk/AntigravityMod.js').AntigravityMod>}
+   */
+  getRegisteredMods() {
+    return this.modLoader.getRegisteredMods();
+  }
+
+  /**
    * Compiles the combined DOM injection payload for all registered mods.
    * @param {Object} context
    * @returns {string}
@@ -221,11 +237,13 @@ export class ModHost {
     };
 
     const activeAgents = this.syncServer.readActiveAgents();
+    const modelSlots = this.syncServer.readModelSlots();
 
     const hostContext = {
       telemetry: primaryMetric,
       allMetrics,
       activeAgents,
+      modelSlots,
       ...vcsOverview,
       timestamp: Date.now()
     };
@@ -258,6 +276,21 @@ export class ModHost {
             }
           }
           this.syncServer.writeActiveAgents(merged);
+        }
+      }
+    } catch {}
+
+    // Sync model slots from renderer localStorage to disk
+    try {
+      let rawSlots = evalRes?.value?.modelSlots;
+      if (!rawSlots) {
+        const slotsRes = await cdpClient.evaluate("localStorage.getItem('__antigravity_model_slots')");
+        rawSlots = slotsRes?.value;
+      }
+      if (rawSlots) {
+        const parsedSlots = typeof rawSlots === 'string' ? JSON.parse(rawSlots) : rawSlots;
+        if (parsedSlots && typeof parsedSlots === 'object') {
+          this.syncServer.updateModelSlots(parsedSlots);
         }
       }
     } catch {}

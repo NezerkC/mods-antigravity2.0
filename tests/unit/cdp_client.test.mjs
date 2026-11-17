@@ -29,3 +29,14 @@ test('CdpWebSocketClient - filters valid page target from target list', () => {
   assert.ok(page);
   assert.equal(page.webSocketDebuggerUrl, 'ws://127.0.0.1:54321/devtools/page/1');
 });
+
+test('CdpWebSocketClient - prioritizes Antigravity window target over secondary web pages', () => {
+  const targets = [
+    { type: 'page', title: 'GitHub Settings', url: 'https://github.com/settings', webSocketDebuggerUrl: 'ws://secondary' },
+    { type: 'page', title: 'Antigravity', url: 'http://127.0.0.1:3000', webSocketDebuggerUrl: 'ws://antigravity-main' }
+  ];
+
+  const page = CdpWebSocketClient.findPageTarget(targets);
+  assert.ok(page);
+  assert.equal(page.webSocketDebuggerUrl, 'ws://antigravity-main');
+});

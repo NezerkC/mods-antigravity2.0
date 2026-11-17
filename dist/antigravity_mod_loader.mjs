@@ -8,6 +8,9 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 // ======================== Core & SDK ========================
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 
 
 
@@ -185,6 +188,9 @@ class CdpPortResolver {
 }
 
 
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 /**
  * Client for interacting with the Electron Chrome DevTools Protocol (CDP) WebSocket bridge.
  */
@@ -212,11 +218,18 @@ class CdpWebSocketClient {
 
   /**
    * Finds the primary browser page target among the reported CDP targets.
-   * @param {Array<{ type: string, webSocketDebuggerUrl?: string }>} targets
-   * @returns {{ type: string, webSocketDebuggerUrl?: string } | undefined}
+   * Prioritizes the main Antigravity window before secondary pages.
+   * @param {Array<{ type: string, webSocketDebuggerUrl?: string, title?: string, url?: string }>} targets
+   * @returns {{ type: string, webSocketDebuggerUrl?: string, title?: string, url?: string } | undefined}
    */
   static findPageTarget(targets) {
     if (!Array.isArray(targets)) return undefined;
+    const agTarget = targets.find(t =>
+      t.type === 'page' &&
+      typeof t.webSocketDebuggerUrl === 'string' &&
+      (t.title?.includes('Antigravity') || t.url?.includes('127.0.0.1'))
+    );
+    if (agTarget) return agTarget;
     return targets.find(t => t.type === 'page' && typeof t.webSocketDebuggerUrl === 'string');
   }
 
@@ -293,6 +306,9 @@ class CdpWebSocketClient {
   }
 }
 
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
 
 /**
  * Manages target UI slots in the Antigravity 2.0 DOM and generates
@@ -508,6 +524,9 @@ class SlotManager {
 }
 
 
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 /**
  * Scopes and isolates raw CSS rules to prevent injected mod styles
  * from conflicting with Antigravity host UI.
@@ -586,6 +605,9 @@ class StyleIsolator {
             sel.startsWith('.mods-manager-') ||
             sel.startsWith('.agent-') ||
             sel.startsWith('.antigravity-agent-item') ||
+            sel.startsWith('.model-slot-') ||
+            sel.startsWith('.model-effort-') ||
+            sel.includes('antigravity-subagent-model') ||
             sel.startsWith('body') ||
             sel.startsWith(':root')
           ) {
@@ -611,6 +633,9 @@ class StyleIsolator {
   }
 }
 
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
 
 /**
  * Base class for all Antigravity desktop UI mods.
@@ -672,6 +697,10 @@ class AntigravityMod {
    */
   onDestroy() {}
 }
+
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
 
 
 
@@ -1226,17 +1255,265 @@ class ModLoader {
         const renderReticleSvg = ${renderReticleSvg.toString()};
         window.__renderReticleSvg = renderReticleSvg;
 
+        window.__BASE_MODELS = ${JSON.stringify(BASE_MODELS)};
+        window.__MODEL_CATALOG = ${JSON.stringify(MODEL_CATALOG)};
+        window.__DEFAULT_MODEL_SLOTS = ${JSON.stringify(DEFAULT_MODEL_SLOTS)};
+        window.__getModelById = function(modelId, catalog) { const list = catalog || window.__MODEL_CATALOG || []; return list.find(m => m.id === modelId) || list[0]; };
+        window.getModelById = window.__getModelById;
+        window.__renderModelSlotDropdownHtml = ${renderModelSlotDropdownHtml.toString()};
+        window.__renderSubagentModelPill = ${renderSubagentModelPill.toString()};
+
+        window.__getSavedModelSlots = function() {
+          try {
+            const raw = localStorage.getItem('__antigravity_model_slots');
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (parsed && typeof parsed === 'object') {
+                return { ...window.__DEFAULT_MODEL_SLOTS, ...parsed };
+              }
+            }
+          } catch (e) {}
+          return { ...window.__DEFAULT_MODEL_SLOTS };
+        };
+
+        window.__syncSubagentModelBadges = function() {
+          const slots = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { builder: 'gemini-4-hydrogen-high' };
+          const builderModelId = slots.builder || 'gemini-4-hydrogen-high';
+          const model = (typeof window.__getModelById === 'function')
+            ? window.__getModelById(builderModelId)
+            : { id: builderModelId, name: builderModelId, shortName: builderModelId, color: '#34d399' };
+
+          let badges = [];
+          try {
+            badges = Array.from(document.querySelectorAll('div[title="Subagent"], .text-secondary-foreground:has(> span)'));
+          } catch (e) {
+            badges = Array.from(document.querySelectorAll('div[title="Subagent"], .text-secondary-foreground'));
+          }
+
+          badges.forEach(badge => {
+            const selfSpan = Array.from(badge.querySelectorAll('span')).find(s => s.textContent.trim() === 'self');
+            if (!selfSpan) return;
+
+            let pill = badge.querySelector('#antigravity-subagent-model-pill');
+            if (!pill) {
+              pill = badge.querySelector('.antigravity-subagent-model-pill');
+            }
+
+            if (pill) {
+              pill.setAttribute('data-model-id', model.id);
+              pill.setAttribute('title', 'Subagent Builder Model: ' + model.name);
+              pill.style.borderColor = model.color + '55';
+              pill.style.background = model.color + '18';
+              pill.style.color = model.color;
+              const dot = pill.querySelector('.subagent-model-dot');
+              if (dot) {
+                dot.style.background = model.color;
+                dot.style.boxShadow = '0 0 5px ' + model.color;
+              }
+              const label = pill.querySelector('.subagent-model-label');
+              if (label) {
+                label.textContent = model.shortName;
+              }
+            } else if (typeof window.__renderSubagentModelPill === 'function') {
+              const temp = document.createElement('div');
+              temp.innerHTML = window.__renderSubagentModelPill(builderModelId, window.__MODEL_CATALOG);
+              const newPill = temp.firstElementChild;
+              if (newPill) {
+                selfSpan.after(newPill);
+              }
+            }
+          });
+        };
+
+        window.__syncModelSlotsUI = function() {
+          const slots = window.__getSavedModelSlots();
+          ['planner', 'builder'].forEach(role => {
+            const modelId = slots[role];
+            const model = window.__getModelById ? window.__getModelById(modelId) : null;
+            if (!model) return;
+            document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="' + role + '"]').forEach(btn => {
+              btn.setAttribute('data-model-id', model.id);
+              btn.setAttribute('title', (role === 'planner' ? 'Planner Model: ' : 'Builder Model: ') + model.name);
+              const valEl = btn.querySelector('.model-slot-value');
+              if (valEl) valEl.textContent = model.shortName || model.name;
+              const dotEl = btn.querySelector('.model-slot-dot');
+              if (dotEl) {
+                dotEl.style.background = model.color;
+                dotEl.style.boxShadow = '0 0 6px ' + model.color;
+              }
+            });
+          });
+
+          if (typeof window.__syncSubagentModelBadges === 'function') {
+            window.__syncSubagentModelBadges();
+          }
+        };
+
+        window.__selectModelForSlot = function(role, modelId) {
+          if (!role || !modelId) return;
+          const current = window.__getSavedModelSlots();
+          current[role] = modelId;
+          current.updatedAt = Date.now();
+          try {
+            localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+          } catch (e) {}
+
+          const model = window.__getModelById ? window.__getModelById(modelId) : { id: modelId, name: modelId, shortName: modelId, color: '#38bdf8' };
+          document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="' + role + '"]').forEach(btn => {
+            btn.setAttribute('data-model-id', model.id);
+            btn.setAttribute('title', (role === 'planner' ? 'Planner Model: ' : 'Builder Model: ') + model.name);
+            const valEl = btn.querySelector('.model-slot-value');
+            if (valEl) valEl.textContent = model.shortName || model.name;
+            const dotEl = btn.querySelector('.model-slot-dot');
+            if (dotEl) {
+              dotEl.style.background = model.color;
+              dotEl.style.boxShadow = '0 0 6px ' + model.color;
+            }
+            btn.classList.remove('open');
+          });
+
+          const portal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          if (portal) {
+            portal.classList.remove('open');
+            portal.__currentBtn = null;
+          }
+
+          if (typeof window.__syncSubagentModelBadges === 'function') {
+            window.__syncSubagentModelBadges();
+          }
+
+          try {
+            fetch('http://127.0.0.1:53912/model-slots', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                planner: current.planner,
+                builder: current.builder,
+                enabled: current.enabled !== false
+              })
+            }).catch(function() {});
+          } catch (e) {}
+        };
+
+        window.__toggleModelSlotDropdown = function(e, btnEl, role) {
+          if (e) {
+            e.stopPropagation();
+            e.preventDefault();
+          }
+          const btn = btnEl || (e ? e.currentTarget : null);
+          if (!btn) return;
+          const slotRole = role || btn.getAttribute('data-slot-role') || 'planner';
+
+          // Close other popovers
+          const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
+          if (aPortal) {
+            aPortal.classList.remove('open');
+            aPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+
+          const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+          if (tachPortal) {
+            tachPortal.classList.remove('open');
+            tachPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+          const mPortal = document.getElementById('antigravity-mods-manager-portal');
+          if (mPortal) {
+            mPortal.classList.remove('open');
+            mPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+
+          let portal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          if (!portal) {
+            portal = document.createElement('div');
+            portal.id = 'antigravity-model-slot-dropdown-portal';
+            portal.className = 'antigravity-model-slot-dropdown-portal';
+            document.body.appendChild(portal);
+          }
+
+          const isCurrentOpen = portal.classList.contains('open') && portal.__currentBtn === btn;
+
+          document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+          portal.classList.remove('open');
+          portal.__currentBtn = null;
+
+          if (!isCurrentOpen) {
+            btn.classList.add('open');
+            portal.__currentBtn = btn;
+
+            const savedSlots = window.__getSavedModelSlots();
+            const currentSelectedId = savedSlots[slotRole] || btn.getAttribute('data-model-id');
+
+            if (window.__renderModelSlotDropdownHtml) {
+              portal.innerHTML = window.__renderModelSlotDropdownHtml(slotRole, currentSelectedId, window.__BASE_MODELS || window.__MODEL_CATALOG);
+            }
+
+            portal.querySelectorAll('.model-effort-option, .model-slot-option').forEach(opt => {
+              opt.onclick = (ev) => {
+                ev.stopPropagation();
+                ev.preventDefault();
+                const mId = opt.getAttribute('data-model-id');
+                const sRole = opt.getAttribute('data-slot-role') || slotRole;
+                window.__selectModelForSlot(sRole, mId);
+              };
+            });
+
+            portal.querySelectorAll('.model-slot-row').forEach(row => {
+              row.onclick = (ev) => {
+                if (ev.target.closest('.model-effort-option, .model-slot-option')) return;
+                const singleEffortId = row.getAttribute('data-model-id');
+                if (singleEffortId) {
+                  ev.stopPropagation();
+                  ev.preventDefault();
+                  const sRole = row.getAttribute('data-slot-role') || slotRole;
+                  window.__selectModelForSlot(sRole, singleEffortId);
+                  return;
+                }
+                const isOpen = row.classList.contains('open');
+                portal.querySelectorAll('.model-slot-row.open').forEach(r => r.classList.remove('open'));
+                if (!isOpen) {
+                  row.classList.add('open');
+                }
+              };
+            });
+
+            const rect = btn.getBoundingClientRect();
+            portal.style.top = (rect.bottom + 6) + 'px';
+            const portalWidth = 250;
+            const clampedLeft = Math.max(10, Math.min(window.innerWidth - portalWidth - 10, rect.left));
+            portal.style.left = clampedLeft + 'px';
+            portal.classList.add('open');
+
+            if (rect.left + 380 > window.innerWidth) {
+              portal.querySelectorAll('.model-slot-submenu').forEach(sub => {
+                sub.classList.add('submenu-left');
+              });
+            }
+          }
+        };
+
         window.__applyChatboxModsCompact = function() {
-          const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
+          const compactSetting = localStorage.getItem('__antigravity_compact_chatbox_mods');
           document.querySelectorAll('.antigravity-tachometer-badge').forEach(tach => {
             const footer = tach.closest('[class*="input-footer"]') || tach.closest('.flex.items-center.justify-between') || tach.parentElement;
-            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
-            tach.classList.toggle('compact', isForcedCompact || isNarrow);
+            const isNarrow = (footer && footer.offsetWidth < 380) || window.innerWidth < 800;
+            const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
+            if (tach.classList.contains('compact') !== shouldCompact) {
+              tach.classList.toggle('compact', shouldCompact);
+            }
           });
           document.querySelectorAll('.antigravity-agent-badge').forEach(agent => {
             const footer = agent.closest('[class*="input-footer"]') || agent.closest('.flex.items-center.justify-between') || agent.parentElement;
-            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
-            agent.classList.toggle('compact', isForcedCompact || isNarrow);
+            const isNarrow = (footer && footer.offsetWidth < 380) || window.innerWidth < 800;
+            const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
+            if (agent.classList.contains('compact') !== shouldCompact) {
+              agent.classList.toggle('compact', shouldCompact);
+            }
           });
         };
 
@@ -1253,6 +1530,10 @@ class ModLoader {
           const gitGraphEnabled = localStorage.getItem('__antigravity_mod_enabled_git-graph') !== 'false';
           document.querySelectorAll('#antigravity-git-tab-trigger, .antigravity-git-tab-trigger').forEach(b => {
             b.style.display = gitGraphEnabled ? 'inline-flex' : 'none';
+          });
+          const modelSlotsEnabled = localStorage.getItem('__antigravity_mod_enabled_model-slots') !== 'false';
+          document.querySelectorAll('.antigravity-model-slots-group').forEach(b => {
+            b.style.display = modelSlotsEnabled ? 'inline-flex' : 'none';
           });
         };
 
@@ -1352,6 +1633,16 @@ class ModLoader {
               gitGraphInput.checked = gitGraphEnabled;
               gitGraphInput.onchange = (ev) => {
                 localStorage.setItem('__antigravity_mod_enabled_git-graph', ev.target.checked);
+                window.__applyModsVisibility();
+              };
+            }
+
+            const modelSlotsEnabled = localStorage.getItem('__antigravity_mod_enabled_model-slots') !== 'false';
+            const modelSlotsInput = portal.querySelector('#mod-toggle-model-slots');
+            if (modelSlotsInput) {
+              modelSlotsInput.checked = modelSlotsEnabled;
+              modelSlotsInput.onchange = (ev) => {
+                localStorage.setItem('__antigravity_mod_enabled_model-slots', ev.target.checked);
                 window.__applyModsVisibility();
               };
             }
@@ -2308,6 +2599,23 @@ class ModLoader {
               }
               document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
             }
+
+            const modelSlotBtn = e.target.closest('.antigravity-model-slot-btn');
+            if (modelSlotBtn) {
+              const role = modelSlotBtn.getAttribute('data-slot-role');
+              window.__toggleModelSlotDropdown(e, modelSlotBtn, role);
+              return;
+            }
+
+            const isModelSlotPortal = e.target.closest('#antigravity-model-slot-dropdown-portal');
+            if (!modelSlotBtn && !isModelSlotPortal) {
+              const msPortal = document.getElementById('antigravity-model-slot-dropdown-portal');
+              if (msPortal) {
+                msPortal.classList.remove('open');
+                msPortal.__currentBtn = null;
+              }
+              document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+            }
           }, true);
 
           document.addEventListener('keydown', (e) => {
@@ -2341,6 +2649,13 @@ class ModLoader {
                 mPortal.__currentBtn = null;
               }
               document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+
+              const msPortal = document.getElementById('antigravity-model-slot-dropdown-portal');
+              if (msPortal) {
+                msPortal.classList.remove('open');
+                msPortal.__currentBtn = null;
+              }
+              document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
             }
           }, true);
         }
@@ -2416,6 +2731,16 @@ class ModLoader {
             });
           });
 
+          // Bind Model Slots click handler
+          document.querySelectorAll('.antigravity-model-slot-btn').forEach(btn => {
+            if (btn.__slotClickBound) return;
+            btn.__slotClickBound = true;
+            btn.addEventListener('click', (e) => {
+              const role = btn.getAttribute('data-slot-role');
+              window.__toggleModelSlotDropdown(e, btn, role);
+            });
+          });
+
           // Restore saved mod visibility states
           window.__applyModsVisibility();
 
@@ -2429,7 +2754,7 @@ class ModLoader {
             }
           }
 
-          // Restore saved agent selection across mounted badges (scoped per chat)
+          // Restore saved agent selection and caveman focus across mounted badges
           document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {
             const cId = window.__resolveCascadeId(badge);
             const agentToApply = window.__resolveAgentForCascade(cId);
@@ -2437,28 +2762,51 @@ class ModLoader {
               badge.__lastCascadeId = cId;
               window.__applyAgentToBadge(badge, agentToApply);
             }
+            // Sync exterior reticle trigger in the same group immediately upon mount
+            const group = badge.closest('.antigravity-agent-selector-group');
+            const reticleBtn = group ? group.querySelector('.antigravity-caveman-reticle-trigger') : null;
+            if (reticleBtn) {
+              const isFocus = window.__resolveCavemanForCascade ? window.__resolveCavemanForCascade(cId) : false;
+              const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
+              const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
+              reticleBtn.classList.toggle('is-focus', isFocus);
+              reticleBtn.setAttribute('title', isFocus ? focusTitle : explicativoTitle);
+              const box = reticleBtn.querySelector('.caveman-reticle-box');
+              if (box && window.__renderReticleSvg) {
+                box.innerHTML = window.__renderReticleSvg(isFocus, 14);
+              }
+            }
           });
 
           // Apply current telemetry
           window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})});
 
-          // Observe all slot containers for responsive auto-collapse
+          // Observe only stable parent containers for responsive auto-collapse (avoid layout thrashing)
           document.querySelectorAll('.antigravity-slot-container').forEach(slot => {
-            if (window.__antigravityResizeObserver) {
-              window.__antigravityResizeObserver.observe(slot);
-              if (slot.parentElement) {
-                window.__antigravityResizeObserver.observe(slot.parentElement);
-              }
+            const footer = slot.closest('[class*="input-footer"]') || slot.closest('.flex.items-center.justify-between') || slot.parentElement;
+            if (window.__antigravityResizeObserver && footer) {
+              window.__antigravityResizeObserver.observe(footer);
             }
-            const footer = slot.closest('[class*="input-footer"]') || slot.closest('.flex.items-center.justify-between') || slot.parentElement || slot;
-            const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
-            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
-            const shouldCompact = isForcedCompact || isNarrow;
+            const compactSetting = localStorage.getItem('__antigravity_compact_chatbox_mods');
+            const width = footer ? footer.offsetWidth : window.innerWidth;
+            const isNarrow = width < 380 || window.innerWidth < 800;
+            const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
             const tach = slot.querySelector('.antigravity-tachometer-badge');
-            if (tach) tach.classList.toggle('compact', shouldCompact);
+            if (tach && tach.classList.contains('compact') !== shouldCompact) {
+              tach.classList.toggle('compact', shouldCompact);
+            }
             const agent = slot.querySelector('.antigravity-agent-badge');
-            if (agent) agent.classList.toggle('compact', shouldCompact);
+            if (agent && agent.classList.contains('compact') !== shouldCompact) {
+              agent.classList.toggle('compact', shouldCompact);
+            }
           });
+
+          if (typeof window.__syncModelSlotsUI === 'function') {
+            window.__syncModelSlotsUI();
+          }
+          if (typeof window.__syncSubagentModelBadges === 'function') {
+            window.__syncSubagentModelBadges();
+          }
         }
 
         // Initialize ResizeObserver for responsive auto-collapse
@@ -2470,20 +2818,24 @@ class ModLoader {
         window.__antigravityResizeObserver = new ResizeObserver((entries) => {
           for (const entry of entries) {
             const container = entry.target;
-            const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
+            const compactSetting = localStorage.getItem('__antigravity_compact_chatbox_mods');
             const width = (entry.contentRect && entry.contentRect.width > 0)
               ? entry.contentRect.width
-              : ((container.closest('[class*="input-footer"]') || container.parentElement || container).getBoundingClientRect?.().width || 500);
-            const isNarrow = width < 440 || window.innerWidth < 960;
-            const shouldCompact = isForcedCompact || isNarrow;
+              : (container.getBoundingClientRect?.().width || 500);
+
+            // Hysteresis threshold to prevent vibration: 380px collapse, 430px expand
+            const isCurrentlyCompact = Boolean(container.querySelector('.antigravity-tachometer-badge.compact'));
+            const threshold = isCurrentlyCompact ? 430 : 380;
+            const isNarrow = width < threshold || window.innerWidth < 800;
+            const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
 
             const tach = container.querySelector('.antigravity-tachometer-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-tachometer-badge') : null);
-            if (tach) {
+            if (tach && tach.classList.contains('compact') !== shouldCompact) {
               tach.classList.toggle('compact', shouldCompact);
             }
 
             const agent = container.querySelector('.antigravity-agent-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-agent-badge') : null);
-            if (agent) {
+            if (agent && agent.classList.contains('compact') !== shouldCompact) {
               agent.classList.toggle('compact', shouldCompact);
             }
           }
@@ -2533,8 +2885,13 @@ class ModLoader {
 
             if (missingSlot) {
               mountAllMods();
-            } else if (typeof window.__syncAgentBadges === 'function') {
-              window.__syncAgentBadges();
+            } else {
+              if (typeof window.__syncAgentBadges === 'function') {
+                window.__syncAgentBadges();
+              }
+              if (typeof window.__syncSubagentModelBadges === 'function') {
+                window.__syncSubagentModelBadges();
+              }
             }
           }, 150);
         });
@@ -2542,13 +2899,17 @@ class ModLoader {
         window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
         return {
           success: true,
-          selectedAgentsMap: localStorage.getItem('__antigravity_selected_agents_map')
+          selectedAgentsMap: localStorage.getItem('__antigravity_selected_agents_map'),
+          modelSlots: localStorage.getItem('__antigravity_model_slots')
         };
       })();
     `;
   }
 }
 
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
 
 
 
@@ -3220,6 +3581,9 @@ function resolveNativeQuotaForModel(groups, activeModelName = '', now = Date.now
   };
 }
 
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
 
 
 
@@ -4237,6 +4601,9 @@ class VcsOrchestrator {
 }
 
 
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 
 
 
@@ -4254,6 +4621,7 @@ class AgentSyncServer {
    * @param {number} [options.port] Port to listen on (default 53912)
    * @param {string} [options.host] Host address (default 127.0.0.1)
    * @param {string} [options.configPath] Path to active_agents.json
+   * @param {string} [options.modelSlotsPath] Path to model_slots.json
    * @param {VcsOrchestrator} [options.vcsOrchestrator] Custom VCS orchestrator
    * @param {string} [options.repoPath] Path to git repository
    */
@@ -4261,6 +4629,7 @@ class AgentSyncServer {
     this.port = options.port ?? 53912;
     this.host = options.host || '127.0.0.1';
     this.configPath = options.configPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'active_agents.json');
+    this.modelSlotsPath = options.modelSlotsPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'model_slots.json');
     this.repoPath = options.repoPath || process.cwd();
     this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ repoPath: this.repoPath });
     this.server = null;
@@ -4278,6 +4647,24 @@ class AgentSyncServer {
       }
     } catch {}
     return {};
+  }
+
+  /**
+   * Reads model slots from disk or returns default configuration.
+   * @returns {Object}
+   */
+  readModelSlots() {
+    const defaults = { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high', enabled: true };
+    try {
+      if (fs.existsSync(this.modelSlotsPath)) {
+        const raw = fs.readFileSync(this.modelSlotsPath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return { ...defaults, ...parsed };
+        }
+      }
+    } catch {}
+    return defaults;
   }
 
   /**
@@ -4299,6 +4686,43 @@ class AgentSyncServer {
         fs.writeFileSync(this.configPath, JSON.stringify(data, null, 2), 'utf-8');
       } catch {}
     }
+  }
+
+  /**
+   * Saves model slots configuration to disk atomically.
+   * @param {Object} data
+   */
+  writeModelSlots(data) {
+    try {
+      const dir = path.dirname(this.modelSlotsPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const tmpPath = `${this.modelSlotsPath}.tmp.${Date.now()}`;
+      fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+      fs.renameSync(tmpPath, this.modelSlotsPath);
+    } catch (err) {
+      // Fallback direct write
+      try {
+        fs.writeFileSync(this.modelSlotsPath, JSON.stringify(data, null, 2), 'utf-8');
+      } catch {}
+    }
+  }
+
+  /**
+   * Updates model slots config with partial patch.
+   * @param {Object} [patch]
+   * @returns {Object}
+   */
+  updateModelSlots(patch = {}) {
+    const current = this.readModelSlots();
+    const updated = {
+      ...current,
+      ...patch,
+      updatedAt: Date.now()
+    };
+    this.writeModelSlots(updated);
+    return updated;
   }
 
   /**
@@ -4430,6 +4854,40 @@ class AgentSyncServer {
           const data = this.readActiveAgents();
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(data));
+          return;
+        }
+
+        if (req.method === 'GET' && req.url === '/model-slots') {
+          const data = this.readModelSlots();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(data));
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/model-slots') {
+          let body = '';
+          let exceeded = false;
+          req.on('data', chunk => {
+            body += chunk;
+            if (body.length > 65536) {
+              exceeded = true;
+              res.writeHead(413, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Payload too large' }));
+              req.destroy();
+            }
+          });
+          req.on('end', () => {
+            if (exceeded || res.writableEnded) return;
+            try {
+              const payload = JSON.parse(body || '{}');
+              const slots = this.updateModelSlots(payload);
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: true, slots }));
+              return;
+            } catch {}
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid payload' }));
+          });
           return;
         }
 
@@ -4567,6 +5025,9 @@ class AgentSyncServer {
   }
 }
 
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
 
 
 
@@ -4749,6 +5210,9 @@ class AgentDiscoveryService {
 }
 
 
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 
 
 
@@ -4791,6 +5255,22 @@ class ModHost {
    */
   registerMod(mod) {
     this.modLoader.register(mod);
+  }
+
+  /**
+   * Returns registered mods from the mod loader.
+   * @returns {Array<import('../sdk/AntigravityMod.js').AntigravityMod>}
+   */
+  getMods() {
+    return this.modLoader.getRegisteredMods();
+  }
+
+  /**
+   * Returns registered mods from the mod loader.
+   * @returns {Array<import('../sdk/AntigravityMod.js').AntigravityMod>}
+   */
+  getRegisteredMods() {
+    return this.modLoader.getRegisteredMods();
   }
 
   /**
@@ -4968,11 +5448,13 @@ class ModHost {
     };
 
     const activeAgents = this.syncServer.readActiveAgents();
+    const modelSlots = this.syncServer.readModelSlots();
 
     const hostContext = {
       telemetry: primaryMetric,
       allMetrics,
       activeAgents,
+      modelSlots,
       ...vcsOverview,
       timestamp: Date.now()
     };
@@ -5005,6 +5487,21 @@ class ModHost {
             }
           }
           this.syncServer.writeActiveAgents(merged);
+        }
+      }
+    } catch {}
+
+    // Sync model slots from renderer localStorage to disk
+    try {
+      let rawSlots = evalRes?.value?.modelSlots;
+      if (!rawSlots) {
+        const slotsRes = await cdpClient.evaluate("localStorage.getItem('__antigravity_model_slots')");
+        rawSlots = slotsRes?.value;
+      }
+      if (rawSlots) {
+        const parsedSlots = typeof rawSlots === 'string' ? JSON.parse(rawSlots) : rawSlots;
+        if (parsedSlots && typeof parsedSlots === 'object') {
+          this.syncServer.updateModelSlots(parsedSlots);
         }
       }
     } catch {}
@@ -5420,7 +5917,7 @@ class ContextTachometerMod extends AntigravityMod {
       priority: 50
     });
 
-    this.cachedCss = ".antigravity-tachometer-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 8px 0 6px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #e4e4e7;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.antigravity-tachometer-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-tachometer-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n/* Responsive compact mode (Speedometer SVG only, hides labels, exact 28x28 circle) */\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) {\r\n  width: 28px !important;\r\n  height: 28px !important;\r\n  min-width: 28px !important;\r\n  padding: 0 !important;\r\n  gap: 0 !important;\r\n  justify-content: center !important;\r\n  border-radius: 9999px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n/* Responsive shrinking for narrow screen resolutions */\r\n@media (max-width: 960px) {\r\n  .antigravity-tachometer-badge:not(.open):not(.pinned) {\r\n    width: 28px !important;\r\n    height: 28px !important;\r\n    min-width: 28px !important;\r\n    padding: 0 !important;\r\n    gap: 0 !important;\r\n    justify-content: center !important;\r\n    border-radius: 9999px !important;\r\n    box-sizing: border-box !important;\r\n  }\r\n  .antigravity-tachometer-badge:not(.open):not(.pinned) .tachometer-tokens,\r\n  .antigravity-tachometer-badge:not(.open):not(.pinned) .tachometer-pct {\r\n    display: none !important;\r\n  }\r\n}\r\n\r\n/* Interactive Tachometer Popover Portal (Fixed to Viewport) */\r\n.antigravity-tachometer-popover-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\r\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\r\n}\r\n\r\n.antigravity-tachometer-popover-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-popover-container {\r\n  display: none !important;\r\n}\r\n\r\n@keyframes popoverFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-4px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n";
+    this.cachedCss = ".antigravity-tachometer-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 8px 0 6px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #e4e4e7;\r\n  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.antigravity-tachometer-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-tachometer-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n/* Responsive compact mode (Speedometer SVG only, hides labels, exact 28x28 circle) */\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) {\r\n  width: 28px !important;\r\n  height: 28px !important;\r\n  min-width: 28px !important;\r\n  padding: 0 !important;\r\n  gap: 0 !important;\r\n  justify-content: center !important;\r\n  border-radius: 9999px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n/* Responsive shrinking for narrow screen resolutions */\r\n@media (max-width: 960px) {\r\n  .antigravity-tachometer-badge.compact:not(.open):not(.pinned) {\r\n    width: 28px !important;\r\n    height: 28px !important;\r\n    min-width: 28px !important;\r\n    padding: 0 !important;\r\n    gap: 0 !important;\r\n    justify-content: center !important;\r\n    border-radius: 9999px !important;\r\n    box-sizing: border-box !important;\r\n  }\r\n  .antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,\r\n  .antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {\r\n    display: none !important;\r\n  }\r\n}\r\n\r\n/* Interactive Tachometer Popover Portal (Fixed to Viewport) */\r\n.antigravity-tachometer-popover-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\r\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\r\n}\r\n\r\n.antigravity-tachometer-popover-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-popover-container {\r\n  display: none !important;\r\n}\r\n\r\n@keyframes popoverFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-4px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n";
   }
 
   /**
@@ -6224,7 +6721,7 @@ class AgentSelectorMod extends AntigravityMod {
     });
 
     this.discoveryService = options.discoveryService || new AgentDiscoveryService();
-    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY AGENT SELECTOR MOD - STYLES\r\n   Card Architecture: Every text section enclosed in card components\r\n   ========================================================================= */\r\n\r\n.antigravity-agent-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 10px 0 7px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #f4f4f5;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.agent-badge-dot {\r\n  width: 6px;\r\n  height: 6px;\r\n  border-radius: 9999px;\r\n  flex-shrink: 0;\r\n  transition: all 0.3s ease;\r\n}\r\n\r\n.antigravity-agent-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-agent-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n.antigravity-agent-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n.agent-label {\r\n  font-weight: 500;\r\n  letter-spacing: -0.01em;\r\n  color: #e4e4e7;\r\n  white-space: nowrap;\r\n}\r\n\r\n.agent-caret {\r\n  font-size: 8px;\r\n  color: #a1a1aa;\r\n  margin-left: 1px;\r\n  transition: transform 0.2s ease;\r\n}\r\n\r\n.antigravity-agent-badge.open .agent-caret {\r\n  transform: rotate(180deg);\r\n}\r\n\r\n/* Responsive compact mode */\r\n.antigravity-agent-badge.compact {\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 7px !important;\r\n  gap: 5px !important;\r\n  border-radius: 9999px !important;\r\n  justify-content: center !important;\r\n}\r\n.antigravity-agent-badge.compact .agent-label,\r\n.antigravity-agent-badge.compact .agent-caret {\r\n  display: none !important;\r\n}\r\n\r\n@media (max-width: 960px) {\r\n  .agent-label,\r\n  .agent-caret {\r\n    display: none !important;\r\n  }\r\n  .antigravity-agent-badge {\r\n    height: 28px !important;\r\n    box-sizing: border-box !important;\r\n    padding: 0 7px !important;\r\n    gap: 5px !important;\r\n    border-radius: 9999px !important;\r\n    justify-content: center !important;\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   OSCILLATING AUTO BADGE (CONTEXT-DRIVEN PLAN / BUILD FLIPPER)\r\n   Transitions automatically only when context changes between PLAN and BUILD\r\n   ========================================================================= */\r\n.antigravity-agent-badge.mode-auto {\r\n  border-color: rgba(168, 85, 247, 0.45);\r\n  box-shadow: 0 0 10px rgba(168, 85, 247, 0.25);\r\n  transition: border-color 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto .agent-badge-dot {\r\n  background: #a855f7 !important;\r\n  box-shadow: 0 0 8px #a855f7 !important;\r\n  transition: background 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build {\r\n  border-color: rgba(245, 158, 11, 0.45);\r\n  box-shadow: 0 0 10px rgba(245, 158, 11, 0.25);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .agent-badge-dot {\r\n  background: #f59e0b !important;\r\n  box-shadow: 0 0 8px #f59e0b !important;\r\n}\r\n\r\n.auto-oscillate-track {\r\n  display: inline-flex;\r\n  flex-direction: column;\r\n  height: 28px;\r\n  line-height: 28px;\r\n  overflow: hidden;\r\n  vertical-align: top;\r\n}\r\n\r\n.auto-oscillate-step {\r\n  height: 28px;\r\n  line-height: 28px;\r\n  display: block;\r\n  font-weight: 600;\r\n  letter-spacing: -0.01em;\r\n  white-space: nowrap;\r\n  transform: translateY(0);\r\n  transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .auto-oscillate-step {\r\n  transform: translateY(-28px);\r\n}\r\n\r\n.auto-oscillate-step.plan {\r\n  color: #c084fc;\r\n}\r\n\r\n.auto-oscillate-step.build {\r\n  color: #fbbf24;\r\n}\r\n\r\n/* =========================================================================\r\n   DROPDOWN PORTAL (FIXED TO VIEWPORT)\r\n   Card Architecture: Harmonized with Mods Manager design language\r\n   ========================================================================= */\r\n.antigravity-agent-dropdown-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  width: 380px !important;\r\n  animation: agentFadeIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n  filter: drop-shadow(0 24px 60px rgba(0, 0, 0, 0.85));\r\n}\r\n\r\n.antigravity-agent-dropdown-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-agent-dropdown-wrapper {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-agent-dropdown {\r\n  width: 380px !important;\r\n  background: #161822 !important;\r\n  background: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 14px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 14px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  pointer-events: auto !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* =========================================================================\r\n   CARD COMPONENT SYSTEM\r\n   ========================================================================= */\r\n.agent-card {\r\n  box-sizing: border-box !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n}\r\n\r\n/* 1. HEADER CARD */\r\n.agent-header-card {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 10px 12px !important;\r\n  margin-bottom: 2px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.agent-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.agent-header-icon {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(122, 162, 247, 0.15) !important;\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.25) !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-title-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.agent-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-main-title {\r\n  font-size: 13.5px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n  margin: 0 !important;\r\n}\r\n\r\n.agent-header-badge {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(122, 162, 247, 0.18) !important;\r\n  color: #7aa2f7 !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\r\n  letter-spacing: 0.3px !important;\r\n}\r\n\r\n.agent-subtitle {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n}\r\n\r\n.agent-close-btn {\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  cursor: pointer !important;\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 6px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  font-size: 12px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.agent-close-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.16) !important;\r\n}\r\n\r\n/* 2. PRIMARY SECTION: CARDS DIRECTAS CON PIN */\r\n.agent-primary-section,\r\n.agent-cards-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-card.primary-hero-card {\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 11px 13px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 12px !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-sizing: border-box !important;\r\n  cursor: pointer !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-card.primary-hero-card:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(122, 162, 247, 0.35) !important;\r\n  transform: translateY(-1px) !important;\r\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;\r\n}\r\n\r\n.agent-card.primary-hero-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 16px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 30%, transparent) !important;\r\n}\r\n\r\n.agent-card-info {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-icon-box {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n.agent-text-wrap {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-title {\r\n  font-size: 13px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.agent-tag {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  letter-spacing: 0.04em !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n/* =========================================================================\r\n   PIN TOGGLE BUTTON COMPONENT\r\n   ========================================================================= */\r\n.agent-pin-btn {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  color: rgba(255, 255, 255, 0.35) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  flex-shrink: 0 !important;\r\n  padding: 0 !important;\r\n}\r\n\r\n.agent-pin-btn:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #ffffff !important;\r\n  transform: scale(1.06) !important;\r\n}\r\n\r\n.agent-pin-btn.active {\r\n  background: rgba(122, 162, 247, 0.2) !important;\r\n  border-color: rgba(122, 162, 247, 0.6) !important;\r\n  color: #7aa2f7 !important;\r\n  box-shadow: 0 0 12px rgba(122, 162, 247, 0.35) !important;\r\n  transform: scale(1.02) !important;\r\n}\r\n\r\n.agent-pin-btn.active svg {\r\n  fill: currentColor !important;\r\n}\r\n\r\n.antigravity-agent-item.selected .agent-pin-btn.active {\r\n  background: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 22%, transparent) !important;\r\n  border-color: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 70%, transparent) !important;\r\n  color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 14px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 45%, transparent) !important;\r\n}\r\n\r\n/* 3. TOGGLE ACORDEÓN CARD */\r\n.agent-toggle-card {\r\n  padding: 0 !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 9px 12px !important;\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 9px !important;\r\n  color: rgba(255, 255, 255, 0.7) !important;\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn:hover {\r\n  background: rgba(255, 255, 255, 0.07) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.catalog-toggle-count {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #a1a1aa !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n/* 4. DRAWER CONTAINER CARD */\r\n.agent-catalog-drawer {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n.agent-catalog-drawer.collapsed {\r\n  display: none !important;\r\n}\r\n\r\n.agent-drawer-card {\r\n  padding: 10px !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  background: rgba(0, 0, 0, 0.35) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n}\r\n\r\n/* LEVEL TABS DENTRO DEL DRAWER */\r\n.agent-level-tabs {\r\n  display: flex !important;\r\n  gap: 4px !important;\r\n  padding: 3px !important;\r\n  background: rgba(0, 0, 0, 0.4) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 7px !important;\r\n}\r\n\r\n.agent-tab-btn {\r\n  flex: 1 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  gap: 6px !important;\r\n  height: 26px !important;\r\n  border: none !important;\r\n  background: transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  border-radius: 5px !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-tab-btn:hover {\r\n  color: #e4e4e7 !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.agent-tab-btn.active {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #ffffff !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.tab-icon {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n/* TAB PANELS */\r\n.agent-tab-content {\r\n  display: none !important;\r\n  max-height: 220px !important;\r\n  overflow-y: auto !important;\r\n  padding-right: 2px !important;\r\n}\r\n\r\n.agent-tab-content.active {\r\n  display: block !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar {\r\n  width: 4px !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar-thumb {\r\n  background: rgba(255, 255, 255, 0.15) !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n/* COMPACT GRID */\r\n.compact-grid {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.compact-agent-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n  padding: 8px 10px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.025) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.compact-agent-card:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  transform: translateY(-0.5px) !important;\r\n}\r\n\r\n.compact-agent-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 10px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 25%, transparent) !important;\r\n}\r\n\r\n.compact-icon-box {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n  border: 1px solid transparent !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.compact-details {\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 1px !important;\r\n}\r\n\r\n.compact-name-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n.compact-name {\r\n  font-size: 11.5px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-sub {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-pin-btn {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n}\r\n\r\n/* 5. FOOTER CARD */\r\n.agent-footer-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  padding: 8px 12px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 8px !important;\r\n}\r\n\r\n.agent-footer-icon {\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-footer-text {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.55) !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n@keyframes agentFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-6px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   EXTERIOR FOCUS / EXPLICATIVO RETICLE TRIGGER\r\n   ========================================================================= */\r\n.antigravity-agent-selector-group {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  width: 28px !important;\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  color: #94a3b8 !important;\r\n  cursor: pointer !important;\r\n  outline: none !important;\r\n  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;\r\n  position: relative !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger:hover {\r\n  background: rgba(255, 255, 255, 0.09) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger.is-focus {\r\n  background: rgba(245, 158, 11, 0.15) !important;\r\n  border-color: rgba(245, 158, 11, 0.4) !important;\r\n  color: #f59e0b !important;\r\n  box-shadow: 0 0 8px rgba(245, 158, 11, 0.25) !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger.is-focus:hover {\r\n  background: rgba(245, 158, 11, 0.22) !important;\r\n  border-color: rgba(245, 158, 11, 0.6) !important;\r\n  box-shadow: 0 0 12px rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.caveman-reticle-box {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.reticle-icon {\r\n  transition: transform 0.2s ease, stroke 0.2s ease !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger:hover .reticle-icon {\r\n  transform: scale(1.08) !important;\r\n}\r\n";
+    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY AGENT SELECTOR MOD - STYLES\r\n   Card Architecture: Every text section enclosed in card components\r\n   ========================================================================= */\r\n\r\n.antigravity-agent-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 10px 0 7px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #f4f4f5;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.agent-badge-dot {\r\n  width: 6px;\r\n  height: 6px;\r\n  border-radius: 9999px;\r\n  flex-shrink: 0;\r\n  transition: all 0.3s ease;\r\n}\r\n\r\n.antigravity-agent-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-agent-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n.antigravity-agent-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n.agent-label {\r\n  font-weight: 500;\r\n  letter-spacing: -0.01em;\r\n  color: #e4e4e7;\r\n  white-space: nowrap;\r\n}\r\n\r\n.agent-caret {\r\n  font-size: 8px;\r\n  color: #a1a1aa;\r\n  margin-left: 1px;\r\n  transition: transform 0.2s ease;\r\n}\r\n\r\n.antigravity-agent-badge.open .agent-caret {\r\n  transform: rotate(180deg);\r\n}\r\n\r\n/* Responsive compact mode */\r\n.antigravity-agent-badge.compact {\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 7px !important;\r\n  gap: 5px !important;\r\n  border-radius: 9999px !important;\r\n  justify-content: center !important;\r\n}\r\n.antigravity-agent-badge.compact .agent-label,\r\n.antigravity-agent-badge.compact .agent-caret {\r\n  display: none !important;\r\n}\r\n\r\n@media (max-width: 960px) {\r\n  .agent-label,\r\n  .agent-caret {\r\n    display: none !important;\r\n  }\r\n  .antigravity-agent-badge {\r\n    height: 28px !important;\r\n    box-sizing: border-box !important;\r\n    padding: 0 7px !important;\r\n    gap: 5px !important;\r\n    border-radius: 9999px !important;\r\n    justify-content: center !important;\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   OSCILLATING AUTO BADGE (CONTEXT-DRIVEN PLAN / BUILD FLIPPER)\r\n   Transitions automatically only when context changes between PLAN and BUILD\r\n   ========================================================================= */\r\n.antigravity-agent-badge.mode-auto {\r\n  border-color: rgba(168, 85, 247, 0.45);\r\n  box-shadow: 0 0 10px rgba(168, 85, 247, 0.25);\r\n  transition: border-color 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto .agent-badge-dot {\r\n  background: #a855f7 !important;\r\n  box-shadow: 0 0 8px #a855f7 !important;\r\n  transition: background 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build {\r\n  border-color: rgba(245, 158, 11, 0.45);\r\n  box-shadow: 0 0 10px rgba(245, 158, 11, 0.25);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .agent-badge-dot {\r\n  background: #f59e0b !important;\r\n  box-shadow: 0 0 8px #f59e0b !important;\r\n}\r\n\r\n.auto-oscillate-track {\r\n  display: inline-flex;\r\n  flex-direction: column;\r\n  height: 28px;\r\n  line-height: 28px;\r\n  overflow: hidden;\r\n  vertical-align: top;\r\n}\r\n\r\n.auto-oscillate-step {\r\n  height: 28px;\r\n  line-height: 28px;\r\n  display: block;\r\n  font-weight: 600;\r\n  letter-spacing: -0.01em;\r\n  white-space: nowrap;\r\n  transform: translateY(0);\r\n  transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .auto-oscillate-step {\r\n  transform: translateY(-28px);\r\n}\r\n\r\n.auto-oscillate-step.plan {\r\n  color: #c084fc;\r\n}\r\n\r\n.auto-oscillate-step.build {\r\n  color: #fbbf24;\r\n}\r\n\r\n/* =========================================================================\r\n   DROPDOWN PORTAL (FIXED TO VIEWPORT)\r\n   Card Architecture: Harmonized with Mods Manager design language\r\n   ========================================================================= */\r\n.antigravity-agent-dropdown-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  width: 380px !important;\r\n  animation: agentFadeIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n  filter: drop-shadow(0 24px 60px rgba(0, 0, 0, 0.85));\r\n}\r\n\r\n.antigravity-agent-dropdown-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-agent-dropdown-wrapper {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-agent-dropdown {\r\n  width: 380px !important;\r\n  background: #161822 !important;\r\n  background: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 14px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 14px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  pointer-events: auto !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* =========================================================================\r\n   CARD COMPONENT SYSTEM\r\n   ========================================================================= */\r\n.agent-card {\r\n  box-sizing: border-box !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n}\r\n\r\n/* 1. HEADER CARD */\r\n.agent-header-card {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 10px 12px !important;\r\n  margin-bottom: 2px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.agent-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.agent-header-icon {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(122, 162, 247, 0.15) !important;\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.25) !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-title-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.agent-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-main-title {\r\n  font-size: 13.5px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n  margin: 0 !important;\r\n}\r\n\r\n.agent-header-badge {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(122, 162, 247, 0.18) !important;\r\n  color: #7aa2f7 !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\r\n  letter-spacing: 0.3px !important;\r\n}\r\n\r\n.agent-subtitle {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n}\r\n\r\n.agent-close-btn {\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  cursor: pointer !important;\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 6px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  font-size: 12px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.agent-close-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.16) !important;\r\n}\r\n\r\n/* 2. PRIMARY SECTION: CARDS DIRECTAS CON PIN */\r\n.agent-primary-section,\r\n.agent-cards-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-card.primary-hero-card {\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 11px 13px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 12px !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-sizing: border-box !important;\r\n  cursor: pointer !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-card.primary-hero-card:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(122, 162, 247, 0.35) !important;\r\n  transform: translateY(-1px) !important;\r\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;\r\n}\r\n\r\n.agent-card.primary-hero-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 16px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 30%, transparent) !important;\r\n}\r\n\r\n.agent-card-info {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-icon-box {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n.agent-text-wrap {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-title {\r\n  font-size: 13px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.agent-tag {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  letter-spacing: 0.04em !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n/* =========================================================================\r\n   PIN TOGGLE BUTTON COMPONENT\r\n   ========================================================================= */\r\n.agent-pin-btn {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  color: rgba(255, 255, 255, 0.35) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  flex-shrink: 0 !important;\r\n  padding: 0 !important;\r\n}\r\n\r\n.agent-pin-btn:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #ffffff !important;\r\n  transform: scale(1.06) !important;\r\n}\r\n\r\n.agent-pin-btn.active {\r\n  background: rgba(122, 162, 247, 0.2) !important;\r\n  border-color: rgba(122, 162, 247, 0.6) !important;\r\n  color: #7aa2f7 !important;\r\n  box-shadow: 0 0 12px rgba(122, 162, 247, 0.35) !important;\r\n  transform: scale(1.02) !important;\r\n}\r\n\r\n.agent-pin-btn.active svg {\r\n  fill: currentColor !important;\r\n}\r\n\r\n.antigravity-agent-item.selected .agent-pin-btn.active {\r\n  background: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 22%, transparent) !important;\r\n  border-color: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 70%, transparent) !important;\r\n  color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 14px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 45%, transparent) !important;\r\n}\r\n\r\n/* 3. TOGGLE ACORDEÓN CARD */\r\n.agent-toggle-card {\r\n  padding: 0 !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 9px 12px !important;\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 9px !important;\r\n  color: rgba(255, 255, 255, 0.7) !important;\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn:hover {\r\n  background: rgba(255, 255, 255, 0.07) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.catalog-toggle-count {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #a1a1aa !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n/* 4. DRAWER CONTAINER CARD */\r\n.agent-catalog-drawer {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n.agent-catalog-drawer.collapsed {\r\n  display: none !important;\r\n}\r\n\r\n.agent-drawer-card {\r\n  padding: 10px !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  background: rgba(0, 0, 0, 0.35) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n}\r\n\r\n/* LEVEL TABS DENTRO DEL DRAWER */\r\n.agent-level-tabs {\r\n  display: flex !important;\r\n  gap: 4px !important;\r\n  padding: 3px !important;\r\n  background: rgba(0, 0, 0, 0.4) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 7px !important;\r\n}\r\n\r\n.agent-tab-btn {\r\n  flex: 1 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  gap: 6px !important;\r\n  height: 26px !important;\r\n  border: none !important;\r\n  background: transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  border-radius: 5px !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-tab-btn:hover {\r\n  color: #e4e4e7 !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.agent-tab-btn.active {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #ffffff !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.tab-icon {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n/* TAB PANELS */\r\n.agent-tab-content {\r\n  display: none !important;\r\n  max-height: 220px !important;\r\n  overflow-y: auto !important;\r\n  padding-right: 2px !important;\r\n}\r\n\r\n.agent-tab-content.active {\r\n  display: block !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar {\r\n  width: 4px !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar-thumb {\r\n  background: rgba(255, 255, 255, 0.15) !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n/* COMPACT GRID */\r\n.compact-grid {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.compact-agent-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n  padding: 8px 10px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.025) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.compact-agent-card:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  transform: translateY(-0.5px) !important;\r\n}\r\n\r\n.compact-agent-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 10px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 25%, transparent) !important;\r\n}\r\n\r\n.compact-icon-box {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n  border: 1px solid transparent !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.compact-details {\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 1px !important;\r\n}\r\n\r\n.compact-name-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n.compact-name {\r\n  font-size: 11.5px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-sub {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-pin-btn {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n}\r\n\r\n/* 5. FOOTER CARD */\r\n.agent-footer-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  padding: 8px 12px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 8px !important;\r\n}\r\n\r\n.agent-footer-icon {\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-footer-text {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.55) !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n@keyframes agentFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-6px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   EXTERIOR FOCUS / EXPLICATIVO RETICLE TRIGGER\r\n   ========================================================================= */\r\n.antigravity-agent-selector-group {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  width: 28px !important;\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  color: #94a3b8 !important;\r\n  cursor: pointer !important;\r\n  outline: none !important;\r\n  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease !important;\r\n  position: relative !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger:hover {\r\n  background: rgba(255, 255, 255, 0.09) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger.is-focus {\r\n  background: rgba(245, 158, 11, 0.15) !important;\r\n  border-color: rgba(245, 158, 11, 0.4) !important;\r\n  color: #f59e0b !important;\r\n  box-shadow: 0 0 8px rgba(245, 158, 11, 0.25) !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger.is-focus:hover {\r\n  background: rgba(245, 158, 11, 0.22) !important;\r\n  border-color: rgba(245, 158, 11, 0.6) !important;\r\n  box-shadow: 0 0 12px rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.caveman-reticle-box {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.reticle-icon {\r\n  transition: transform 0.2s ease, stroke 0.2s ease !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger:hover .reticle-icon {\r\n  transform: scale(1.08) !important;\r\n}\r\n";
   }
 
   /**
@@ -6420,6 +6917,27 @@ function renderModsManagerPanelHtml() {
         </div>
         <label class="mod-switch">
           <input type="checkbox" id="mod-toggle-git-graph" data-mod="git-graph" checked>
+          <span class="mod-slider"></span>
+        </label>
+      </div>
+
+      <!-- Mod Card: Slots Planner & Builder -->
+      <div class="mod-card">
+        <div class="mod-info">
+          <div class="mod-icon-box slots-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+              <line x1="8" y1="21" x2="16" y2="21"></line>
+              <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+          </div>
+          <div class="mod-text">
+            <div class="mod-title">Slots Planner & Builder</div>
+            <div class="mod-desc">Selectores duales en menubar para asignar modelos a roles Plan y Build.</div>
+          </div>
+        </div>
+        <label class="mod-switch">
+          <input type="checkbox" id="mod-toggle-model-slots" data-mod="model-slots" checked>
           <span class="mod-slider"></span>
         </label>
       </div>
@@ -7533,7 +8051,7 @@ class VoiceAssistantMod extends AntigravityMod {
     this.narratorService = options.narratorService || ActionNarratorService;
     this.sanitizer = options.sanitizer || TextSanitizer;
 
-    this.cachedCss = "/* Voice Assistant Mod Styles */\n.antigravity-slot-chat-input-actions {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  margin-right: 2px;\n}\n\n.antigravity-voice-assistant-wrapper {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  position: relative;\n}\n\n.antigravity-voice-assistant-btn {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  width: 1.75rem;\n  height: 1.75rem;\n  padding: 0.375rem;\n  border-radius: 9999px;\n  background: transparent;\n  color: var(--secondary-foreground, #ececec);\n  border: none;\n  cursor: pointer;\n  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;\n  user-select: none;\n  outline: none;\n}\n\n.antigravity-voice-assistant-btn:hover {\n  background-color: var(--secondary, rgba(255, 255, 255, 0.08));\n}\n\n.antigravity-voice-assistant-btn:focus-visible {\n  outline: 2px solid var(--ring, #3b82f6);\n  outline-offset: 1px;\n}\n\n.antigravity-voice-assistant-btn.state-muted {\n  opacity: 0.45;\n}\n\n.antigravity-voice-assistant-btn.state-speaking {\n  color: #38bdf8;\n  background-color: rgba(56, 189, 248, 0.12);\n}\n\n.antigravity-voice-assistant-btn.state-speaking .wave-1 {\n  animation: voiceWavePulse 1.2s infinite ease-in-out;\n}\n\n.antigravity-voice-assistant-btn.state-speaking .wave-2 {\n  animation: voiceWavePulse 1.2s infinite ease-in-out 0.3s;\n}\n\n@keyframes voiceWavePulse {\n  0%, 100% {\n    opacity: 0.3;\n    transform: scale(0.95);\n    transform-origin: center;\n  }\n  50% {\n    opacity: 1;\n    transform: scale(1.1);\n    transform-origin: center;\n  }\n}\n";
+    this.cachedCss = "/* Voice Assistant Mod Styles */\r\n.antigravity-slot-chat-input-actions {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  margin-right: 2px;\r\n}\r\n\r\n.antigravity-voice-assistant-wrapper {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  position: relative;\r\n}\r\n\r\n.antigravity-voice-assistant-btn {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  width: 1.75rem;\r\n  height: 1.75rem;\r\n  padding: 0.375rem;\r\n  border-radius: 9999px;\r\n  background: transparent;\r\n  color: var(--secondary-foreground, #ececec);\r\n  border: none;\r\n  cursor: pointer;\r\n  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;\r\n  user-select: none;\r\n  outline: none;\r\n}\r\n\r\n.antigravity-voice-assistant-btn:hover {\r\n  background-color: var(--secondary, rgba(255, 255, 255, 0.08));\r\n}\r\n\r\n.antigravity-voice-assistant-btn:focus-visible {\r\n  outline: 2px solid var(--ring, #3b82f6);\r\n  outline-offset: 1px;\r\n}\r\n\r\n.antigravity-voice-assistant-btn.state-muted {\r\n  opacity: 0.45;\r\n}\r\n\r\n.antigravity-voice-assistant-btn.state-speaking {\r\n  color: #38bdf8;\r\n  background-color: rgba(56, 189, 248, 0.12);\r\n}\r\n\r\n.antigravity-voice-assistant-btn.state-speaking .wave-1 {\r\n  animation: voiceWavePulse 1.2s infinite ease-in-out;\r\n}\r\n\r\n.antigravity-voice-assistant-btn.state-speaking .wave-2 {\r\n  animation: voiceWavePulse 1.2s infinite ease-in-out 0.3s;\r\n}\r\n\r\n@keyframes voiceWavePulse {\r\n  0%, 100% {\r\n    opacity: 0.3;\r\n    transform: scale(0.95);\r\n    transform-origin: center;\r\n  }\r\n  50% {\r\n    opacity: 1;\r\n    transform: scale(1.1);\r\n    transform-origin: center;\r\n  }\r\n}\r\n";
   }
 
   get id() {
@@ -7580,6 +8098,454 @@ class VoiceAssistantMod extends AntigravityMod {
 }
 
 
+// ===================== Model Slots Mod =====================
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
+/**
+ * Base models grouped with their supported effort levels for hierarchical flyout selection.
+ */
+const BASE_MODELS = [
+  {
+    name: 'Gemini 4 Argon',
+    family: 'Argon',
+    color: '#38bdf8',
+    efforts: [
+      { id: 'gemini-4-argon-low', label: 'Low', shortName: 'Argon Low' },
+      { id: 'gemini-4-argon-medium', label: 'Medium', shortName: 'Argon Med' },
+      { id: 'gemini-4-argon-high', label: 'High', shortName: 'Argon High' }
+    ]
+  },
+  {
+    name: 'Gemini 4 Hydrogen',
+    family: 'Hydrogen',
+    color: '#34d399',
+    efforts: [
+      { id: 'gemini-4-hydrogen-low', label: 'Low', shortName: 'Hydrogen Low' },
+      { id: 'gemini-4-hydrogen-medium', label: 'Medium', shortName: 'Hydrogen Med' },
+      { id: 'gemini-4-hydrogen-high', label: 'High', shortName: 'Hydrogen High' },
+      { id: 'gemini-4-hydrogen-xhigh', label: 'XHigh', shortName: 'Hydrogen XHigh' }
+    ]
+  },
+  {
+    name: 'Gemini 3.8 Flash',
+    family: 'Gemini 3.8',
+    color: '#fbbf24',
+    efforts: [
+      { id: 'gemini-3.8-flash-low', label: 'Low', shortName: 'Flash 3.8 Low' },
+      { id: 'gemini-3.8-flash-medium', label: 'Medium', shortName: 'Flash 3.8 Med' },
+      { id: 'gemini-3.8-flash-high', label: 'High', shortName: 'Flash 3.8 High' }
+    ]
+  },
+  {
+    name: 'Claude Opus 5.5',
+    family: 'Claude',
+    color: '#c084fc',
+    efforts: [
+      { id: 'claude-opus-5-5-low', label: 'Low', shortName: 'Opus 5.5 Low' },
+      { id: 'claude-opus-5-5-medium', label: 'Medium', shortName: 'Opus 5.5 Med' },
+      { id: 'claude-opus-5-5-high', label: 'High', shortName: 'Opus 5.5 High' }
+    ]
+  },
+  {
+    name: 'Claude Sonnet 5.5',
+    family: 'Claude',
+    color: '#a78bfa',
+    efforts: [
+      { id: 'claude-sonnet-5-5-low', label: 'Low', shortName: 'Sonnet 5.5 Low' },
+      { id: 'claude-sonnet-5-5-medium', label: 'Medium', shortName: 'Sonnet 5.5 Med' },
+      { id: 'claude-sonnet-5-5-high', label: 'High', shortName: 'Sonnet 5.5 High' }
+    ]
+  },
+  {
+    name: 'GPT-OSS 120B',
+    family: 'OpenAI OSS',
+    color: '#f472b6',
+    efforts: [
+      { id: 'gpt-oss-120b-medium', label: 'Medium', shortName: 'GPT-OSS 120B' }
+    ]
+  },
+  {
+    name: 'Orchestrator (Argon)',
+    family: 'Argon',
+    color: '#38bdf8',
+    efforts: [
+      { id: 'gemini-pro-orchestrator-g1-pro', label: 'Standard', shortName: 'Orchestrator' }
+    ]
+  }
+];
+
+/**
+ * Full symmetrical catalog of supported models for Planner and Builder slots.
+ */
+const MODEL_CATALOG = [
+  {
+    id: 'gemini-4-argon-high',
+    name: 'Gemini 4 Argon (High)',
+    shortName: 'Argon High',
+    family: 'Argon',
+    color: '#38bdf8'
+  },
+  {
+    id: 'gemini-4-argon-medium',
+    name: 'Gemini 4 Argon (Medium)',
+    shortName: 'Argon Med',
+    family: 'Argon',
+    color: '#38bdf8'
+  },
+  {
+    id: 'gemini-4-argon-low',
+    name: 'Gemini 4 Argon (Low)',
+    shortName: 'Argon Low',
+    family: 'Argon',
+    color: '#38bdf8'
+  },
+  {
+    id: 'gemini-4-hydrogen-xhigh',
+    name: 'Gemini 4 Hydrogen (XHigh)',
+    shortName: 'Hydrogen XHigh',
+    family: 'Hydrogen',
+    color: '#34d399'
+  },
+  {
+    id: 'gemini-4-hydrogen-high',
+    name: 'Gemini 4 Hydrogen (High)',
+    shortName: 'Hydrogen High',
+    family: 'Hydrogen',
+    color: '#34d399'
+  },
+  {
+    id: 'gemini-4-hydrogen-medium',
+    name: 'Gemini 4 Hydrogen (Medium)',
+    shortName: 'Hydrogen Med',
+    family: 'Hydrogen',
+    color: '#34d399'
+  },
+  {
+    id: 'gemini-4-hydrogen-low',
+    name: 'Gemini 4 Hydrogen (Low)',
+    shortName: 'Hydrogen Low',
+    family: 'Hydrogen',
+    color: '#34d399'
+  },
+  {
+    id: 'gemini-3.8-flash-high',
+    name: 'Gemini 3.8 Flash (High)',
+    shortName: 'Flash 3.8 High',
+    family: 'Gemini 3.8',
+    color: '#fbbf24'
+  },
+  {
+    id: 'gemini-3.8-flash-medium',
+    name: 'Gemini 3.8 Flash (Medium)',
+    shortName: 'Flash 3.8 Med',
+    family: 'Gemini 3.8',
+    color: '#fbbf24'
+  },
+  {
+    id: 'gemini-3.8-flash-low',
+    name: 'Gemini 3.8 Flash (Low)',
+    shortName: 'Flash 3.8 Low',
+    family: 'Gemini 3.8',
+    color: '#fbbf24'
+  },
+  {
+    id: 'claude-opus-5-5-high',
+    name: 'Claude Opus 5.5 (High)',
+    shortName: 'Opus 5.5 High',
+    family: 'Claude',
+    color: '#c084fc'
+  },
+  {
+    id: 'claude-opus-5-5-medium',
+    name: 'Claude Opus 5.5 (Medium)',
+    shortName: 'Opus 5.5 Med',
+    family: 'Claude',
+    color: '#c084fc'
+  },
+  {
+    id: 'claude-opus-5-5-low',
+    name: 'Claude Opus 5.5 (Low)',
+    shortName: 'Opus 5.5 Low',
+    family: 'Claude',
+    color: '#c084fc'
+  },
+  {
+    id: 'claude-sonnet-5-5-high',
+    name: 'Claude Sonnet 5.5 (High)',
+    shortName: 'Sonnet 5.5 High',
+    family: 'Claude',
+    color: '#a78bfa'
+  },
+  {
+    id: 'claude-sonnet-5-5-medium',
+    name: 'Claude Sonnet 5.5 (Medium)',
+    shortName: 'Sonnet 5.5 Med',
+    family: 'Claude',
+    color: '#a78bfa'
+  },
+  {
+    id: 'claude-sonnet-5-5-low',
+    name: 'Claude Sonnet 5.5 (Low)',
+    shortName: 'Sonnet 5.5 Low',
+    family: 'Claude',
+    color: '#a78bfa'
+  },
+  {
+    id: 'gpt-oss-120b-medium',
+    name: 'GPT-OSS 120B (Medium)',
+    shortName: 'GPT-OSS 120B',
+    family: 'OpenAI OSS',
+    color: '#f472b6'
+  },
+  {
+    id: 'gemini-pro-orchestrator-g1-pro',
+    name: 'Orchestrator (Argon)',
+    shortName: 'Orchestrator',
+    family: 'Argon',
+    color: '#38bdf8'
+  }
+];
+
+/**
+ * Default assignments for Planner and Builder slots.
+ */
+const DEFAULT_MODEL_SLOTS = {
+  planner: 'gemini-4-argon-high',
+  builder: 'gemini-4-hydrogen-high'
+};
+
+/**
+ * Finds a model in the catalog by its id, or falls back to the first catalog entry.
+ * @param {string} modelId
+ * @param {Array<Object>} [catalog=MODEL_CATALOG]
+ * @returns {Object}
+ */
+function getModelById(modelId, catalog) {
+  if (catalog && Array.isArray(catalog)) {
+    if (catalog[0] && catalog[0].efforts) {
+      for (const bm of catalog) {
+        const found = bm.efforts.find(e => e.id === modelId);
+        if (found) {
+          return {
+            id: found.id,
+            name: `${bm.name} (${found.label})`,
+            shortName: found.shortName,
+            family: bm.family,
+            color: bm.color
+          };
+        }
+      }
+    } else {
+      const match = catalog.find(m => m.id === modelId);
+      if (match) return match;
+    }
+  }
+
+  const list = (typeof window !== 'undefined' && window.__MODEL_CATALOG) || (typeof MODEL_CATALOG !== 'undefined' ? MODEL_CATALOG : []);
+  const fromCatalog = list.find(m => m.id === modelId);
+  if (fromCatalog) return fromCatalog;
+
+  for (const bm of BASE_MODELS) {
+    const found = bm.efforts.find(e => e.id === modelId);
+    if (found) {
+      return {
+        id: found.id,
+        name: `${bm.name} (${found.label})`,
+        shortName: found.shortName,
+        family: bm.family,
+        color: bm.color
+      };
+    }
+  }
+
+  return list[0];
+}
+
+/**
+ * Renders the dual menubar buttons for Planner and Builder slots.
+ * @param {Object} [slots=DEFAULT_MODEL_SLOTS]
+ * @returns {string}
+ */
+function renderModelSlotsMenubarHtml(slots = DEFAULT_MODEL_SLOTS) {
+  const currentSlots = slots || DEFAULT_MODEL_SLOTS;
+  const plannerId = currentSlots.planner || DEFAULT_MODEL_SLOTS.planner;
+  const builderId = currentSlots.builder || DEFAULT_MODEL_SLOTS.builder;
+  const planner = getModelById(plannerId);
+  const builder = getModelById(builderId);
+
+  return `
+    <div class="antigravity-model-slots-group" id="antigravity-model-slots-group">
+      <button 
+        id="antigravity-model-slot-planner" 
+        class="antigravity-model-slot-btn" 
+        data-slot-role="planner" 
+        data-model-id="${planner.id}" 
+        title="Planner Model: ${planner.name}"
+      >
+        <span class="model-slot-dot" style="background-color: ${planner.color}; box-shadow: 0 0 6px ${planner.color}88;"></span>
+        <span class="model-slot-role">Plan:</span>
+        <span class="model-slot-value">${planner.shortName}</span>
+        <span class="model-slot-caret">▼</span>
+      </button>
+      <button 
+        id="antigravity-model-slot-builder" 
+        class="antigravity-model-slot-btn" 
+        data-slot-role="builder" 
+        data-model-id="${builder.id}" 
+        title="Builder Model: ${builder.name}"
+      >
+        <span class="model-slot-dot" style="background-color: ${builder.color}; box-shadow: 0 0 6px ${builder.color}88;"></span>
+        <span class="model-slot-role">Build:</span>
+        <span class="model-slot-value">${builder.shortName}</span>
+        <span class="model-slot-caret">▼</span>
+      </button>
+    </div>
+  `.trim();
+}
+
+/**
+ * Renders hierarchical dropdown markup with base models and flyout effort submenus.
+ * @param {'planner'|'builder'} role
+ * @param {string} selectedModelId
+ * @param {Array<Object>} [catalog=BASE_MODELS]
+ * @returns {string} Clean HTML without any emojis
+ */
+function renderModelSlotDropdownHtml(role, selectedModelId, catalog) {
+  const baseModels = (catalog && Array.isArray(catalog) && catalog[0] && catalog[0].efforts)
+    ? catalog
+    : ((typeof window !== 'undefined' && window.__BASE_MODELS) || BASE_MODELS);
+  const isPlanner = role === 'planner';
+  const headerTitle = isPlanner ? 'Select Planner Model' : 'Select Builder Model';
+  const roleLabel = isPlanner ? 'PLANNER' : 'BUILDER';
+  const roleDesc = isPlanner ? 'Deep reasoning, architecture & plan creation' : 'Fast code generation, edits & execution';
+
+  const rowsHtml = baseModels.map(bm => {
+    const activeEffort = bm.efforts.find(e => e.id === selectedModelId);
+    const isModelActive = Boolean(activeEffort);
+    const singleEffortId = bm.efforts.length === 1 ? bm.efforts[0].id : '';
+
+    const effortOptionsHtml = bm.efforts.map(eff => {
+      const isEffortActive = eff.id === selectedModelId;
+      return `
+        <button 
+          type="button" 
+          class="model-effort-option${isEffortActive ? ' active' : ''}" 
+          data-slot-role="${role}" 
+          data-model-id="${eff.id}" 
+          title="${bm.name} - ${eff.label}"
+        >
+          <span class="model-effort-name">${eff.label}</span>
+          <span class="model-effort-check">${isEffortActive ? '✓' : ''}</span>
+        </button>
+      `.trim();
+    }).join('\n');
+
+    return `
+      <div 
+        class="model-slot-row${isModelActive ? ' active' : ''}" 
+        data-slot-role="${role}"
+        ${singleEffortId ? `data-model-id="${singleEffortId}"` : ''}
+        data-base-model="${bm.name}"
+      >
+        <div class="model-slot-row-left">
+          <span class="model-slot-row-dot" style="background-color: ${bm.color}; box-shadow: 0 0 6px ${bm.color}66;"></span>
+          <span class="model-slot-row-name">${bm.name}</span>
+        </div>
+        <div class="model-slot-row-right">
+          ${activeEffort ? `<span class="model-slot-active-badge">${activeEffort.label}</span>` : ''}
+          <span class="model-slot-chevron">&#8250;</span>
+        </div>
+        <div class="model-slot-submenu">
+          ${effortOptionsHtml}
+        </div>
+      </div>
+    `.trim();
+  }).join('\n');
+
+  return `
+    <div class="model-slot-dropdown-header">
+      <div class="model-slot-dropdown-title-row">
+        <span class="model-slot-dropdown-title">${headerTitle}</span>
+        <span class="model-slot-dropdown-role-badge ${role}">${roleLabel}</span>
+      </div>
+      <div class="model-slot-dropdown-sub">${roleDesc}</div>
+    </div>
+    <div class="model-slot-options-list">
+      ${rowsHtml}
+    </div>
+  `.trim();
+}
+
+/**
+ * Renders the model badge pill for subagent footers.
+ * @param {string} modelId
+ * @param {Array<Object>} [catalog=MODEL_CATALOG]
+ * @returns {string} Clean HTML without any emojis
+ */
+function renderSubagentModelPill(modelId, catalog) {
+  const getFn = typeof getModelById === 'function'
+    ? getModelById
+    : (typeof window !== 'undefined' && typeof window.__getModelById === 'function' ? window.__getModelById : null);
+  const model = (getFn ? getFn(modelId, catalog) : null) || { id: modelId, name: modelId, shortName: modelId, color: '#34d399' };
+  return `
+    <span 
+      id="antigravity-subagent-model-pill" 
+      class="antigravity-subagent-model-pill" 
+      data-model-id="${model.id}" 
+      title="Subagent Builder Model: ${model.name}" 
+      style="border-color: ${model.color}55; background: ${model.color}18; color: ${model.color};"
+    >
+      <span class="subagent-model-dot" style="background: ${model.color}; box-shadow: 0 0 5px ${model.color};"></span>
+      <span class="subagent-model-label">${model.shortName}</span>
+    </span>
+  `.trim();
+}
+
+
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
+
+
+
+
+
+
+
+
+/**
+ * Mod providing dual menubar selectors for Planner and Builder model slots.
+ */
+class ModelSlotsMod extends AntigravityMod {
+  constructor() {
+    super({
+      id: 'model-slots',
+      name: 'Planner & Builder Model Slots',
+      version: '1.0.0',
+      slot: 'menubar-actions',
+      priority: 90
+    });
+
+    this.cachedCss = "/* =========================================================================\n   ANTIGRAVITY PLANNER & BUILDER MODEL SLOTS MOD - STYLES\n   ========================================================================= */\n\n/* Menubar Buttons Container */\n.antigravity-model-slots-group {\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  app-region: no-drag !important;\n  user-select: none !important;\n}\n\n/* Individual Slot Selector Button */\n.antigravity-model-slot-btn {\n  height: 26px !important;\n  padding: 0 8px !important;\n  font-size: 11.5px !important;\n  font-weight: 500 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  color: rgba(255, 255, 255, 0.85) !important;\n  background: rgba(255, 255, 255, 0.04) !important;\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 5px !important;\n  transition: all 0.15s ease !important;\n  app-region: no-drag !important;\n  user-select: none !important;\n  line-height: 1 !important;\n  box-sizing: border-box !important;\n}\n\n.antigravity-model-slot-btn:hover {\n  background: rgba(255, 255, 255, 0.09) !important;\n  border-color: rgba(255, 255, 255, 0.22) !important;\n  color: #ffffff !important;\n}\n\n.antigravity-model-slot-btn.open {\n  background: rgba(255, 255, 255, 0.13) !important;\n  border-color: rgba(56, 189, 248, 0.45) !important;\n  color: #ffffff !important;\n  box-shadow: 0 0 10px rgba(56, 189, 248, 0.15) !important;\n}\n\n/* Menubar Button Elements */\n.antigravity-model-slot-btn .model-slot-dot {\n  width: 6px !important;\n  height: 6px !important;\n  border-radius: 50% !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.antigravity-model-slot-btn .model-slot-role {\n  font-weight: 600 !important;\n  font-size: 10px !important;\n  color: rgba(255, 255, 255, 0.5) !important;\n  text-transform: uppercase !important;\n  letter-spacing: 0.3px !important;\n  pointer-events: none !important;\n}\n\n.antigravity-model-slot-btn .model-slot-value {\n  font-weight: 500 !important;\n  color: #ffffff !important;\n  pointer-events: none !important;\n}\n\n.antigravity-model-slot-btn .model-slot-caret {\n  font-size: 8px !important;\n  opacity: 0.5 !important;\n  pointer-events: none !important;\n  margin-left: 1px !important;\n}\n\n/* Floating Portal Dropdown */\n.antigravity-model-slot-dropdown-portal {\n  position: fixed !important;\n  z-index: 1000001 !important;\n  width: 250px !important;\n  max-height: none !important;\n  overflow: visible !important;\n  background: #161822 !important;\n  background-color: #161822 !important;\n  background-image: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\n  opacity: 1 !important;\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\n  border-radius: 12px !important;\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\n  padding: 10px !important;\n  color: #c0caf5 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  display: none;\n  flex-direction: column !important;\n  box-sizing: border-box !important;\n  animation: modelSlotPopIn 0.15s cubic-bezier(0, 0, 0.2, 1) forwards;\n}\n\n.antigravity-model-slot-dropdown-portal.open {\n  display: flex !important;\n}\n\n@keyframes modelSlotPopIn {\n  from {\n    opacity: 0;\n    transform: translateY(-5px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n\n/* Dropdown Header */\n.model-slot-dropdown-header {\n  padding-bottom: 8px !important;\n  margin-bottom: 8px !important;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 2px !important;\n}\n\n.model-slot-dropdown-title-row {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n}\n\n.model-slot-dropdown-title {\n  font-size: 13px !important;\n  font-weight: 700 !important;\n  color: #ffffff !important;\n  letter-spacing: -0.2px !important;\n}\n\n.model-slot-dropdown-role-badge {\n  font-size: 9px !important;\n  font-weight: 700 !important;\n  letter-spacing: 0.4px !important;\n  padding: 1px 6px !important;\n  border-radius: 4px !important;\n  text-transform: uppercase !important;\n}\n\n.model-slot-dropdown-role-badge.planner {\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\n}\n\n.model-slot-dropdown-role-badge.builder {\n  background: rgba(52, 211, 153, 0.15) !important;\n  color: #34d399 !important;\n  border: 1px solid rgba(52, 211, 153, 0.3) !important;\n}\n\n.model-slot-dropdown-sub {\n  font-size: 10.5px !important;\n  color: rgba(255, 255, 255, 0.45) !important;\n}\n\n/* Hierarchical Base Model Options List */\n.model-slot-options-list {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 2px !important;\n  overflow: visible !important;\n}\n\n/* Base Model Row */\n.model-slot-row {\n  position: relative !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  width: 100% !important;\n  padding: 6px 8px !important;\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  transition: all 0.12s ease !important;\n  user-select: none !important;\n  font-family: inherit !important;\n  box-sizing: border-box !important;\n}\n\n.model-slot-row:hover {\n  background: rgba(255, 255, 255, 0.07) !important;\n  border-color: rgba(255, 255, 255, 0.1) !important;\n}\n\n.model-slot-row.active {\n  background: rgba(56, 189, 248, 0.08) !important;\n  border-color: rgba(56, 189, 248, 0.25) !important;\n}\n\n.model-slot-row.open {\n  background: rgba(255, 255, 255, 0.1) !important;\n  border-color: rgba(56, 189, 248, 0.3) !important;\n}\n\n.model-slot-row-left {\n  display: flex !important;\n  align-items: center !important;\n  gap: 8px !important;\n  min-width: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-row-dot {\n  width: 7px !important;\n  height: 7px !important;\n  border-radius: 50% !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-row-name {\n  font-size: 12px !important;\n  font-weight: 500 !important;\n  color: #ffffff !important;\n  white-space: nowrap !important;\n  pointer-events: none !important;\n}\n\n.model-slot-row-right {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-active-badge {\n  font-size: 10px !important;\n  font-weight: 600 !important;\n  padding: 1px 5px !important;\n  border-radius: 4px !important;\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\n  letter-spacing: 0.2px !important;\n  pointer-events: none !important;\n}\n\n.model-slot-chevron {\n  font-size: 14px !important;\n  line-height: 1 !important;\n  color: rgba(255, 255, 255, 0.45) !important;\n  pointer-events: none !important;\n  transition: color 0.12s ease !important;\n}\n\n.model-slot-row:hover .model-slot-chevron,\n.model-slot-row.open .model-slot-chevron {\n  color: #ffffff !important;\n}\n\n/* Effort Submenu Flyout */\n.model-slot-submenu {\n  position: absolute !important;\n  left: 100% !important;\n  top: -4px !important;\n  margin-left: 0 !important;\n  min-width: 120px !important;\n  display: none;\n  z-index: 1000002 !important;\n  background: #161822 !important;\n  background-color: #161822 !important;\n  background-image: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\n  opacity: 1 !important;\n  border: 1px solid rgba(255, 255, 255, 0.14) !important;\n  border-radius: 8px !important;\n  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\n  padding: 4px !important;\n  box-sizing: border-box !important;\n}\n\n.model-slot-submenu::before {\n  content: \"\";\n  position: absolute;\n  top: 0;\n  bottom: 0;\n  left: -8px;\n  width: 8px;\n}\n\n.model-slot-row:hover > .model-slot-submenu,\n.model-slot-row.open > .model-slot-submenu {\n  display: block !important;\n}\n\n.model-slot-submenu.submenu-left {\n  right: 100% !important;\n  left: auto !important;\n  margin-right: 0 !important;\n  margin-left: 0 !important;\n}\n\n.model-slot-submenu.submenu-left::before {\n  left: auto;\n  right: -8px;\n}\n\n/* Effort Level Option Button */\n.model-effort-option {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  width: 100% !important;\n  padding: 5px 8px !important;\n  margin-bottom: 2px !important;\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  border-radius: 5px !important;\n  cursor: pointer !important;\n  text-align: left !important;\n  font-family: inherit !important;\n  box-sizing: border-box !important;\n  transition: all 0.12s ease !important;\n}\n\n.model-effort-option:last-child {\n  margin-bottom: 0 !important;\n}\n\n.model-effort-option:hover {\n  background: rgba(255, 255, 255, 0.08) !important;\n  border-color: rgba(255, 255, 255, 0.12) !important;\n}\n\n.model-effort-option.active {\n  background: rgba(56, 189, 248, 0.12) !important;\n  border-color: rgba(56, 189, 248, 0.35) !important;\n}\n\n.model-effort-name {\n  font-size: 11.5px !important;\n  font-weight: 500 !important;\n  color: #ffffff !important;\n  pointer-events: none !important;\n}\n\n.model-effort-option.active .model-effort-name {\n  color: #38bdf8 !important;\n  font-weight: 600 !important;\n}\n\n.model-effort-check {\n  font-size: 12px !important;\n  font-weight: 700 !important;\n  color: #38bdf8 !important;\n  width: 14px !important;\n  text-align: right !important;\n  pointer-events: none !important;\n}\n\n/* Legacy option styles retained for compatibility */\n.model-slot-option {\n  display: flex !important;\n  align-items: center !important;\n  gap: 8px !important;\n  width: 100% !important;\n  padding: 6px 8px !important;\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  text-align: left !important;\n  transition: all 0.12s ease !important;\n  user-select: none !important;\n  font-family: inherit !important;\n  box-sizing: border-box !important;\n}\n\n.model-slot-option:hover {\n  background: rgba(255, 255, 255, 0.065) !important;\n  border-color: rgba(255, 255, 255, 0.1) !important;\n}\n\n.model-slot-option.active {\n  background: rgba(56, 189, 248, 0.1) !important;\n  border-color: rgba(56, 189, 248, 0.3) !important;\n}\n\n.model-slot-option-dot {\n  width: 8px !important;\n  height: 8px !important;\n  border-radius: 50% !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-option-info {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 1px !important;\n  flex: 1 !important;\n  min-width: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-option-name {\n  font-size: 12px !important;\n  font-weight: 500 !important;\n  color: #ffffff !important;\n  white-space: nowrap !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n}\n\n.model-slot-option-family {\n  font-size: 10px !important;\n  color: rgba(255, 255, 255, 0.42) !important;\n}\n\n.model-slot-option-badge {\n  font-size: 9.5px !important;\n  padding: 1px 5px !important;\n  border-radius: 4px !important;\n  background: rgba(255, 255, 255, 0.05) !important;\n  color: rgba(255, 255, 255, 0.6) !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-option-check {\n  font-size: 12px !important;\n  font-weight: 700 !important;\n  color: #38bdf8 !important;\n  width: 14px !important;\n  text-align: center !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n/* Mods Manager Icon Box for Model Slots */\n.mod-icon-box.slots-icon {\n  background: rgba(56, 189, 248, 0.12) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.25) !important;\n}\n\n/* Subagent Model Pill Badge */\n.antigravity-subagent-model-pill {\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 4px !important;\n  height: 18px !important;\n  padding: 0 6px !important;\n  margin-left: 6px !important;\n  font-size: 11px !important;\n  font-weight: 600 !important;\n  line-height: 1 !important;\n  border-radius: 4px !important;\n  border: 1px solid !important;\n  user-select: none !important;\n  vertical-align: middle !important;\n  box-sizing: border-box !important;\n  transition: all 0.15s ease !important;\n}\n\n.antigravity-subagent-model-pill .subagent-model-dot {\n  width: 5px !important;\n  height: 5px !important;\n  border-radius: 50% !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.antigravity-subagent-model-pill .subagent-model-label {\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  letter-spacing: 0.2px !important;\n  pointer-events: none !important;\n  white-space: nowrap !important;\n}\n\n";
+  }
+
+  /**
+   * Renders the top menubar buttons for Planner and Builder slots.
+   * @param {Object} [context]
+   * @returns {{ html: string, css: string }}
+   */
+  render(context = {}) {
+    const slots = context.slots || context.modelSlots;
+    return {
+      html: renderModelSlotsMenubarHtml(slots),
+      css: this.cachedCss
+    };
+  }
+}
+
+
 // ======================= Entrypoint Execution =======================
 async function main() {
   try {
@@ -7587,6 +8553,7 @@ async function main() {
     host.registerMod(new ContextTachometerMod());
     host.registerMod(new AgentSelectorMod());
     host.registerMod(new ModsManagerMod());
+    host.registerMod(new ModelSlotsMod());
 
     // Lazy VCS: Avoid running 20+ git/gh processes synchronously on every hook execution.
     // Full VCS overview will be fetched on demand by GitGraph via the local HTTP bridge.
