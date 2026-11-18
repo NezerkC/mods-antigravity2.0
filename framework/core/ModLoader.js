@@ -894,6 +894,269 @@ export class ModLoader {
           }
         };
 
+        window.__resolveNativeModelTarget = function(modelId) {
+          if (!modelId || typeof modelId !== 'string') return null;
+          const resolved = (typeof window.__getModelById === 'function')
+            ? window.__getModelById(modelId)
+            : null;
+          const effectiveId = (resolved && resolved.id === modelId) ? resolved.id : modelId;
+
+          if (effectiveId === 'gemini-pro-orchestrator-g1-pro') {
+            return { base: 'Orchestrator', effort: null };
+          }
+          if (effectiveId.startsWith('gpt-oss-120b-')) {
+            return { base: 'GPT-OSS 120B', effort: null };
+          }
+
+          const basePrefixes = [
+            { prefix: 'gemini-4-argon-', base: 'Gemini 4 Argon' },
+            { prefix: 'gemini-4-hydrogen-', base: 'Gemini 4 Hydrogen' },
+            { prefix: 'gemini-3.8-flash-', base: 'Gemini 3.8 Flash' },
+            { prefix: 'claude-opus-5-5-', base: 'Claude Opus 5.5' },
+            { prefix: 'claude-sonnet-5-5-', base: 'Claude Sonnet 5.5' }
+          ];
+
+          const effortLabels = {
+            low: 'Low',
+            medium: 'Medium',
+            high: 'High',
+            xhigh: 'XHigh'
+          };
+
+          for (const entry of basePrefixes) {
+            if (effectiveId.startsWith(entry.prefix)) {
+              const rawEffort = effectiveId.slice(entry.prefix.length).toLowerCase();
+              return {
+                base: entry.base,
+                effort: effortLabels[rawEffort] || null
+              };
+            }
+          }
+          return null;
+        };
+
+        window.__resolveModelIdFromNativeText = function(rawText) {
+          if (!rawText || typeof rawText !== 'string') return null;
+          const text = rawText.trim().toLowerCase();
+          if (!text) return null;
+
+          if (text.includes('orchestrator')) return 'gemini-pro-orchestrator-g1-pro';
+          if (text.includes('gpt-oss') || text.includes('120b')) return 'gpt-oss-120b-medium';
+
+          let basePrefix = null;
+          if (text.includes('argon')) basePrefix = 'gemini-4-argon-';
+          else if (text.includes('hydrogen')) basePrefix = 'gemini-4-hydrogen-';
+          else if (text.includes('3.8') && text.includes('flash')) basePrefix = 'gemini-3.8-flash-';
+          else if (text.includes('opus')) basePrefix = 'claude-opus-5-5-';
+          else if (text.includes('sonnet')) basePrefix = 'claude-sonnet-5-5-';
+
+          if (!basePrefix) return null;
+
+          let effort = null;
+          if (/(?:^|[^a-z])xhigh(?:$|[^a-z])/i.test(text)) effort = 'xhigh';
+          else if (/(?:^|[^a-z])high(?:$|[^a-z])/i.test(text)) effort = 'high';
+          else if (/(?:^|[^a-z])(?:medium|med)(?:$|[^a-z])/i.test(text)) effort = 'medium';
+          else if (/(?:^|[^a-z])low(?:$|[^a-z])/i.test(text)) effort = 'low';
+
+          if (!effort) {
+            const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+            if (saved && saved.planner && saved.planner.startsWith(basePrefix)) {
+              effort = saved.planner.slice(basePrefix.length);
+            } else {
+              effort = 'high';
+            }
+          }
+
+          const candidateId = basePrefix + effort;
+          const catalog = window.__MODEL_CATALOG || [];
+          const found = catalog.find(m => m.id === candidateId);
+          return found ? found.id : null;
+        };
+
+        window.__nativeModelSyncTimers = window.__nativeModelSyncTimers || [];
+        window.__nativeModelSyncInProgress = false;
+        window.__nativeModelSyncToken = window.__nativeModelSyncToken || 0;
+
+        window.__syncNativeModelSelector = function(modelId) {
+          if (!modelId) return false;
+          const resolved = (typeof window.__getModelById === 'function')
+            ? window.__getModelById(modelId)
+            : null;
+          const targetId = (resolved && resolved.id === modelId) ? resolved.id : modelId;
+          const target = window.__resolveNativeModelTarget ? window.__resolveNativeModelTarget(targetId) : null;
+          if (!target) return false;
+
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
+          if (!activeTrigger) return false;
+
+          const matchesEffortText = (text, effort) => {
+            if (!effort) return true;
+            const escaped = effort.replace(/[.*+?^$()|[\\]\\\\]/g, '\\\\$&').replace(/[{}]/g, '\\\\$&');
+            return new RegExp('(?:^|[^a-zA-Z])' + escaped + '(?:$|[^a-zA-Z])', 'i').test(text);
+          };
+
+          const currentText = (activeTrigger.textContent || '').trim();
+          const hasBase = currentText.toLowerCase().includes(target.base.toLowerCase());
+          const hasEffort = target.effort ? matchesEffortText(currentText, target.effort) : true;
+          if (hasBase && hasEffort) {
+            return true;
+          }
+
+          if (Array.isArray(window.__nativeModelSyncTimers)) {
+            while (window.__nativeModelSyncTimers.length > 0) {
+              clearTimeout(window.__nativeModelSyncTimers.pop());
+            }
+          }
+          const token = ++window.__nativeModelSyncToken;
+          window.__nativeModelSyncInProgress = true;
+
+          const finishSync = () => {
+            if (window.__nativeModelSyncToken === token) {
+              const settleTimer = setTimeout(() => {
+                if (window.__nativeModelSyncToken === token) {
+                  window.__nativeModelSyncInProgress = false;
+                }
+              }, 120);
+              window.__nativeModelSyncTimers.push(settleTimer);
+            }
+          };
+
+          if (typeof activeTrigger.click === 'function') {
+            activeTrigger.click();
+          }
+
+          const t1 = setTimeout(() => {
+            if (window.__nativeModelSyncToken !== token) return;
+            const menuItems = Array.from(document.querySelectorAll('[role="menuitem"], [data-testid="model-selector-item"]'));
+            const baseRow = menuItems.find(el => {
+              const text = (el.textContent || '').trim().toLowerCase();
+              const label = (el.getAttribute && (el.getAttribute('data-model-label') || '')).trim().toLowerCase();
+              const needle = target.base.toLowerCase();
+              return text.includes(needle) || label.includes(needle);
+            });
+
+            if (!baseRow) {
+              window.__nativeModelSyncInProgress = false;
+              return;
+            }
+
+            if (!target.effort) {
+              if (typeof baseRow.click === 'function') {
+                baseRow.click();
+              }
+              finishSync();
+              return;
+            }
+
+            try {
+              if (typeof baseRow.dispatchEvent === 'function' && typeof MouseEvent === 'function') {
+                baseRow.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+              }
+            } catch (e) {}
+            if (typeof baseRow.click === 'function') {
+              baseRow.click();
+            }
+
+            const t2 = setTimeout(() => {
+              if (window.__nativeModelSyncToken !== token) return;
+              const subItems = Array.from(document.querySelectorAll('[role="menuitem"], [data-testid="model-selector-item"]'));
+              const effortNeedle = target.effort.toLowerCase();
+              const candidates = subItems.filter(el => el !== baseRow);
+              const effortItem = candidates.find(el => (el.textContent || '').trim().toLowerCase() === effortNeedle)
+                || candidates.find(el => matchesEffortText((el.textContent || '').trim(), target.effort))
+                || subItems.find(el => (el.textContent || '').trim().toLowerCase() === effortNeedle)
+                || subItems.find(el => matchesEffortText((el.textContent || '').trim(), target.effort));
+
+              if (effortItem && typeof effortItem.click === 'function') {
+                effortItem.click();
+              }
+              finishSync();
+            }, 100);
+            window.__nativeModelSyncTimers.push(t2);
+          }, 80);
+          window.__nativeModelSyncTimers.push(t1);
+          return true;
+        };
+
+        window.__syncPlannerFromNativeSelector = function() {
+          if (window.__nativeModelSyncInProgress) return false;
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
+          if (!activeTrigger) return false;
+
+          const detectedId = window.__resolveModelIdFromNativeText
+            ? window.__resolveModelIdFromNativeText(activeTrigger.textContent || '')
+            : null;
+          if (!detectedId) return false;
+
+          const current = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+
+          const plannerBtns = Array.from(document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="planner"]'));
+          const btnAlreadySynced = plannerBtns.length > 0 && plannerBtns.every(btn => btn.getAttribute('data-model-id') === detectedId);
+          if (current.planner === detectedId && btnAlreadySynced) {
+            return false;
+          }
+
+          current.planner = detectedId;
+          current.updatedAt = Date.now();
+          try {
+            localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+          } catch (e) {}
+
+          if (typeof window.__updateMenubarSlotButtons === 'function') {
+            window.__updateMenubarSlotButtons(
+              typeof window.__getActiveMenubarSlotModels === 'function'
+                ? window.__getActiveMenubarSlotModels()
+                : current
+            );
+          }
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  planner: current.planner,
+                  builder: current.builder,
+                  enabled: current.enabled !== false
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+
+          return true;
+        };
+
+        window.__observeNativeModelSelector = function() {
+          if (typeof MutationObserver !== 'function') return;
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          if (!triggers.length) {
+            const single = document.querySelector('button[data-testid="model-selector-trigger"]');
+            if (single) triggers.push(single);
+          }
+          if (!triggers.length) return;
+
+          if (window.__antigravityNativeModelObserver) {
+            window.__antigravityNativeModelObserver.disconnect();
+          }
+          window.__antigravityNativeModelObserver = new MutationObserver(() => {
+            if (typeof window.__syncPlannerFromNativeSelector === 'function') {
+              window.__syncPlannerFromNativeSelector();
+            }
+          });
+          triggers.forEach(trigger => {
+            window.__antigravityNativeModelObserver.observe(trigger, {
+              childList: true,
+              subtree: true,
+              characterData: true
+            });
+          });
+        };
+
         window.__selectModelForSlot = function(role, modelId) {
           if (!role || !modelId) return;
           const current = window.__getSavedModelSlots();
@@ -925,6 +1188,10 @@ export class ModLoader {
 
           if (typeof window.__syncSubagentModelBadges === 'function') {
             window.__syncSubagentModelBadges();
+          }
+
+          if (role === 'planner' && typeof window.__syncNativeModelSelector === 'function') {
+            window.__syncNativeModelSelector(modelId);
           }
 
           try {
@@ -2360,6 +2627,9 @@ export class ModLoader {
           if (typeof window.__syncSubagentModelBadges === 'function') {
             window.__syncSubagentModelBadges();
           }
+          if (typeof window.__observeNativeModelSelector === 'function') {
+            window.__observeNativeModelSelector();
+          }
         }
 
         // Initialize ResizeObserver for responsive auto-collapse
@@ -2444,6 +2714,9 @@ export class ModLoader {
               }
               if (typeof window.__syncSubagentModelBadges === 'function') {
                 window.__syncSubagentModelBadges();
+              }
+              if (typeof window.__observeNativeModelSelector === 'function') {
+                window.__observeNativeModelSelector();
               }
             }
           }, 150);

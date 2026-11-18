@@ -797,4 +797,348 @@ describe('ModelSlotsMod - Style Isolation & Un-scoped Selectors', () => {
     assert.ok(scoped.includes('.antigravity-subagent-model-pill {'), '.antigravity-subagent-model-pill rule must be present');
     assert.ok(scoped.includes('.antigravity-model-slot-dropdown-portal {'), '.antigravity-model-slot-dropdown-portal rule must be present');
   });
+
+  it('mods/model-slots/styles.css enforces non-clipping menubar group and compact responsive rules', () => {
+    const cssPath = path.resolve(process.cwd(), 'mods/model-slots/styles.css');
+    const css = fs.readFileSync(cssPath, 'utf-8');
+
+    assert.ok(css.includes('#antigravity-model-slots-group'), 'Must style #antigravity-model-slots-group');
+    assert.ok(css.includes('.antigravity-model-slots-group'), 'Must style .antigravity-model-slots-group');
+    assert.ok(css.includes('flex-shrink: 0'), 'Must set flex-shrink: 0 to prevent clipping');
+    assert.ok(css.includes('white-space: nowrap'), 'Must set white-space: nowrap');
+    assert.ok(css.includes('#antigravity-model-slot-planner'), 'Must include #antigravity-model-slot-planner selector');
+    assert.ok(css.includes('#antigravity-model-slot-builder'), 'Must include #antigravity-model-slot-builder selector');
+    assert.ok(css.includes('padding: 2px 6px'), 'Must include compact padding rule for constrained spaces');
+    assert.ok(css.includes('font-size: 11px'), 'Must include compact font-size rule for constrained spaces');
+  });
+});
+
+describe('ModelSlotsMod - Native Model Selector Synchronization', () => {
+  it('ModLoader injection payload exposes __syncNativeModelSelector and reverse sync helpers', () => {
+    const loader = new ModLoader();
+    const script = loader.buildInjectionPayload({});
+
+    assert.doesNotThrow(() => new Function(script));
+    assert.ok(script.includes('__syncNativeModelSelector'), 'Payload must define __syncNativeModelSelector');
+    assert.ok(script.includes('__resolveNativeModelTarget'), 'Payload must define __resolveNativeModelTarget');
+    assert.ok(script.includes('__resolveModelIdFromNativeText'), 'Payload must define __resolveModelIdFromNativeText');
+    assert.ok(script.includes('__observeNativeModelSelector'), 'Payload must define __observeNativeModelSelector');
+    assert.ok(script.includes('__syncPlannerFromNativeSelector'), 'Payload must define __syncPlannerFromNativeSelector');
+  });
+
+  it('__syncNativeModelSelector resolves all 7 families, short-circuits matching text, and drives native menu/submenu clicks', async () => {
+    const loader = new ModLoader();
+    const script = loader.buildInjectionPayload({});
+
+    function createNativeMockEl(tag, attrs = {}, parent = null) {
+      const listeners = {};
+      const el = {
+        tagName: tag.toUpperCase(),
+        nodeType: 1,
+        attributes: { ...attrs },
+        children: [],
+        parentElement: parent,
+        style: {},
+        textContent: '',
+        dispatchedEvents: [],
+        clickCount: 0,
+        classList: {
+          _set: new Set((attrs.class || '').split(/\s+/).filter(Boolean)),
+          add(c) { this._set.add(c); },
+          remove(c) { this._set.delete(c); },
+          contains(c) { return this._set.has(c); },
+          toggle(c, force) {
+            if (force === undefined) {
+              if (this._set.has(c)) { this._set.delete(c); return false; }
+              this._set.add(c); return true;
+            }
+            if (force) { this._set.add(c); return true; }
+            this._set.delete(c); return false;
+          }
+        },
+        setAttribute(k, v) {
+          this.attributes[k] = String(v);
+          if (k === 'class') this.classList._set = new Set(String(v).split(/\s+/).filter(Boolean));
+        },
+        getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attributes, k) ? this.attributes[k] : null; },
+        hasAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attributes, k); },
+        removeAttribute(k) { delete this.attributes[k]; },
+        appendChild(child) { child.parentElement = this; this.children.push(child); return child; },
+        remove() {
+          if (this.parentElement) {
+            this.parentElement.children = this.parentElement.children.filter(c => c !== this);
+            this.parentElement = null;
+          }
+        },
+        contains(target) {
+          if (target === this) return true;
+          return this.children.some(c => c.contains(target));
+        },
+        closest(selector) {
+          const selectors = selector.split(',').map(s => s.trim());
+          let cur = this;
+          while (cur) {
+            for (const s of selectors) {
+              const attrMatch = s.match(/^\[([^\]]+)\]$/);
+              if (attrMatch && cur.hasAttribute(attrMatch[1])) return cur;
+              if (s.startsWith('.') && cur.classList.contains(s.slice(1))) return cur;
+            }
+            cur = cur.parentElement;
+          }
+          return null;
+        },
+        querySelectorAll(selector) {
+          const results = [];
+          const selectors = selector.split(',').map(s => s.trim());
+          const matchSingle = (node, sel) => {
+            if (sel === 'button[data-testid="model-selector-trigger"]') {
+              return node.tagName === 'BUTTON' && node.getAttribute('data-testid') === 'model-selector-trigger';
+            }
+            if (sel === '[role="menuitem"]') return node.getAttribute('role') === 'menuitem';
+            if (sel === '[data-testid="model-selector-item"]') return node.getAttribute('data-testid') === 'model-selector-item';
+            if (sel.startsWith('.antigravity-model-slot-btn[data-slot-role="')) {
+              const role = sel.match(/data-slot-role="([^"]+)"/)?.[1];
+              return node.classList.contains('antigravity-model-slot-btn') && node.getAttribute('data-slot-role') === role;
+            }
+            if (sel.startsWith('.')) return node.classList.contains(sel.slice(1));
+            if (sel.startsWith('#')) return node.getAttribute('id') === sel.slice(1);
+            return false;
+          };
+          const walk = (node) => {
+            for (const child of node.children) {
+              if (selectors.some(sel => matchSingle(child, sel))) results.push(child);
+              walk(child);
+            }
+          };
+          walk(this);
+          return results;
+        },
+        querySelector(selector) { return this.querySelectorAll(selector)[0] || null; },
+        addEventListener(evt, fn) {
+          listeners[evt] = listeners[evt] || [];
+          listeners[evt].push(fn);
+        },
+        dispatchEvent(evt) {
+          this.dispatchedEvents.push(evt.type || String(evt));
+          (listeners[evt.type] || []).forEach(fn => fn(evt));
+          return true;
+        },
+        click() {
+          this.clickCount++;
+          if (typeof this.onclick === 'function') this.onclick();
+        }
+      };
+      return el;
+    }
+
+    const head = createNativeMockEl('head');
+    const body = createNativeMockEl('body');
+    const docEl = createNativeMockEl('html');
+    docEl.appendChild(head);
+    docEl.appendChild(body);
+
+    // Planner and Builder buttons in menubar
+    const plannerBtn = createNativeMockEl('button', { class: 'antigravity-model-slot-btn', 'data-slot-role': 'planner' }, body);
+    const plannerDot = createNativeMockEl('span', { class: 'model-slot-dot' }, plannerBtn);
+    const plannerVal = createNativeMockEl('span', { class: 'model-slot-value' }, plannerBtn);
+    plannerBtn.appendChild(plannerDot);
+    plannerBtn.appendChild(plannerVal);
+    body.appendChild(plannerBtn);
+
+    const builderBtn = createNativeMockEl('button', { class: 'antigravity-model-slot-btn', 'data-slot-role': 'builder' }, body);
+    const builderDot = createNativeMockEl('span', { class: 'model-slot-dot' }, builderBtn);
+    const builderVal = createNativeMockEl('span', { class: 'model-slot-value' }, builderBtn);
+    builderBtn.appendChild(builderDot);
+    builderBtn.appendChild(builderVal);
+    body.appendChild(builderBtn);
+
+    // Two native triggers (active one is the last)
+    const oldTrigger = createNativeMockEl('button', { 'data-testid': 'model-selector-trigger' }, body);
+    oldTrigger.textContent = 'Gemini 4 Argon (High)';
+    body.appendChild(oldTrigger);
+
+    const activeTrigger = createNativeMockEl('button', { 'data-testid': 'model-selector-trigger' }, body);
+    activeTrigger.textContent = 'Gemini 4 Argon (High)';
+    body.appendChild(activeTrigger);
+
+    const menuContainer = createNativeMockEl('div', { class: 'native-menu' }, body);
+    body.appendChild(menuContainer);
+
+    const observerRecords = [];
+    class MockMutationObserver {
+      constructor(cb) {
+        this.cb = cb;
+      }
+      observe(target, opts) {
+        observerRecords.push({ instance: this, target, opts });
+      }
+      disconnect() {}
+      trigger() {
+        this.cb([]);
+      }
+    }
+
+    class MockMouseEvent {
+      constructor(type, opts = {}) {
+        this.type = type;
+        this.bubbles = Boolean(opts.bubbles);
+      }
+    }
+
+    const scheduledTimers = [];
+    const clearedTimers = [];
+    let nextTimerId = 1;
+    const mockSetTimeout = (fn, ms) => {
+      const id = nextTimerId++;
+      scheduledTimers.push({ id, fn, ms });
+      return id;
+    };
+    const mockClearTimeout = (id) => {
+      clearedTimers.push(id);
+    };
+
+    const store = new Map();
+    const documentMock = {
+      head,
+      body,
+      documentElement: docEl,
+      activeElement: body,
+      getElementById(id) { return docEl.querySelector(`#${id}`); },
+      querySelector(sel) { return docEl.querySelector(sel); },
+      querySelectorAll(sel) { return docEl.querySelectorAll(sel); },
+      createElement(tag) { return createNativeMockEl(tag); },
+      addEventListener() {}
+    };
+    const windowMock = {
+      location: { pathname: '/', search: '' },
+      innerWidth: 1280,
+      document: documentMock,
+      ResizeObserver: class { observe() {} disconnect() {} },
+      MutationObserver: MockMutationObserver,
+      MouseEvent: MockMouseEvent
+    };
+    windowMock.window = windowMock;
+
+    const sandbox = vm.createContext({
+      window: windowMock,
+      document: documentMock,
+      MouseEvent: MockMouseEvent,
+      localStorage: {
+        getItem(k) { return store.has(k) ? store.get(k) : null; },
+        setItem(k, v) { store.set(k, String(v)); },
+        removeItem(k) { store.delete(k); }
+      },
+      fetch: () => Promise.resolve({ ok: true, json: async () => ({}) }),
+      ResizeObserver: windowMock.ResizeObserver,
+      MutationObserver: MockMutationObserver,
+      setTimeout: mockSetTimeout,
+      clearTimeout: mockClearTimeout,
+      setInterval: () => 0,
+      clearInterval: () => {}
+    });
+
+    vm.runInContext(script, sandbox);
+
+    // 1. Validate mapping table for all 7 families
+    assert.deepEqual({ ...windowMock.__resolveNativeModelTarget('gemini-pro-orchestrator-g1-pro') }, { base: 'Orchestrator', effort: null });
+    assert.deepEqual({ ...windowMock.__resolveNativeModelTarget('gemini-4-argon-medium') }, { base: 'Gemini 4 Argon', effort: 'Medium' });
+    assert.deepEqual({ ...windowMock.__resolveNativeModelTarget('gemini-4-hydrogen-xhigh') }, { base: 'Gemini 4 Hydrogen', effort: 'XHigh' });
+    assert.deepEqual({ ...windowMock.__resolveNativeModelTarget('gemini-3.8-flash-low') }, { base: 'Gemini 3.8 Flash', effort: 'Low' });
+    assert.deepEqual({ ...windowMock.__resolveNativeModelTarget('claude-opus-5-5-high') }, { base: 'Claude Opus 5.5', effort: 'High' });
+    assert.deepEqual({ ...windowMock.__resolveNativeModelTarget('claude-sonnet-5-5-medium') }, { base: 'Claude Sonnet 5.5', effort: 'Medium' });
+    assert.deepEqual({ ...windowMock.__resolveNativeModelTarget('gpt-oss-120b-medium') }, { base: 'GPT-OSS 120B', effort: null });
+
+    // 2. Short-circuit when trigger already shows matching base + effort
+    assert.equal(windowMock.__syncNativeModelSelector('gemini-4-argon-high'), true);
+    assert.equal(activeTrigger.clickCount, 0, 'Must not click trigger when already matching');
+
+    // Must NOT short-circuit High when trigger shows XHigh
+    activeTrigger.textContent = 'Gemini 4 Hydrogen (XHigh)';
+    scheduledTimers.length = 0;
+    windowMock.__syncNativeModelSelector('gemini-4-hydrogen-high');
+    assert.equal(activeTrigger.clickCount, 1, 'High must not falsely match XHigh');
+    // Flush settle/timers
+    while (scheduledTimers.length > 0) {
+      const t = scheduledTimers.shift();
+      if (!clearedTimers.includes(t.id)) t.fn();
+    }
+
+    // 3. Direct click for single-effort model (Orchestrator)
+    activeTrigger.textContent = 'Gemini 4 Argon (High)';
+    activeTrigger.clickCount = 0;
+    oldTrigger.clickCount = 0;
+    menuContainer.children = [];
+    const orchItem = createNativeMockEl('div', { role: 'menuitem', 'data-model-label': 'Orchestrator (Argon)' }, menuContainer);
+    orchItem.textContent = 'Orchestrator (Argon)';
+    orchItem.onclick = () => { activeTrigger.textContent = 'Orchestrator (Argon)'; };
+    menuContainer.appendChild(orchItem);
+
+    windowMock.__syncNativeModelSelector('gemini-pro-orchestrator-g1-pro');
+    assert.equal(activeTrigger.clickCount, 1, 'Must click the last (active) trigger');
+    assert.equal(oldTrigger.clickCount, 0, 'Must not click inactive trigger');
+
+    // Run menu-open timeout
+    while (scheduledTimers.length > 0) {
+      const t = scheduledTimers.shift();
+      if (!clearedTimers.includes(t.id)) t.fn();
+    }
+    assert.equal(orchItem.clickCount, 1, 'Orchestrator row must be clicked directly');
+    assert.equal(activeTrigger.textContent, 'Orchestrator (Argon)');
+
+    // 4. Multi-effort flow via __selectModelForSlot('planner', ...)
+    menuContainer.children = [];
+    const hydroRow = createNativeMockEl('div', { role: 'menuitem' }, menuContainer);
+    hydroRow.textContent = 'Gemini 4 Hydrogen';
+    const highOpt = createNativeMockEl('div', { role: 'menuitem' }, menuContainer);
+    highOpt.textContent = 'High';
+    const xhighOpt = createNativeMockEl('div', { role: 'menuitem' }, menuContainer);
+    xhighOpt.textContent = 'XHigh';
+    xhighOpt.onclick = () => { activeTrigger.textContent = 'Gemini 4 Hydrogen (XHigh)'; };
+    menuContainer.appendChild(hydroRow);
+    menuContainer.appendChild(highOpt);
+    menuContainer.appendChild(xhighOpt);
+
+    activeTrigger.clickCount = 0;
+    windowMock.__selectModelForSlot('planner', 'gemini-4-hydrogen-xhigh');
+    assert.equal(activeTrigger.clickCount, 1, 'Selecting planner slot must trigger native selector sync');
+
+    // Run step 1 (open menu -> hover/click base row)
+    const step1 = scheduledTimers.shift();
+    step1.fn();
+    assert.ok(hydroRow.dispatchedEvents.includes('mouseenter'), 'Must dispatch mouseenter on base row');
+    assert.equal(hydroRow.clickCount, 1, 'Must click base row to open effort submenu');
+
+    // Run step 2 (click XHigh effort item)
+    const step2 = scheduledTimers.shift();
+    step2.fn();
+    assert.equal(xhighOpt.clickCount, 1, 'Must click XHigh effort submenu option');
+    assert.equal(highOpt.clickCount, 0, 'Must not click High option');
+    assert.equal(activeTrigger.textContent, 'Gemini 4 Hydrogen (XHigh)');
+
+    // Flush settle timer so __nativeModelSyncInProgress clears
+    while (scheduledTimers.length > 0) {
+      const t = scheduledTimers.shift();
+      if (!clearedTimers.includes(t.id)) t.fn();
+    }
+
+    // 5. Selecting builder slot must NOT touch native trigger
+    const prevTriggerClicks = activeTrigger.clickCount;
+    windowMock.__selectModelForSlot('builder', 'claude-sonnet-5-5-low');
+    assert.equal(activeTrigger.clickCount, prevTriggerClicks, 'Builder slot must not command native selector');
+
+    // 6. Reverse observation: native UI text mutation updates PLANNER menubar button
+    const triggerObserverRec = observerRecords.find(r => r.target === activeTrigger);
+    assert.ok(triggerObserverRec, 'MutationObserver must observe native trigger');
+    assert.equal(triggerObserverRec.opts.characterData, true, 'Observer must watch characterData');
+    assert.equal(triggerObserverRec.opts.childList, true, 'Observer must watch childList');
+    assert.equal(triggerObserverRec.opts.subtree, true, 'Observer must watch subtree');
+
+    activeTrigger.textContent = 'Claude Opus 5.5 (Medium)';
+    triggerObserverRec.instance.trigger();
+
+    assert.equal(plannerBtn.getAttribute('data-model-id'), 'claude-opus-5-5-medium');
+    assert.equal(plannerVal.textContent, 'Opus 5.5 Med');
+    const persisted = JSON.parse(store.get('__antigravity_model_slots'));
+    assert.equal(persisted.planner, 'claude-opus-5-5-medium');
+  });
 });

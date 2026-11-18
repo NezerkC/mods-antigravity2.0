@@ -1594,6 +1594,269 @@ class ModLoader {
           }
         };
 
+        window.__resolveNativeModelTarget = function(modelId) {
+          if (!modelId || typeof modelId !== 'string') return null;
+          const resolved = (typeof window.__getModelById === 'function')
+            ? window.__getModelById(modelId)
+            : null;
+          const effectiveId = (resolved && resolved.id === modelId) ? resolved.id : modelId;
+
+          if (effectiveId === 'gemini-pro-orchestrator-g1-pro') {
+            return { base: 'Orchestrator', effort: null };
+          }
+          if (effectiveId.startsWith('gpt-oss-120b-')) {
+            return { base: 'GPT-OSS 120B', effort: null };
+          }
+
+          const basePrefixes = [
+            { prefix: 'gemini-4-argon-', base: 'Gemini 4 Argon' },
+            { prefix: 'gemini-4-hydrogen-', base: 'Gemini 4 Hydrogen' },
+            { prefix: 'gemini-3.8-flash-', base: 'Gemini 3.8 Flash' },
+            { prefix: 'claude-opus-5-5-', base: 'Claude Opus 5.5' },
+            { prefix: 'claude-sonnet-5-5-', base: 'Claude Sonnet 5.5' }
+          ];
+
+          const effortLabels = {
+            low: 'Low',
+            medium: 'Medium',
+            high: 'High',
+            xhigh: 'XHigh'
+          };
+
+          for (const entry of basePrefixes) {
+            if (effectiveId.startsWith(entry.prefix)) {
+              const rawEffort = effectiveId.slice(entry.prefix.length).toLowerCase();
+              return {
+                base: entry.base,
+                effort: effortLabels[rawEffort] || null
+              };
+            }
+          }
+          return null;
+        };
+
+        window.__resolveModelIdFromNativeText = function(rawText) {
+          if (!rawText || typeof rawText !== 'string') return null;
+          const text = rawText.trim().toLowerCase();
+          if (!text) return null;
+
+          if (text.includes('orchestrator')) return 'gemini-pro-orchestrator-g1-pro';
+          if (text.includes('gpt-oss') || text.includes('120b')) return 'gpt-oss-120b-medium';
+
+          let basePrefix = null;
+          if (text.includes('argon')) basePrefix = 'gemini-4-argon-';
+          else if (text.includes('hydrogen')) basePrefix = 'gemini-4-hydrogen-';
+          else if (text.includes('3.8') && text.includes('flash')) basePrefix = 'gemini-3.8-flash-';
+          else if (text.includes('opus')) basePrefix = 'claude-opus-5-5-';
+          else if (text.includes('sonnet')) basePrefix = 'claude-sonnet-5-5-';
+
+          if (!basePrefix) return null;
+
+          let effort = null;
+          if (/(?:^|[^a-z])xhigh(?:$|[^a-z])/i.test(text)) effort = 'xhigh';
+          else if (/(?:^|[^a-z])high(?:$|[^a-z])/i.test(text)) effort = 'high';
+          else if (/(?:^|[^a-z])(?:medium|med)(?:$|[^a-z])/i.test(text)) effort = 'medium';
+          else if (/(?:^|[^a-z])low(?:$|[^a-z])/i.test(text)) effort = 'low';
+
+          if (!effort) {
+            const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+            if (saved && saved.planner && saved.planner.startsWith(basePrefix)) {
+              effort = saved.planner.slice(basePrefix.length);
+            } else {
+              effort = 'high';
+            }
+          }
+
+          const candidateId = basePrefix + effort;
+          const catalog = window.__MODEL_CATALOG || [];
+          const found = catalog.find(m => m.id === candidateId);
+          return found ? found.id : null;
+        };
+
+        window.__nativeModelSyncTimers = window.__nativeModelSyncTimers || [];
+        window.__nativeModelSyncInProgress = false;
+        window.__nativeModelSyncToken = window.__nativeModelSyncToken || 0;
+
+        window.__syncNativeModelSelector = function(modelId) {
+          if (!modelId) return false;
+          const resolved = (typeof window.__getModelById === 'function')
+            ? window.__getModelById(modelId)
+            : null;
+          const targetId = (resolved && resolved.id === modelId) ? resolved.id : modelId;
+          const target = window.__resolveNativeModelTarget ? window.__resolveNativeModelTarget(targetId) : null;
+          if (!target) return false;
+
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
+          if (!activeTrigger) return false;
+
+          const matchesEffortText = (text, effort) => {
+            if (!effort) return true;
+            const escaped = effort.replace(/[.*+?^$()|[\\]\\\\]/g, '\\\\$&').replace(/[{}]/g, '\\\\$&');
+            return new RegExp('(?:^|[^a-zA-Z])' + escaped + '(?:$|[^a-zA-Z])', 'i').test(text);
+          };
+
+          const currentText = (activeTrigger.textContent || '').trim();
+          const hasBase = currentText.toLowerCase().includes(target.base.toLowerCase());
+          const hasEffort = target.effort ? matchesEffortText(currentText, target.effort) : true;
+          if (hasBase && hasEffort) {
+            return true;
+          }
+
+          if (Array.isArray(window.__nativeModelSyncTimers)) {
+            while (window.__nativeModelSyncTimers.length > 0) {
+              clearTimeout(window.__nativeModelSyncTimers.pop());
+            }
+          }
+          const token = ++window.__nativeModelSyncToken;
+          window.__nativeModelSyncInProgress = true;
+
+          const finishSync = () => {
+            if (window.__nativeModelSyncToken === token) {
+              const settleTimer = setTimeout(() => {
+                if (window.__nativeModelSyncToken === token) {
+                  window.__nativeModelSyncInProgress = false;
+                }
+              }, 120);
+              window.__nativeModelSyncTimers.push(settleTimer);
+            }
+          };
+
+          if (typeof activeTrigger.click === 'function') {
+            activeTrigger.click();
+          }
+
+          const t1 = setTimeout(() => {
+            if (window.__nativeModelSyncToken !== token) return;
+            const menuItems = Array.from(document.querySelectorAll('[role="menuitem"], [data-testid="model-selector-item"]'));
+            const baseRow = menuItems.find(el => {
+              const text = (el.textContent || '').trim().toLowerCase();
+              const label = (el.getAttribute && (el.getAttribute('data-model-label') || '')).trim().toLowerCase();
+              const needle = target.base.toLowerCase();
+              return text.includes(needle) || label.includes(needle);
+            });
+
+            if (!baseRow) {
+              window.__nativeModelSyncInProgress = false;
+              return;
+            }
+
+            if (!target.effort) {
+              if (typeof baseRow.click === 'function') {
+                baseRow.click();
+              }
+              finishSync();
+              return;
+            }
+
+            try {
+              if (typeof baseRow.dispatchEvent === 'function' && typeof MouseEvent === 'function') {
+                baseRow.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+              }
+            } catch (e) {}
+            if (typeof baseRow.click === 'function') {
+              baseRow.click();
+            }
+
+            const t2 = setTimeout(() => {
+              if (window.__nativeModelSyncToken !== token) return;
+              const subItems = Array.from(document.querySelectorAll('[role="menuitem"], [data-testid="model-selector-item"]'));
+              const effortNeedle = target.effort.toLowerCase();
+              const candidates = subItems.filter(el => el !== baseRow);
+              const effortItem = candidates.find(el => (el.textContent || '').trim().toLowerCase() === effortNeedle)
+                || candidates.find(el => matchesEffortText((el.textContent || '').trim(), target.effort))
+                || subItems.find(el => (el.textContent || '').trim().toLowerCase() === effortNeedle)
+                || subItems.find(el => matchesEffortText((el.textContent || '').trim(), target.effort));
+
+              if (effortItem && typeof effortItem.click === 'function') {
+                effortItem.click();
+              }
+              finishSync();
+            }, 100);
+            window.__nativeModelSyncTimers.push(t2);
+          }, 80);
+          window.__nativeModelSyncTimers.push(t1);
+          return true;
+        };
+
+        window.__syncPlannerFromNativeSelector = function() {
+          if (window.__nativeModelSyncInProgress) return false;
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
+          if (!activeTrigger) return false;
+
+          const detectedId = window.__resolveModelIdFromNativeText
+            ? window.__resolveModelIdFromNativeText(activeTrigger.textContent || '')
+            : null;
+          if (!detectedId) return false;
+
+          const current = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+
+          const plannerBtns = Array.from(document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="planner"]'));
+          const btnAlreadySynced = plannerBtns.length > 0 && plannerBtns.every(btn => btn.getAttribute('data-model-id') === detectedId);
+          if (current.planner === detectedId && btnAlreadySynced) {
+            return false;
+          }
+
+          current.planner = detectedId;
+          current.updatedAt = Date.now();
+          try {
+            localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+          } catch (e) {}
+
+          if (typeof window.__updateMenubarSlotButtons === 'function') {
+            window.__updateMenubarSlotButtons(
+              typeof window.__getActiveMenubarSlotModels === 'function'
+                ? window.__getActiveMenubarSlotModels()
+                : current
+            );
+          }
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  planner: current.planner,
+                  builder: current.builder,
+                  enabled: current.enabled !== false
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+
+          return true;
+        };
+
+        window.__observeNativeModelSelector = function() {
+          if (typeof MutationObserver !== 'function') return;
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          if (!triggers.length) {
+            const single = document.querySelector('button[data-testid="model-selector-trigger"]');
+            if (single) triggers.push(single);
+          }
+          if (!triggers.length) return;
+
+          if (window.__antigravityNativeModelObserver) {
+            window.__antigravityNativeModelObserver.disconnect();
+          }
+          window.__antigravityNativeModelObserver = new MutationObserver(() => {
+            if (typeof window.__syncPlannerFromNativeSelector === 'function') {
+              window.__syncPlannerFromNativeSelector();
+            }
+          });
+          triggers.forEach(trigger => {
+            window.__antigravityNativeModelObserver.observe(trigger, {
+              childList: true,
+              subtree: true,
+              characterData: true
+            });
+          });
+        };
+
         window.__selectModelForSlot = function(role, modelId) {
           if (!role || !modelId) return;
           const current = window.__getSavedModelSlots();
@@ -1625,6 +1888,10 @@ class ModLoader {
 
           if (typeof window.__syncSubagentModelBadges === 'function') {
             window.__syncSubagentModelBadges();
+          }
+
+          if (role === 'planner' && typeof window.__syncNativeModelSelector === 'function') {
+            window.__syncNativeModelSelector(modelId);
           }
 
           try {
@@ -3060,6 +3327,9 @@ class ModLoader {
           if (typeof window.__syncSubagentModelBadges === 'function') {
             window.__syncSubagentModelBadges();
           }
+          if (typeof window.__observeNativeModelSelector === 'function') {
+            window.__observeNativeModelSelector();
+          }
         }
 
         // Initialize ResizeObserver for responsive auto-collapse
@@ -3144,6 +3414,9 @@ class ModLoader {
               }
               if (typeof window.__syncSubagentModelBadges === 'function') {
                 window.__syncSubagentModelBadges();
+              }
+              if (typeof window.__observeNativeModelSelector === 'function') {
+                window.__observeNativeModelSelector();
               }
             }
           }, 150);
@@ -8910,7 +9183,7 @@ class ModelSlotsMod extends AntigravityMod {
       priority: 90
     });
 
-    this.cachedCss = "/* =========================================================================\n   ANTIGRAVITY PLANNER & BUILDER MODEL SLOTS MOD - STYLES\n   ========================================================================= */\n\n/* Menubar Buttons Container */\n.antigravity-model-slots-group {\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  app-region: no-drag !important;\n  user-select: none !important;\n}\n\n/* Individual Slot Selector Button */\n.antigravity-model-slot-btn {\n  height: 26px !important;\n  padding: 0 8px !important;\n  font-size: 11.5px !important;\n  font-weight: 500 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  color: rgba(255, 255, 255, 0.85) !important;\n  background: rgba(255, 255, 255, 0.04) !important;\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 5px !important;\n  transition: all 0.15s ease !important;\n  app-region: no-drag !important;\n  user-select: none !important;\n  line-height: 1 !important;\n  box-sizing: border-box !important;\n}\n\n.antigravity-model-slot-btn:hover {\n  background: rgba(255, 255, 255, 0.09) !important;\n  border-color: rgba(255, 255, 255, 0.22) !important;\n  color: #ffffff !important;\n}\n\n.antigravity-model-slot-btn.open {\n  background: rgba(255, 255, 255, 0.13) !important;\n  border-color: rgba(56, 189, 248, 0.45) !important;\n  color: #ffffff !important;\n  box-shadow: 0 0 10px rgba(56, 189, 248, 0.15) !important;\n}\n\n/* Menubar Button Elements */\n.antigravity-model-slot-btn .model-slot-dot {\n  width: 6px !important;\n  height: 6px !important;\n  border-radius: 50% !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.antigravity-model-slot-btn .model-slot-role {\n  font-weight: 600 !important;\n  font-size: 10px !important;\n  color: rgba(255, 255, 255, 0.5) !important;\n  text-transform: uppercase !important;\n  letter-spacing: 0.3px !important;\n  pointer-events: none !important;\n}\n\n.antigravity-model-slot-btn .model-slot-value {\n  font-weight: 500 !important;\n  color: #ffffff !important;\n  pointer-events: none !important;\n}\n\n.antigravity-model-slot-btn .model-slot-caret {\n  font-size: 8px !important;\n  opacity: 0.5 !important;\n  pointer-events: none !important;\n  margin-left: 1px !important;\n}\n\n/* Floating Portal Dropdown */\n.antigravity-model-slot-dropdown-portal {\n  position: fixed !important;\n  z-index: 1000001 !important;\n  width: 250px !important;\n  max-height: none !important;\n  overflow: visible !important;\n  background: #161822 !important;\n  background-color: #161822 !important;\n  background-image: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\n  opacity: 1 !important;\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\n  border-radius: 12px !important;\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\n  padding: 10px !important;\n  color: #c0caf5 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  display: none;\n  flex-direction: column !important;\n  box-sizing: border-box !important;\n  animation: modelSlotPopIn 0.15s cubic-bezier(0, 0, 0.2, 1) forwards;\n}\n\n.antigravity-model-slot-dropdown-portal.open {\n  display: flex !important;\n}\n\n@keyframes modelSlotPopIn {\n  from {\n    opacity: 0;\n    transform: translateY(-5px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n\n/* Dropdown Header */\n.model-slot-dropdown-header {\n  padding-bottom: 8px !important;\n  margin-bottom: 8px !important;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 2px !important;\n}\n\n.model-slot-dropdown-title-row {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n}\n\n.model-slot-dropdown-title {\n  font-size: 13px !important;\n  font-weight: 700 !important;\n  color: #ffffff !important;\n  letter-spacing: -0.2px !important;\n}\n\n.model-slot-dropdown-role-badge {\n  font-size: 9px !important;\n  font-weight: 700 !important;\n  letter-spacing: 0.4px !important;\n  padding: 1px 6px !important;\n  border-radius: 4px !important;\n  text-transform: uppercase !important;\n}\n\n.model-slot-dropdown-role-badge.planner {\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\n}\n\n.model-slot-dropdown-role-badge.builder {\n  background: rgba(52, 211, 153, 0.15) !important;\n  color: #34d399 !important;\n  border: 1px solid rgba(52, 211, 153, 0.3) !important;\n}\n\n.model-slot-dropdown-sub {\n  font-size: 10.5px !important;\n  color: rgba(255, 255, 255, 0.45) !important;\n}\n\n/* Hierarchical Base Model Options List */\n.model-slot-options-list {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 2px !important;\n  overflow: visible !important;\n}\n\n/* Base Model Row */\n.model-slot-row {\n  position: relative !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  width: 100% !important;\n  padding: 6px 8px !important;\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  transition: all 0.12s ease !important;\n  user-select: none !important;\n  font-family: inherit !important;\n  box-sizing: border-box !important;\n}\n\n.model-slot-row:hover {\n  background: rgba(255, 255, 255, 0.07) !important;\n  border-color: rgba(255, 255, 255, 0.1) !important;\n}\n\n.model-slot-row.active {\n  background: rgba(56, 189, 248, 0.08) !important;\n  border-color: rgba(56, 189, 248, 0.25) !important;\n}\n\n.model-slot-row.open {\n  background: rgba(255, 255, 255, 0.1) !important;\n  border-color: rgba(56, 189, 248, 0.3) !important;\n}\n\n.model-slot-row-left {\n  display: flex !important;\n  align-items: center !important;\n  gap: 8px !important;\n  min-width: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-row-dot {\n  width: 7px !important;\n  height: 7px !important;\n  border-radius: 50% !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-row-name {\n  font-size: 12px !important;\n  font-weight: 500 !important;\n  color: #ffffff !important;\n  white-space: nowrap !important;\n  pointer-events: none !important;\n}\n\n.model-slot-row-right {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-active-badge {\n  font-size: 10px !important;\n  font-weight: 600 !important;\n  padding: 1px 5px !important;\n  border-radius: 4px !important;\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\n  letter-spacing: 0.2px !important;\n  pointer-events: none !important;\n}\n\n.model-slot-chevron {\n  font-size: 14px !important;\n  line-height: 1 !important;\n  color: rgba(255, 255, 255, 0.45) !important;\n  pointer-events: none !important;\n  transition: color 0.12s ease !important;\n}\n\n.model-slot-row:hover .model-slot-chevron,\n.model-slot-row.open .model-slot-chevron {\n  color: #ffffff !important;\n}\n\n/* Effort Submenu Flyout */\n.model-slot-submenu {\n  position: absolute !important;\n  left: 100% !important;\n  top: -4px !important;\n  margin-left: 0 !important;\n  min-width: 120px !important;\n  display: none;\n  z-index: 1000002 !important;\n  background: #161822 !important;\n  background-color: #161822 !important;\n  background-image: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\n  opacity: 1 !important;\n  border: 1px solid rgba(255, 255, 255, 0.14) !important;\n  border-radius: 8px !important;\n  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\n  padding: 4px !important;\n  box-sizing: border-box !important;\n}\n\n.model-slot-submenu::before {\n  content: \"\";\n  position: absolute;\n  top: 0;\n  bottom: 0;\n  left: -8px;\n  width: 8px;\n}\n\n.model-slot-row:hover > .model-slot-submenu,\n.model-slot-row.open > .model-slot-submenu {\n  display: block !important;\n}\n\n.model-slot-submenu.submenu-left {\n  right: 100% !important;\n  left: auto !important;\n  margin-right: 0 !important;\n  margin-left: 0 !important;\n}\n\n.model-slot-submenu.submenu-left::before {\n  left: auto;\n  right: -8px;\n}\n\n/* Effort Level Option Button */\n.model-effort-option {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  width: 100% !important;\n  padding: 5px 8px !important;\n  margin-bottom: 2px !important;\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  border-radius: 5px !important;\n  cursor: pointer !important;\n  text-align: left !important;\n  font-family: inherit !important;\n  box-sizing: border-box !important;\n  transition: all 0.12s ease !important;\n}\n\n.model-effort-option:last-child {\n  margin-bottom: 0 !important;\n}\n\n.model-effort-option:hover {\n  background: rgba(255, 255, 255, 0.08) !important;\n  border-color: rgba(255, 255, 255, 0.12) !important;\n}\n\n.model-effort-option.active {\n  background: rgba(56, 189, 248, 0.12) !important;\n  border-color: rgba(56, 189, 248, 0.35) !important;\n}\n\n.model-effort-name {\n  font-size: 11.5px !important;\n  font-weight: 500 !important;\n  color: #ffffff !important;\n  pointer-events: none !important;\n}\n\n.model-effort-option.active .model-effort-name {\n  color: #38bdf8 !important;\n  font-weight: 600 !important;\n}\n\n.model-effort-check {\n  font-size: 12px !important;\n  font-weight: 700 !important;\n  color: #38bdf8 !important;\n  width: 14px !important;\n  text-align: right !important;\n  pointer-events: none !important;\n}\n\n/* Legacy option styles retained for compatibility */\n.model-slot-option {\n  display: flex !important;\n  align-items: center !important;\n  gap: 8px !important;\n  width: 100% !important;\n  padding: 6px 8px !important;\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  text-align: left !important;\n  transition: all 0.12s ease !important;\n  user-select: none !important;\n  font-family: inherit !important;\n  box-sizing: border-box !important;\n}\n\n.model-slot-option:hover {\n  background: rgba(255, 255, 255, 0.065) !important;\n  border-color: rgba(255, 255, 255, 0.1) !important;\n}\n\n.model-slot-option.active {\n  background: rgba(56, 189, 248, 0.1) !important;\n  border-color: rgba(56, 189, 248, 0.3) !important;\n}\n\n.model-slot-option-dot {\n  width: 8px !important;\n  height: 8px !important;\n  border-radius: 50% !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-option-info {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 1px !important;\n  flex: 1 !important;\n  min-width: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-option-name {\n  font-size: 12px !important;\n  font-weight: 500 !important;\n  color: #ffffff !important;\n  white-space: nowrap !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n}\n\n.model-slot-option-family {\n  font-size: 10px !important;\n  color: rgba(255, 255, 255, 0.42) !important;\n}\n\n.model-slot-option-badge {\n  font-size: 9.5px !important;\n  padding: 1px 5px !important;\n  border-radius: 4px !important;\n  background: rgba(255, 255, 255, 0.05) !important;\n  color: rgba(255, 255, 255, 0.6) !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-option-check {\n  font-size: 12px !important;\n  font-weight: 700 !important;\n  color: #38bdf8 !important;\n  width: 14px !important;\n  text-align: center !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n/* Mods Manager Icon Box for Model Slots */\n.mod-icon-box.slots-icon {\n  background: rgba(56, 189, 248, 0.12) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.25) !important;\n}\n\n/* Subagent Model Pill Badge */\n.antigravity-subagent-model-pill {\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 4px !important;\n  height: 18px !important;\n  padding: 0 6px !important;\n  margin-left: 6px !important;\n  font-size: 11px !important;\n  font-weight: 600 !important;\n  line-height: 1 !important;\n  border-radius: 4px !important;\n  border: 1px solid !important;\n  user-select: none !important;\n  vertical-align: middle !important;\n  box-sizing: border-box !important;\n  transition: all 0.15s ease !important;\n}\n\n.antigravity-subagent-model-pill .subagent-model-dot {\n  width: 5px !important;\n  height: 5px !important;\n  border-radius: 50% !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.antigravity-subagent-model-pill .subagent-model-label {\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  letter-spacing: 0.2px !important;\n  pointer-events: none !important;\n  white-space: nowrap !important;\n}\n\n";
+    this.cachedCss = "/* =========================================================================\n   ANTIGRAVITY PLANNER & BUILDER MODEL SLOTS MOD - STYLES\n   ========================================================================= */\n\n/* Menubar Buttons Container */\n#antigravity-model-slots-group,\n.antigravity-model-slots-group {\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 4px !important;\n  flex-shrink: 0 !important;\n  white-space: nowrap !important;\n  app-region: no-drag !important;\n  user-select: none !important;\n}\n\n/* Individual Slot Selector Button */\n.antigravity-model-slot-btn {\n  height: 26px !important;\n  padding: 0 8px !important;\n  font-size: 11.5px !important;\n  font-weight: 500 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  color: rgba(255, 255, 255, 0.85) !important;\n  background: rgba(255, 255, 255, 0.04) !important;\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 5px !important;\n  flex-shrink: 0 !important;\n  white-space: nowrap !important;\n  transition: all 0.15s ease !important;\n  app-region: no-drag !important;\n  user-select: none !important;\n  line-height: 1 !important;\n  box-sizing: border-box !important;\n}\n\n#antigravity-model-slot-planner,\n#antigravity-model-slot-builder {\n  flex-shrink: 0 !important;\n  white-space: nowrap !important;\n}\n\n.antigravity-model-slot-btn.compact {\n  height: 22px !important;\n  padding: 2px 6px !important;\n  font-size: 11px !important;\n  gap: 4px !important;\n}\n\n@media (max-width: 1100px) {\n  #antigravity-mod-model-slots .antigravity-model-slot-btn,\n  .antigravity-model-slot-btn {\n    height: 22px !important;\n    padding: 2px 6px !important;\n    font-size: 11px !important;\n    gap: 4px !important;\n  }\n\n  #antigravity-mod-model-slots .antigravity-model-slot-btn .model-slot-role,\n  .antigravity-model-slot-btn .model-slot-role {\n    font-size: 9.5px !important;\n  }\n}\n\n.antigravity-model-slot-btn:hover {\n  background: rgba(255, 255, 255, 0.09) !important;\n  border-color: rgba(255, 255, 255, 0.22) !important;\n  color: #ffffff !important;\n}\n\n.antigravity-model-slot-btn.open {\n  background: rgba(255, 255, 255, 0.13) !important;\n  border-color: rgba(56, 189, 248, 0.45) !important;\n  color: #ffffff !important;\n  box-shadow: 0 0 10px rgba(56, 189, 248, 0.15) !important;\n}\n\n/* Menubar Button Elements */\n.antigravity-model-slot-btn .model-slot-dot {\n  width: 6px !important;\n  height: 6px !important;\n  border-radius: 50% !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.antigravity-model-slot-btn .model-slot-role {\n  font-weight: 600 !important;\n  font-size: 10px !important;\n  color: rgba(255, 255, 255, 0.5) !important;\n  text-transform: uppercase !important;\n  letter-spacing: 0.3px !important;\n  pointer-events: none !important;\n}\n\n.antigravity-model-slot-btn .model-slot-value {\n  font-weight: 500 !important;\n  color: #ffffff !important;\n  pointer-events: none !important;\n}\n\n.antigravity-model-slot-btn .model-slot-caret {\n  font-size: 8px !important;\n  opacity: 0.5 !important;\n  pointer-events: none !important;\n  margin-left: 1px !important;\n}\n\n/* Floating Portal Dropdown */\n.antigravity-model-slot-dropdown-portal {\n  position: fixed !important;\n  z-index: 1000001 !important;\n  width: 250px !important;\n  max-height: none !important;\n  overflow: visible !important;\n  background: #161822 !important;\n  background-color: #161822 !important;\n  background-image: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\n  opacity: 1 !important;\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\n  border-radius: 12px !important;\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\n  padding: 10px !important;\n  color: #c0caf5 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  display: none;\n  flex-direction: column !important;\n  box-sizing: border-box !important;\n  animation: modelSlotPopIn 0.15s cubic-bezier(0, 0, 0.2, 1) forwards;\n}\n\n.antigravity-model-slot-dropdown-portal.open {\n  display: flex !important;\n}\n\n@keyframes modelSlotPopIn {\n  from {\n    opacity: 0;\n    transform: translateY(-5px) scale(0.98);\n  }\n  to {\n    opacity: 1;\n    transform: translateY(0) scale(1);\n  }\n}\n\n/* Dropdown Header */\n.model-slot-dropdown-header {\n  padding-bottom: 8px !important;\n  margin-bottom: 8px !important;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 2px !important;\n}\n\n.model-slot-dropdown-title-row {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n}\n\n.model-slot-dropdown-title {\n  font-size: 13px !important;\n  font-weight: 700 !important;\n  color: #ffffff !important;\n  letter-spacing: -0.2px !important;\n}\n\n.model-slot-dropdown-role-badge {\n  font-size: 9px !important;\n  font-weight: 700 !important;\n  letter-spacing: 0.4px !important;\n  padding: 1px 6px !important;\n  border-radius: 4px !important;\n  text-transform: uppercase !important;\n}\n\n.model-slot-dropdown-role-badge.planner {\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\n}\n\n.model-slot-dropdown-role-badge.builder {\n  background: rgba(52, 211, 153, 0.15) !important;\n  color: #34d399 !important;\n  border: 1px solid rgba(52, 211, 153, 0.3) !important;\n}\n\n.model-slot-dropdown-sub {\n  font-size: 10.5px !important;\n  color: rgba(255, 255, 255, 0.45) !important;\n}\n\n/* Hierarchical Base Model Options List */\n.model-slot-options-list {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 2px !important;\n  overflow: visible !important;\n}\n\n/* Base Model Row */\n.model-slot-row {\n  position: relative !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  width: 100% !important;\n  padding: 6px 8px !important;\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  transition: all 0.12s ease !important;\n  user-select: none !important;\n  font-family: inherit !important;\n  box-sizing: border-box !important;\n}\n\n.model-slot-row:hover {\n  background: rgba(255, 255, 255, 0.07) !important;\n  border-color: rgba(255, 255, 255, 0.1) !important;\n}\n\n.model-slot-row.active {\n  background: rgba(56, 189, 248, 0.08) !important;\n  border-color: rgba(56, 189, 248, 0.25) !important;\n}\n\n.model-slot-row.open {\n  background: rgba(255, 255, 255, 0.1) !important;\n  border-color: rgba(56, 189, 248, 0.3) !important;\n}\n\n.model-slot-row-left {\n  display: flex !important;\n  align-items: center !important;\n  gap: 8px !important;\n  min-width: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-row-dot {\n  width: 7px !important;\n  height: 7px !important;\n  border-radius: 50% !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-row-name {\n  font-size: 12px !important;\n  font-weight: 500 !important;\n  color: #ffffff !important;\n  white-space: nowrap !important;\n  pointer-events: none !important;\n}\n\n.model-slot-row-right {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-active-badge {\n  font-size: 10px !important;\n  font-weight: 600 !important;\n  padding: 1px 5px !important;\n  border-radius: 4px !important;\n  background: rgba(56, 189, 248, 0.15) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\n  letter-spacing: 0.2px !important;\n  pointer-events: none !important;\n}\n\n.model-slot-chevron {\n  font-size: 14px !important;\n  line-height: 1 !important;\n  color: rgba(255, 255, 255, 0.45) !important;\n  pointer-events: none !important;\n  transition: color 0.12s ease !important;\n}\n\n.model-slot-row:hover .model-slot-chevron,\n.model-slot-row.open .model-slot-chevron {\n  color: #ffffff !important;\n}\n\n/* Effort Submenu Flyout */\n.model-slot-submenu {\n  position: absolute !important;\n  left: 100% !important;\n  top: -4px !important;\n  margin-left: 0 !important;\n  min-width: 120px !important;\n  display: none;\n  z-index: 1000002 !important;\n  background: #161822 !important;\n  background-color: #161822 !important;\n  background-image: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\n  opacity: 1 !important;\n  border: 1px solid rgba(255, 255, 255, 0.14) !important;\n  border-radius: 8px !important;\n  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\n  padding: 4px !important;\n  box-sizing: border-box !important;\n}\n\n.model-slot-submenu::before {\n  content: \"\";\n  position: absolute;\n  top: 0;\n  bottom: 0;\n  left: -8px;\n  width: 8px;\n}\n\n.model-slot-row:hover > .model-slot-submenu,\n.model-slot-row.open > .model-slot-submenu {\n  display: block !important;\n}\n\n.model-slot-submenu.submenu-left {\n  right: 100% !important;\n  left: auto !important;\n  margin-right: 0 !important;\n  margin-left: 0 !important;\n}\n\n.model-slot-submenu.submenu-left::before {\n  left: auto;\n  right: -8px;\n}\n\n/* Effort Level Option Button */\n.model-effort-option {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  width: 100% !important;\n  padding: 5px 8px !important;\n  margin-bottom: 2px !important;\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  border-radius: 5px !important;\n  cursor: pointer !important;\n  text-align: left !important;\n  font-family: inherit !important;\n  box-sizing: border-box !important;\n  transition: all 0.12s ease !important;\n}\n\n.model-effort-option:last-child {\n  margin-bottom: 0 !important;\n}\n\n.model-effort-option:hover {\n  background: rgba(255, 255, 255, 0.08) !important;\n  border-color: rgba(255, 255, 255, 0.12) !important;\n}\n\n.model-effort-option.active {\n  background: rgba(56, 189, 248, 0.12) !important;\n  border-color: rgba(56, 189, 248, 0.35) !important;\n}\n\n.model-effort-name {\n  font-size: 11.5px !important;\n  font-weight: 500 !important;\n  color: #ffffff !important;\n  pointer-events: none !important;\n}\n\n.model-effort-option.active .model-effort-name {\n  color: #38bdf8 !important;\n  font-weight: 600 !important;\n}\n\n.model-effort-check {\n  font-size: 12px !important;\n  font-weight: 700 !important;\n  color: #38bdf8 !important;\n  width: 14px !important;\n  text-align: right !important;\n  pointer-events: none !important;\n}\n\n/* Legacy option styles retained for compatibility */\n.model-slot-option {\n  display: flex !important;\n  align-items: center !important;\n  gap: 8px !important;\n  width: 100% !important;\n  padding: 6px 8px !important;\n  background: transparent !important;\n  border: 1px solid transparent !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  text-align: left !important;\n  transition: all 0.12s ease !important;\n  user-select: none !important;\n  font-family: inherit !important;\n  box-sizing: border-box !important;\n}\n\n.model-slot-option:hover {\n  background: rgba(255, 255, 255, 0.065) !important;\n  border-color: rgba(255, 255, 255, 0.1) !important;\n}\n\n.model-slot-option.active {\n  background: rgba(56, 189, 248, 0.1) !important;\n  border-color: rgba(56, 189, 248, 0.3) !important;\n}\n\n.model-slot-option-dot {\n  width: 8px !important;\n  height: 8px !important;\n  border-radius: 50% !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-option-info {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 1px !important;\n  flex: 1 !important;\n  min-width: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-option-name {\n  font-size: 12px !important;\n  font-weight: 500 !important;\n  color: #ffffff !important;\n  white-space: nowrap !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n}\n\n.model-slot-option-family {\n  font-size: 10px !important;\n  color: rgba(255, 255, 255, 0.42) !important;\n}\n\n.model-slot-option-badge {\n  font-size: 9.5px !important;\n  padding: 1px 5px !important;\n  border-radius: 4px !important;\n  background: rgba(255, 255, 255, 0.05) !important;\n  color: rgba(255, 255, 255, 0.6) !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.model-slot-option-check {\n  font-size: 12px !important;\n  font-weight: 700 !important;\n  color: #38bdf8 !important;\n  width: 14px !important;\n  text-align: center !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n/* Mods Manager Icon Box for Model Slots */\n.mod-icon-box.slots-icon {\n  background: rgba(56, 189, 248, 0.12) !important;\n  color: #38bdf8 !important;\n  border: 1px solid rgba(56, 189, 248, 0.25) !important;\n}\n\n/* Subagent Model Pill Badge */\n.antigravity-subagent-model-pill {\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 4px !important;\n  height: 18px !important;\n  padding: 0 6px !important;\n  margin-left: 6px !important;\n  font-size: 11px !important;\n  font-weight: 600 !important;\n  line-height: 1 !important;\n  border-radius: 4px !important;\n  border: 1px solid !important;\n  user-select: none !important;\n  vertical-align: middle !important;\n  box-sizing: border-box !important;\n  transition: all 0.15s ease !important;\n}\n\n.antigravity-subagent-model-pill .subagent-model-dot {\n  width: 5px !important;\n  height: 5px !important;\n  border-radius: 50% !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.antigravity-subagent-model-pill .subagent-model-label {\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  letter-spacing: 0.2px !important;\n  pointer-events: none !important;\n  white-space: nowrap !important;\n}\n\n";
   }
 
   /**
