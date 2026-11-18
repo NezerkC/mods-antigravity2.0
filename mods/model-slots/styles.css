@@ -10,6 +10,8 @@
   gap: 4px !important;
   flex-shrink: 0 !important;
   white-space: nowrap !important;
+  transform: none !important;
+  -webkit-app-region: no-drag !important;
   app-region: no-drag !important;
   user-select: none !important;
 }
@@ -31,7 +33,9 @@
   gap: 5px !important;
   flex-shrink: 0 !important;
   white-space: nowrap !important;
-  transition: all 0.15s ease !important;
+  transition: background-color 0.12s ease, border-color 0.12s ease !important;
+  transform: none !important;
+  -webkit-app-region: no-drag !important;
   app-region: no-drag !important;
   user-select: none !important;
   line-height: 1 !important;
@@ -70,6 +74,9 @@
   background: rgba(255, 255, 255, 0.09) !important;
   border-color: rgba(255, 255, 255, 0.22) !important;
   color: #ffffff !important;
+  transform: none !important;
+  -webkit-app-region: no-drag !important;
+  app-region: no-drag !important;
 }
 
 .antigravity-model-slot-btn.open {

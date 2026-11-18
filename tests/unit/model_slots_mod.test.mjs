@@ -1347,6 +1347,13 @@ describe('ModelSlotsMod & ModLoader - Single-Toggle & Observer Stabilization', (
       addEventListener(evt, fn, useCapture = false) {
         docListeners[evt] = docListeners[evt] || [];
         docListeners[evt].push({ fn, useCapture: Boolean(useCapture) });
+      },
+      removeEventListener(evt, fn, useCapture = false) {
+        if (!docListeners[evt]) return;
+        const captureFlag = Boolean(useCapture);
+        docListeners[evt] = docListeners[evt].filter(
+          entry => !(entry.fn === fn && entry.useCapture === captureFlag)
+        );
       }
     };
 
@@ -1667,5 +1674,94 @@ describe('ModelSlotsMod & ModLoader - Single-Toggle & Observer Stabilization', (
 
     assert.equal(tokenSpan.textContent, '64.2k', 'Live token count must not revert to stale snapshot');
     assert.equal(pctSpan.textContent, '(6.4%)', 'Live percentage must not revert to stale snapshot');
+  });
+
+  it('re-executing ModLoader injection script replaces global handlers without duplicates and keeps toggle working', () => {
+    const env = createStabilizationMockEnv({
+      modelSlots: {
+        planner: 'gemini-4-argon-high',
+        builder: 'gemini-4-hydrogen-high'
+      }
+    });
+
+    const plannerBtn = env.createEl('button', {
+      id: 'antigravity-model-slot-planner',
+      class: 'antigravity-model-slot-btn',
+      'data-slot-role': 'planner',
+      'data-model-id': 'gemini-4-argon-high'
+    }, env.body);
+    const plannerDot = env.createEl('span', { class: 'model-slot-dot' }, plannerBtn);
+    const plannerVal = env.createEl('span', { class: 'model-slot-value' }, plannerBtn);
+    plannerVal.textContent = 'Argon High';
+    plannerBtn.appendChild(plannerDot);
+    plannerBtn.appendChild(plannerVal);
+    env.body.appendChild(plannerBtn);
+
+    // First injection
+    vm.runInContext(env.script, env.sandbox);
+    const firstClickHandler = env.windowMock.__antigravityDocClickHandler;
+    const firstKeydownHandler = env.windowMock.__antigravityDocKeydownHandler;
+    const firstFocusinHandler = env.windowMock.__antigravityDocFocusinHandler;
+
+    assert.equal(typeof firstClickHandler, 'function');
+    assert.equal(typeof firstKeydownHandler, 'function');
+    assert.equal(typeof firstFocusinHandler, 'function');
+    assert.equal(env.windowMock.__antigravityGlobalEventsBound, true);
+    assert.equal((env.docListeners.click || []).length, 1);
+    assert.equal((env.docListeners.keydown || []).length, 1);
+    assert.equal((env.docListeners.focusin || []).length, 1);
+
+    // Re-inject updated payload into the same open window context (hot-reload)
+    const loader2 = new ModLoader();
+    const script2 = loader2.buildInjectionPayload({
+      modelSlots: {
+        planner: 'claude-opus-5-5-high',
+        builder: 'gemini-4-hydrogen-high'
+      }
+    });
+    vm.runInContext(script2, env.sandbox);
+
+    assert.notEqual(env.windowMock.__antigravityDocClickHandler, firstClickHandler, 'Click handler must be refreshed');
+    assert.notEqual(env.windowMock.__antigravityDocKeydownHandler, firstKeydownHandler, 'Keydown handler must be refreshed');
+    assert.notEqual(env.windowMock.__antigravityDocFocusinHandler, firstFocusinHandler, 'Focusin handler must be refreshed');
+    assert.equal((env.docListeners.click || []).length, 1, 'Re-injection must not duplicate document click listeners');
+    assert.equal((env.docListeners.keydown || []).length, 1, 'Re-injection must not duplicate document keydown listeners');
+    assert.equal((env.docListeners.focusin || []).length, 1, 'Re-injection must not duplicate document focusin listeners');
+
+    // Verify single-click opens and second-click closes after re-injection
+    env.dispatchClick(plannerVal);
+    const portal = env.documentMock.getElementById('antigravity-model-slot-dropdown-portal');
+    assert.ok(portal, 'Portal must exist after click');
+    assert.equal(portal.classList.contains('open'), true, 'Single click after hot-reload must open portal');
+    assert.equal(plannerBtn.classList.contains('open'), true);
+
+    env.dispatchClick(plannerBtn);
+    assert.equal(portal.classList.contains('open'), false, 'Second click after hot-reload must close portal');
+    assert.equal(plannerBtn.classList.contains('open'), false);
+  });
+
+  it('mods/model-slots/styles.css uses stationary hover transitions and no-drag rules', () => {
+    const cssPath = path.resolve(process.cwd(), 'mods/model-slots/styles.css');
+    const css = fs.readFileSync(cssPath, 'utf-8');
+
+    const btnBlockMatch = css.match(/\.antigravity-model-slot-btn\s*\{[\s\S]*?\}/);
+    assert.ok(btnBlockMatch, 'Must define .antigravity-model-slot-btn rule');
+    const btnBlock = btnBlockMatch[0];
+
+    assert.equal(/transition\s*:\s*all\b/.test(btnBlock), false, '.antigravity-model-slot-btn must not use transition: all');
+    assert.ok(
+      btnBlock.includes('transition: background-color 0.12s ease, border-color 0.12s ease !important;'),
+      '.antigravity-model-slot-btn must transition only background-color and border-color'
+    );
+    assert.ok(btnBlock.includes('transform: none !important;'), '.antigravity-model-slot-btn must enforce transform: none');
+    assert.ok(btnBlock.includes('-webkit-app-region: no-drag !important;'), '.antigravity-model-slot-btn must enforce -webkit-app-region: no-drag');
+    assert.ok(btnBlock.includes('app-region: no-drag !important;'), '.antigravity-model-slot-btn must enforce app-region: no-drag');
+
+    const hoverBlockMatch = css.match(/\.antigravity-model-slot-btn:hover\s*\{[\s\S]*?\}/);
+    assert.ok(hoverBlockMatch, 'Must define .antigravity-model-slot-btn:hover rule');
+    const hoverBlock = hoverBlockMatch[0];
+    assert.ok(hoverBlock.includes('transform: none !important;'), '.antigravity-model-slot-btn:hover must enforce transform: none');
+    assert.ok(hoverBlock.includes('-webkit-app-region: no-drag !important;'), '.antigravity-model-slot-btn:hover must enforce -webkit-app-region: no-drag');
+    assert.ok(hoverBlock.includes('app-region: no-drag !important;'), '.antigravity-model-slot-btn:hover must enforce app-region: no-drag');
   });
 });

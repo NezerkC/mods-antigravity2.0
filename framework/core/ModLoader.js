@@ -2447,122 +2447,139 @@ export class ModLoader {
           window.__applyAgentToBadge(badge, currentAgent);
         };
 
-        if (!window.__antigravityGlobalEventsBound) {
-          window.__antigravityGlobalEventsBound = true;
-          document.addEventListener('click', (e) => {
-            const sendBtn = e.target.closest('button[data-testid="send-button"]');
-            if (sendBtn) {
-              const container = sendBtn.closest('[data-cascade-id]') || document;
-              const editor = container.querySelector('[contenteditable="true"], textarea');
-              const text = editor ? (editor.value || editor.textContent || '') : '';
-              if (text && window.__handleAutoPromptContextUpdate) {
-                window.__handleAutoPromptContextUpdate(text, sendBtn);
-              }
-            }
-
-            const reticleBtn = e.target.closest('.antigravity-caveman-reticle-trigger');
-            if (reticleBtn) {
-              e.preventDefault();
-              e.stopPropagation();
-              window.__toggleCavemanMode(undefined, reticleBtn);
-              return;
-            }
-
-            const isAgentBadge = e.target.closest('.antigravity-agent-badge');
-            const isAgentPortal = e.target.closest('#antigravity-agent-dropdown-portal');
-            if (!isAgentBadge && !isAgentPortal) {
-              const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
-              if (aPortal) aPortal.classList.remove('open');
-              document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
-            }
-
-            const isTachBadge = e.target.closest('.antigravity-tachometer-badge');
-            const isTachPortal = e.target.closest('#antigravity-tachometer-popover-portal');
-            if (!isTachBadge && !isTachPortal) {
-              const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
-              if (tachPortal) {
-                tachPortal.classList.remove('open');
-                tachPortal.__currentBadge = null;
-              }
-              document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
-            }
-
-            const isModsBtn = e.target.closest('.antigravity-mods-manager-btn');
-            const isModsPortal = e.target.closest('#antigravity-mods-manager-portal');
-            if (!isModsBtn && !isModsPortal) {
-              const mPortal = document.getElementById('antigravity-mods-manager-portal');
-              if (mPortal) {
-                mPortal.classList.remove('open');
-                mPortal.__currentBtn = null;
-              }
-              document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
-            }
-
-            const modelSlotBtn = e.target.closest('.antigravity-model-slot-btn');
-            if (modelSlotBtn) {
-              const role = modelSlotBtn.getAttribute('data-slot-role');
-              window.__toggleModelSlotDropdown(e, modelSlotBtn, role);
-              return;
-            }
-
-            const isModelSlotPortal = e.target.closest('#antigravity-model-slot-dropdown-portal');
-            if (!modelSlotBtn && !isModelSlotPortal) {
-              const msPortal = document.getElementById('antigravity-model-slot-dropdown-portal');
-              if (msPortal) {
-                msPortal.classList.remove('open');
-                msPortal.__currentBtn = null;
-              }
-              document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
-            }
-          }, true);
-
-          document.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-              const editor = e.target.closest('[contenteditable="true"], textarea');
-              if (editor) {
-                const text = editor.value || editor.textContent || '';
-                if (text && window.__handleAutoPromptContextUpdate) {
-                  window.__handleAutoPromptContextUpdate(text, editor);
-                }
-              }
-            }
-            if (e.key === 'Escape') {
-              const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
-              if (aPortal) {
-                aPortal.classList.remove('open');
-                aPortal.__currentBadge = null;
-              }
-              document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
-
-              const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
-              if (tachPortal) {
-                tachPortal.classList.remove('open');
-                tachPortal.__currentBadge = null;
-              }
-              document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
-
-              const mPortal = document.getElementById('antigravity-mods-manager-portal');
-              if (mPortal) {
-                mPortal.classList.remove('open');
-                mPortal.__currentBtn = null;
-              }
-              document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
-
-              const msPortal = document.getElementById('antigravity-model-slot-dropdown-portal');
-              if (msPortal) {
-                msPortal.classList.remove('open');
-                msPortal.__currentBtn = null;
-              }
-              document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
-            }
-          }, true);
-
-          document.addEventListener('focusin', () => {
-            if (typeof window.__updateMenubarSlotButtons === 'function' && typeof window.__getActiveMenubarSlotModels === 'function') {
-              window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
-            }
-          }, true);
+        if (window.__antigravityDocClickHandler && typeof document.removeEventListener === 'function') {
+          document.removeEventListener('click', window.__antigravityDocClickHandler, true);
         }
+        if (window.__antigravityDocKeydownHandler && typeof document.removeEventListener === 'function') {
+          document.removeEventListener('keydown', window.__antigravityDocKeydownHandler, true);
+        }
+        if (window.__antigravityDocFocusinHandler && typeof document.removeEventListener === 'function') {
+          document.removeEventListener('focusin', window.__antigravityDocFocusinHandler, true);
+        }
+
+        window.__antigravityDocClickHandler = (e) => {
+          const clickTarget = (e && e.target && typeof e.target.closest === 'function')
+            ? e.target
+            : (e && e.target && e.target.parentElement && typeof e.target.parentElement.closest === 'function' ? e.target.parentElement : null);
+          if (!clickTarget) return;
+
+          const sendBtn = clickTarget.closest('button[data-testid="send-button"]');
+          if (sendBtn) {
+            const container = sendBtn.closest('[data-cascade-id]') || document;
+            const editor = container.querySelector('[contenteditable="true"], textarea');
+            const text = editor ? (editor.value || editor.textContent || '') : '';
+            if (text && window.__handleAutoPromptContextUpdate) {
+              window.__handleAutoPromptContextUpdate(text, sendBtn);
+            }
+          }
+
+          const reticleBtn = clickTarget.closest('.antigravity-caveman-reticle-trigger');
+          if (reticleBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.__toggleCavemanMode(undefined, reticleBtn);
+            return;
+          }
+
+          const isAgentBadge = clickTarget.closest('.antigravity-agent-badge');
+          const isAgentPortal = clickTarget.closest('#antigravity-agent-dropdown-portal');
+          if (!isAgentBadge && !isAgentPortal) {
+            const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
+            if (aPortal) aPortal.classList.remove('open');
+            document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+          }
+
+          const isTachBadge = clickTarget.closest('.antigravity-tachometer-badge');
+          const isTachPortal = clickTarget.closest('#antigravity-tachometer-popover-portal');
+          if (!isTachBadge && !isTachPortal) {
+            const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+            if (tachPortal) {
+              tachPortal.classList.remove('open');
+              tachPortal.__currentBadge = null;
+            }
+            document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+          }
+
+          const isModsBtn = clickTarget.closest('.antigravity-mods-manager-btn');
+          const isModsPortal = clickTarget.closest('#antigravity-mods-manager-portal');
+          if (!isModsBtn && !isModsPortal) {
+            const mPortal = document.getElementById('antigravity-mods-manager-portal');
+            if (mPortal) {
+              mPortal.classList.remove('open');
+              mPortal.__currentBtn = null;
+            }
+            document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+          }
+
+          const modelSlotBtn = clickTarget.closest('.antigravity-model-slot-btn');
+          if (modelSlotBtn) {
+            const role = modelSlotBtn.getAttribute('data-slot-role');
+            window.__toggleModelSlotDropdown(e, modelSlotBtn, role);
+            return;
+          }
+
+          const isModelSlotPortal = clickTarget.closest('#antigravity-model-slot-dropdown-portal');
+          if (!modelSlotBtn && !isModelSlotPortal) {
+            const msPortal = document.getElementById('antigravity-model-slot-dropdown-portal');
+            if (msPortal) {
+              msPortal.classList.remove('open');
+              msPortal.__currentBtn = null;
+            }
+            document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+          }
+        };
+
+        window.__antigravityDocKeydownHandler = (e) => {
+          if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.target && typeof e.target.closest === 'function') {
+            const editor = e.target.closest('[contenteditable="true"], textarea');
+            if (editor) {
+              const text = editor.value || editor.textContent || '';
+              if (text && window.__handleAutoPromptContextUpdate) {
+                window.__handleAutoPromptContextUpdate(text, editor);
+              }
+            }
+          }
+          if (e.key === 'Escape') {
+            const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
+            if (aPortal) {
+              aPortal.classList.remove('open');
+              aPortal.__currentBadge = null;
+            }
+            document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+
+            const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+            if (tachPortal) {
+              tachPortal.classList.remove('open');
+              tachPortal.__currentBadge = null;
+            }
+            document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+            const mPortal = document.getElementById('antigravity-mods-manager-portal');
+            if (mPortal) {
+              mPortal.classList.remove('open');
+              mPortal.__currentBtn = null;
+            }
+            document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+
+            const msPortal = document.getElementById('antigravity-model-slot-dropdown-portal');
+            if (msPortal) {
+              msPortal.classList.remove('open');
+              msPortal.__currentBtn = null;
+            }
+            document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+          }
+        };
+
+        window.__antigravityDocFocusinHandler = () => {
+          if (typeof window.__updateMenubarSlotButtons === 'function' && typeof window.__getActiveMenubarSlotModels === 'function') {
+            window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+          }
+        };
+
+        document.addEventListener('click', window.__antigravityDocClickHandler, true);
+        document.addEventListener('keydown', window.__antigravityDocKeydownHandler, true);
+        document.addEventListener('focusin', window.__antigravityDocFocusinHandler, true);
+        window.__antigravityGlobalEventsBound = true;
 
         // 3. Mount individual mods into target slots across all conversations
         function mountAllMods() {
