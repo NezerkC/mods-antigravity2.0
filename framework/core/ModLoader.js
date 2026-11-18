@@ -411,6 +411,7 @@ export class ModLoader {
               const box = triggerEl.querySelector('.caveman-reticle-box');
               if (box && reticleSvg) {
                 box.innerHTML = reticleSvg;
+                box.setAttribute('data-focus-state', String(nextVal));
               }
             }
           });
@@ -803,16 +804,32 @@ export class ModLoader {
             const model = window.__getModelById ? window.__getModelById(modelId) : null;
             if (!model) return;
             document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="' + role + '"]').forEach(btn => {
+              const expectedSessionId = (role === 'builder' && effectiveSlots.activeSessionId)
+                ? effectiveSlots.activeSessionId
+                : '';
+              const expectedTitle = (role === 'planner' ? 'Planner Model: ' : 'Builder Model: ') + model.name;
+              const expectedVal = model.shortName || model.name;
+              const valEl = btn.querySelector('.model-slot-value');
+              const dotEl = btn.querySelector('.model-slot-dot');
+
+              const isUnchanged = (
+                (btn.getAttribute('data-model-id') || '') === model.id &&
+                (btn.getAttribute('data-session-id') || '') === expectedSessionId &&
+                (btn.getAttribute('title') || '') === expectedTitle &&
+                (!valEl || valEl.textContent === expectedVal)
+              );
+              if (isUnchanged) return;
+
               btn.setAttribute('data-model-id', model.id);
-              if (role === 'builder' && effectiveSlots.activeSessionId) {
-                btn.setAttribute('data-session-id', effectiveSlots.activeSessionId);
-              } else {
+              if (expectedSessionId) {
+                btn.setAttribute('data-session-id', expectedSessionId);
+              } else if (btn.hasAttribute('data-session-id')) {
                 btn.removeAttribute('data-session-id');
               }
-              btn.setAttribute('title', (role === 'planner' ? 'Planner Model: ' : 'Builder Model: ') + model.name);
-              const valEl = btn.querySelector('.model-slot-value');
-              if (valEl) valEl.textContent = model.shortName || model.name;
-              const dotEl = btn.querySelector('.model-slot-dot');
+              btn.setAttribute('title', expectedTitle);
+              if (valEl && valEl.textContent !== expectedVal) {
+                valEl.textContent = expectedVal;
+              }
               if (dotEl) {
                 dotEl.style.background = model.color;
                 dotEl.style.boxShadow = '0 0 6px ' + model.color;
@@ -850,22 +867,37 @@ export class ModLoader {
             }
 
             if (pill) {
-              pill.setAttribute('data-model-id', model.id);
-              if (sessionId) {
-                pill.setAttribute('data-session-id', sessionId);
-              }
-              pill.setAttribute('title', 'Subagent Builder Model: ' + model.name);
-              pill.style.borderColor = model.color + '55';
-              pill.style.background = model.color + '18';
-              pill.style.color = model.color;
-              const dot = pill.querySelector('.subagent-model-dot');
-              if (dot) {
-                dot.style.background = model.color;
-                dot.style.boxShadow = '0 0 5px ' + model.color;
-              }
+              const expectedSessionId = sessionId || '';
+              const currentModelId = pill.getAttribute('data-model-id') || '';
+              const currentSessionId = pill.getAttribute('data-session-id') || '';
+              const expectedTitle = 'Subagent Builder Model: ' + model.name;
+              const currentTitle = pill.getAttribute('title') || '';
               const label = pill.querySelector('.subagent-model-label');
-              if (label) {
-                label.textContent = model.shortName;
+              const isUnchanged = (
+                currentModelId === model.id &&
+                currentSessionId === expectedSessionId &&
+                currentTitle === expectedTitle &&
+                (!label || label.textContent === model.shortName)
+              );
+              if (!isUnchanged) {
+                pill.setAttribute('data-model-id', model.id);
+                if (sessionId) {
+                  pill.setAttribute('data-session-id', sessionId);
+                } else if (pill.hasAttribute('data-session-id')) {
+                  pill.removeAttribute('data-session-id');
+                }
+                pill.setAttribute('title', expectedTitle);
+                pill.style.borderColor = model.color + '55';
+                pill.style.background = model.color + '18';
+                pill.style.color = model.color;
+                const dot = pill.querySelector('.subagent-model-dot');
+                if (dot) {
+                  dot.style.background = model.color;
+                  dot.style.boxShadow = '0 0 5px ' + model.color;
+                }
+                if (label) {
+                  label.textContent = model.shortName;
+                }
               }
             } else if (typeof window.__renderSubagentModelPill === 'function') {
               const temp = document.createElement('div');
@@ -1131,6 +1163,9 @@ export class ModLoader {
           return true;
         };
 
+        window.__observedNativeTriggerSet = new WeakSet();
+        window.__observedNativeTriggersCount = 0;
+
         window.__observeNativeModelSelector = function() {
           if (typeof MutationObserver !== 'function') return;
           const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
@@ -1140,6 +1175,15 @@ export class ModLoader {
           }
           if (!triggers.length) return;
 
+          if (
+            window.__antigravityNativeModelObserver &&
+            window.__observedNativeTriggerSet &&
+            window.__observedNativeTriggersCount === triggers.length &&
+            triggers.every(trigger => window.__observedNativeTriggerSet.has(trigger))
+          ) {
+            return;
+          }
+
           if (window.__antigravityNativeModelObserver) {
             window.__antigravityNativeModelObserver.disconnect();
           }
@@ -1148,13 +1192,17 @@ export class ModLoader {
               window.__syncPlannerFromNativeSelector();
             }
           });
+          const nextSet = new WeakSet();
           triggers.forEach(trigger => {
+            nextSet.add(trigger);
             window.__antigravityNativeModelObserver.observe(trigger, {
               childList: true,
               subtree: true,
               characterData: true
             });
           });
+          window.__observedNativeTriggerSet = nextSet;
+          window.__observedNativeTriggersCount = triggers.length;
         };
 
         window.__selectModelForSlot = function(role, modelId) {
@@ -2189,6 +2237,7 @@ export class ModLoader {
         // Store all per-conversation metrics, active agents, and current primary snapshot
         window.__antigravityAllMetrics = ${JSON.stringify(context.allMetrics || {})};
         window.__antigravityLatestMetric = ${JSON.stringify(context.telemetry || {})};
+        window.__antigravityLiveTelemetryReceived = false;
         window.__antigravityActiveAgents = Object.assign(
           window.__antigravityActiveAgents || {},
           ${JSON.stringify(context.activeAgents || {})}
@@ -2217,11 +2266,17 @@ export class ModLoader {
               const isFocus = window.__resolveCavemanForCascade ? window.__resolveCavemanForCascade(cId) : false;
               const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
               const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
-              reticleBtn.classList.toggle('is-focus', isFocus);
-              reticleBtn.setAttribute('title', isFocus ? focusTitle : explicativoTitle);
+              const nextTitle = isFocus ? focusTitle : explicativoTitle;
+              if (reticleBtn.classList.contains('is-focus') !== isFocus) {
+                reticleBtn.classList.toggle('is-focus', isFocus);
+              }
+              if (reticleBtn.getAttribute('title') !== nextTitle) {
+                reticleBtn.setAttribute('title', nextTitle);
+              }
               const box = reticleBtn.querySelector('.caveman-reticle-box');
-              if (box && window.__renderReticleSvg) {
+              if (box && window.__renderReticleSvg && box.getAttribute('data-focus-state') !== String(isFocus)) {
                 box.innerHTML = window.__renderReticleSvg(isFocus, 14);
+                box.setAttribute('data-focus-state', String(isFocus));
               }
             }
           });
@@ -2266,9 +2321,25 @@ export class ModLoader {
           }
         };
 
-        window.__updateAntigravityTelemetry = function(fallbackMetric) {
+        window.__updateAntigravityTelemetry = function(fallbackMetric, isInitialSnapshot) {
+          if (isInitialSnapshot && window.__antigravityLiveTelemetryReceived) {
+            return;
+          }
           const all = window.__antigravityAllMetrics || {};
           const latest = fallbackMetric || window.__antigravityLatestMetric;
+
+          if (!isInitialSnapshot) {
+            const hasLiveMetrics = Boolean(
+              Object.keys(all).length > 0 ||
+              (latest && (Number(latest.estTokens) > 0 || Number(latest.steps) > 0 || parseFloat(latest.pct) > 0))
+            );
+            if (hasLiveMetrics) {
+              window.__antigravityLiveTelemetryReceived = true;
+              if (fallbackMetric) {
+                window.__antigravityLatestMetric = fallbackMetric;
+              }
+            }
+          }
 
           const nativeGroups = window.__antigravityNativeQuotaSummary || (() => {
             try {
@@ -2303,30 +2374,43 @@ export class ModLoader {
             else if (pctNum >= 60) statusColor = '#f97316';
             else if (pctNum >= 25) statusColor = '#eab308';
 
-            badge.setAttribute('title', 'Context: ' + m.displayTokens + ' tokens (' + m.pct + '%)');
+            const nextTitle = 'Context: ' + m.displayTokens + ' tokens (' + m.pct + '%)';
+            if (badge.getAttribute('title') !== nextTitle) {
+              badge.setAttribute('title', nextTitle);
+            }
             const tokenSpan = badge.querySelector('.tachometer-tokens');
-            if (tokenSpan) tokenSpan.textContent = m.displayTokens;
+            if (tokenSpan && tokenSpan.textContent !== m.displayTokens) {
+              tokenSpan.textContent = m.displayTokens;
+            }
             const pctSpan = badge.querySelector('.tachometer-pct');
-            if (pctSpan) pctSpan.textContent = '(' + m.pct + '%)';
+            const nextPctText = '(' + m.pct + '%)';
+            if (pctSpan && pctSpan.textContent !== nextPctText) {
+              pctSpan.textContent = nextPctText;
+            }
             const needle = badge.querySelector('g[filter]');
             if (needle) {
               const angle = -120 + (Math.min(pctNum, 100) / 100) * 240;
-              needle.style.transform = 'rotate(' + angle.toFixed(1) + 'deg)';
+              const nextTransform = 'rotate(' + angle.toFixed(1) + 'deg)';
+              if (needle.style.transform !== nextTransform) {
+                needle.style.transform = nextTransform;
+              }
               const poly = needle.querySelector('polygon');
-              if (poly) poly.setAttribute('fill', statusColor);
+              if (poly && poly.getAttribute('fill') !== statusColor) {
+                poly.setAttribute('fill', statusColor);
+              }
             }
 
             if (window.__renderTachometerPopoverHtml) {
               const renderedPopover = window.__renderTachometerPopoverHtml(m);
               const tpl = badge.querySelector('.antigravity-popover-template') ||
                 badge.parentElement?.querySelector('.antigravity-popover-template');
-              if (tpl) {
+              if (tpl && tpl.innerHTML !== renderedPopover) {
                 tpl.innerHTML = renderedPopover;
               }
 
               // Update live popover content if currently open on screen
               const portal = document.getElementById('antigravity-tachometer-popover-portal');
-              if (portal && portal.classList.contains('open')) {
+              if (portal && portal.classList.contains('open') && portal.innerHTML !== renderedPopover) {
                 portal.innerHTML = renderedPopover;
               }
             }
@@ -2551,16 +2635,6 @@ export class ModLoader {
             });
           });
 
-          // Bind Model Slots click handler
-          document.querySelectorAll('.antigravity-model-slot-btn').forEach(btn => {
-            if (btn.__slotClickBound) return;
-            btn.__slotClickBound = true;
-            btn.addEventListener('click', (e) => {
-              const role = btn.getAttribute('data-slot-role');
-              window.__toggleModelSlotDropdown(e, btn, role);
-            });
-          });
-
           // Restore saved mod visibility states
           window.__applyModsVisibility();
 
@@ -2589,17 +2663,27 @@ export class ModLoader {
               const isFocus = window.__resolveCavemanForCascade ? window.__resolveCavemanForCascade(cId) : false;
               const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
               const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
-              reticleBtn.classList.toggle('is-focus', isFocus);
-              reticleBtn.setAttribute('title', isFocus ? focusTitle : explicativoTitle);
+              const nextTitle = isFocus ? focusTitle : explicativoTitle;
+              if (reticleBtn.classList.contains('is-focus') !== isFocus) {
+                reticleBtn.classList.toggle('is-focus', isFocus);
+              }
+              if (reticleBtn.getAttribute('title') !== nextTitle) {
+                reticleBtn.setAttribute('title', nextTitle);
+              }
               const box = reticleBtn.querySelector('.caveman-reticle-box');
-              if (box && window.__renderReticleSvg) {
+              if (box && window.__renderReticleSvg && box.getAttribute('data-focus-state') !== String(isFocus)) {
                 box.innerHTML = window.__renderReticleSvg(isFocus, 14);
+                box.setAttribute('data-focus-state', String(isFocus));
               }
             }
           });
 
           // Apply current telemetry
-          window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})});
+          if (window.__antigravityLiveTelemetryReceived) {
+            window.__updateAntigravityTelemetry();
+          } else {
+            window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})}, true);
+          }
 
           // Observe only stable parent containers for responsive auto-collapse (avoid layout thrashing)
           document.querySelectorAll('.antigravity-slot-container').forEach(slot => {
@@ -2686,6 +2770,7 @@ export class ModLoader {
             for (const btn of triggers) {
               const parent = btn.parentElement;
               if (!parent) continue;
+              if (parent.closest && parent.closest('[role="dialog"], [role="menu"], .agy-overlay')) continue;
               const row = parent.closest('.flex.items-center') || parent;
               if (!row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')) {
                 missingSlot = true;

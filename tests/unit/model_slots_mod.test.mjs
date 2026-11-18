@@ -560,7 +560,10 @@ describe('ModDaemon & ModLoader - Integration', () => {
               const role = sel.match(/data-slot-role="([^"]+)"/)?.[1];
               return node.classList.contains('antigravity-model-slot-btn') && node.getAttribute('data-slot-role') === role;
             }
-            if (sel.startsWith('.')) return node.classList.contains(sel.slice(1));
+            if (sel.startsWith('.')) {
+              const classes = sel.slice(1).split('.');
+              return classes.every(c => node.classList.contains(c));
+            }
             if (sel.startsWith('#')) return node.getAttribute('id') === sel.slice(1);
             return false;
           };
@@ -900,7 +903,10 @@ describe('ModelSlotsMod - Native Model Selector Synchronization', () => {
               const role = sel.match(/data-slot-role="([^"]+)"/)?.[1];
               return node.classList.contains('antigravity-model-slot-btn') && node.getAttribute('data-slot-role') === role;
             }
-            if (sel.startsWith('.')) return node.classList.contains(sel.slice(1));
+            if (sel.startsWith('.')) {
+              const classes = sel.slice(1).split('.');
+              return classes.every(c => node.classList.contains(c));
+            }
             if (sel.startsWith('#')) return node.getAttribute('id') === sel.slice(1);
             return false;
           };
@@ -1140,5 +1146,526 @@ describe('ModelSlotsMod - Native Model Selector Synchronization', () => {
     assert.equal(plannerVal.textContent, 'Opus 5.5 Med');
     const persisted = JSON.parse(store.get('__antigravity_model_slots'));
     assert.equal(persisted.planner, 'claude-opus-5-5-medium');
+  });
+});
+
+describe('ModelSlotsMod & ModLoader - Single-Toggle & Observer Stabilization', () => {
+  function createStabilizationMockEnv(initialContext = {}) {
+    const loader = new ModLoader();
+    const script = loader.buildInjectionPayload(initialContext);
+
+    function createEl(tag, attrs = {}, parent = null) {
+      const listeners = {};
+      const el = {
+        tagName: tag.toUpperCase(),
+        nodeType: 1,
+        attributes: { ...attrs },
+        children: [],
+        parentElement: parent,
+        style: {},
+        _textContent: '',
+        _innerHTML: '',
+        _listeners: listeners,
+        offsetWidth: 500,
+        classList: {
+          _set: new Set((attrs.class || '').split(/\s+/).filter(Boolean)),
+          add(c) { this._set.add(c); },
+          remove(c) { this._set.delete(c); },
+          contains(c) { return this._set.has(c); },
+          toggle(c, force) {
+            if (force === undefined) {
+              if (this._set.has(c)) { this._set.delete(c); return false; }
+              this._set.add(c); return true;
+            }
+            if (force) { this._set.add(c); return true; }
+            this._set.delete(c); return false;
+          }
+        },
+        getBoundingClientRect() {
+          return { top: 0, left: 100, right: 200, bottom: 28, width: 100, height: 28 };
+        },
+        setAttribute(k, v) {
+          this.attributes[k] = String(v);
+          if (k === 'class') {
+            this.classList._set = new Set(String(v).split(/\s+/).filter(Boolean));
+          }
+        },
+        getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attributes, k) ? this.attributes[k] : null; },
+        hasAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attributes, k); },
+        removeAttribute(k) { delete this.attributes[k]; },
+        appendChild(child) { child.parentElement = this; this.children.push(child); return child; },
+        remove() {
+          if (this.parentElement) {
+            this.parentElement.children = this.parentElement.children.filter(c => c !== this);
+            this.parentElement = null;
+          }
+        },
+        after(node) {
+          if (!this.parentElement) return;
+          const idx = this.parentElement.children.indexOf(this);
+          node.parentElement = this.parentElement;
+          this.parentElement.children.splice(idx + 1, 0, node);
+        },
+        contains(target) {
+          if (target === this) return true;
+          return this.children.some(c => c.contains(target));
+        },
+        closest(selector) {
+          const selectors = selector.split(',').map(s => s.trim());
+          let cur = this;
+          while (cur) {
+            for (const s of selectors) {
+              const roleAttrMatch = s.match(/^\[([a-zA-Z0-9_-]+)="([^"]+)"\]$/);
+              if (roleAttrMatch && cur.getAttribute(roleAttrMatch[1]) === roleAttrMatch[2]) return cur;
+              const attrMatch = s.match(/^\[([^\]]+)\]$/);
+              if (attrMatch && cur.hasAttribute(attrMatch[1])) return cur;
+              if (s.startsWith('#') && cur.getAttribute('id') === s.slice(1)) return cur;
+              if (s.startsWith('.') && cur.classList.contains(s.slice(1))) return cur;
+            }
+            cur = cur.parentElement;
+          }
+          return null;
+        },
+        querySelectorAll(selector) {
+          const results = [];
+          const selectors = selector.split(',').map(s => s.trim());
+          const matchSingle = (node, sel) => {
+            if (sel === 'span') return node.tagName === 'SPAN';
+            if (sel === 'div[title="Subagent"]') return node.tagName === 'DIV' && node.getAttribute('title') === 'Subagent';
+            if (sel === 'button[data-testid="model-selector-trigger"]') {
+              return node.tagName === 'BUTTON' && node.getAttribute('data-testid') === 'model-selector-trigger';
+            }
+            if (sel === 'g[filter]') return node.tagName === 'G' && node.hasAttribute('filter');
+            if (sel === 'polygon') return node.tagName === 'POLYGON';
+            if (sel.startsWith('.antigravity-model-slot-btn[data-slot-role="')) {
+              const role = sel.match(/data-slot-role="([^"]+)"/)?.[1];
+              return node.classList.contains('antigravity-model-slot-btn') && node.getAttribute('data-slot-role') === role;
+            }
+            if (sel.startsWith('.')) {
+              const classes = sel.slice(1).split('.');
+              return classes.every(c => node.classList.contains(c));
+            }
+            if (sel.startsWith('#')) return node.getAttribute('id') === sel.slice(1);
+            return false;
+          };
+          const walk = (node) => {
+            for (const child of node.children) {
+              if (selectors.some(sel => matchSingle(child, sel))) results.push(child);
+              walk(child);
+            }
+          };
+          walk(this);
+          return results;
+        },
+        querySelector(selector) { return this.querySelectorAll(selector)[0] || null; },
+        addEventListener(evt, fn, useCapture = false) {
+          listeners[evt] = listeners[evt] || [];
+          listeners[evt].push({ fn, useCapture: Boolean(useCapture) });
+        }
+      };
+      Object.defineProperty(el, 'id', {
+        configurable: true,
+        get() { return this.getAttribute('id') || ''; },
+        set(val) { this.setAttribute('id', val); }
+      });
+      Object.defineProperty(el, 'className', {
+        configurable: true,
+        get() { return this.getAttribute('class') || ''; },
+        set(val) { this.setAttribute('class', val); }
+      });
+      Object.defineProperty(el, 'textContent', {
+        configurable: true,
+        get() { return this._textContent; },
+        set(val) { this._textContent = String(val); }
+      });
+      Object.defineProperty(el, 'innerHTML', {
+        configurable: true,
+        get() { return this._innerHTML; },
+        set(val) {
+          this._innerHTML = val;
+          this.children = [];
+          if (val && val.includes('antigravity-subagent-model-pill')) {
+            const pill = createEl('span', { id: 'antigravity-subagent-model-pill', class: 'antigravity-subagent-model-pill' }, el);
+            const dot = createEl('span', { class: 'subagent-model-dot' }, pill);
+            const label = createEl('span', { class: 'subagent-model-label' }, pill);
+            const modelIdMatch = val.match(/data-model-id="([^"]+)"/);
+            if (modelIdMatch) pill.setAttribute('data-model-id', modelIdMatch[1]);
+            const titleMatch = val.match(/title="([^"]+)"/);
+            if (titleMatch) pill.setAttribute('title', titleMatch[1]);
+            const labelMatch = val.match(/<span class="subagent-model-label">([^<]*)<\/span>/);
+            if (labelMatch) label.textContent = labelMatch[1];
+            pill.appendChild(dot);
+            pill.appendChild(label);
+            el.children.push(pill);
+          }
+        }
+      });
+      Object.defineProperty(el, 'firstElementChild', {
+        get() { return this.children[0] || null; }
+      });
+      return el;
+    }
+
+    const head = createEl('head');
+    const body = createEl('body');
+    const docEl = createEl('html');
+    docEl.appendChild(head);
+    docEl.appendChild(body);
+
+    const docListeners = {};
+    const store = new Map();
+    const observerInstances = [];
+    const scheduledTimeouts = [];
+
+    class MockMutationObserver {
+      constructor(cb) {
+        this.cb = cb;
+        this.observeCalls = [];
+        this.disconnectCalls = 0;
+        observerInstances.push(this);
+      }
+      observe(target, opts) {
+        this.observeCalls.push({ target, opts });
+      }
+      disconnect() {
+        this.disconnectCalls++;
+      }
+      trigger() {
+        this.cb([]);
+      }
+    }
+
+    const documentMock = {
+      head,
+      body,
+      documentElement: docEl,
+      activeElement: body,
+      getElementById(id) { return docEl.querySelector(`#${id}`); },
+      querySelector(sel) { return docEl.querySelector(sel); },
+      querySelectorAll(sel) { return docEl.querySelectorAll(sel); },
+      createElement(tag) { return createEl(tag); },
+      addEventListener(evt, fn, useCapture = false) {
+        docListeners[evt] = docListeners[evt] || [];
+        docListeners[evt].push({ fn, useCapture: Boolean(useCapture) });
+      }
+    };
+
+    const windowMock = {
+      location: { pathname: '/', search: '' },
+      innerWidth: 1280,
+      document: documentMock,
+      ResizeObserver: class { observe() {} disconnect() {} },
+      MutationObserver: MockMutationObserver
+    };
+    windowMock.window = windowMock;
+
+    function dispatchClick(targetEl) {
+      let stopped = false;
+      const event = {
+        type: 'click',
+        target: targetEl,
+        currentTarget: targetEl,
+        defaultPrevented: false,
+        stopPropagation() { stopped = true; },
+        preventDefault() { this.defaultPrevented = true; }
+      };
+      // Capture phase on document
+      for (const entry of (docListeners.click || []).filter(l => l.useCapture)) {
+        entry.fn(event);
+      }
+      if (!stopped) {
+        // Target phase on target element
+        for (const entry of (targetEl._listeners.click || [])) {
+          entry.fn(event);
+        }
+        // Bubble phase on document
+        for (const entry of (docListeners.click || []).filter(l => !l.useCapture)) {
+          entry.fn(event);
+        }
+      }
+      return event;
+    }
+
+    function dispatchKeydown(key) {
+      const event = {
+        type: 'keydown',
+        key,
+        target: body,
+        stopPropagation() {},
+        preventDefault() {}
+      };
+      for (const entry of (docListeners.keydown || [])) {
+        entry.fn(event);
+      }
+    }
+
+    const sandbox = vm.createContext({
+      window: windowMock,
+      document: documentMock,
+      localStorage: {
+        getItem(k) { return store.has(k) ? store.get(k) : null; },
+        setItem(k, v) { store.set(k, String(v)); },
+        removeItem(k) { store.delete(k); }
+      },
+      fetch: () => Promise.resolve({ ok: true, json: async () => ({}) }),
+      ResizeObserver: windowMock.ResizeObserver,
+      MutationObserver: MockMutationObserver,
+      setTimeout: (fn, ms) => {
+        const entry = { id: scheduledTimeouts.length + 1, fn, ms };
+        scheduledTimeouts.push(entry);
+        return entry.id;
+      },
+      clearTimeout: () => {},
+      setInterval: () => 0,
+      clearInterval: () => {}
+    });
+
+    return {
+      script,
+      createEl,
+      body,
+      docListeners,
+      documentMock,
+      windowMock,
+      sandbox,
+      observerInstances,
+      scheduledTimeouts,
+      dispatchClick,
+      dispatchKeydown
+    };
+  }
+
+  it('clicking .antigravity-model-slot-btn toggles dropdown portal once without double-firing', () => {
+    const env = createStabilizationMockEnv({
+      modelSlots: {
+        planner: 'gemini-4-argon-high',
+        builder: 'gemini-4-hydrogen-high'
+      }
+    });
+
+    const plannerBtn = env.createEl('button', {
+      id: 'antigravity-model-slot-planner',
+      class: 'antigravity-model-slot-btn',
+      'data-slot-role': 'planner',
+      'data-model-id': 'gemini-4-argon-high'
+    }, env.body);
+    const plannerDot = env.createEl('span', { class: 'model-slot-dot' }, plannerBtn);
+    const plannerVal = env.createEl('span', { class: 'model-slot-value' }, plannerBtn);
+    plannerVal.textContent = 'Argon High';
+    plannerBtn.appendChild(plannerDot);
+    plannerBtn.appendChild(plannerVal);
+    env.body.appendChild(plannerBtn);
+
+    vm.runInContext(env.script, env.sandbox);
+
+    assert.equal(
+      (plannerBtn._listeners.click || []).length,
+      0,
+      'Must not bind duplicate direct click listener on .antigravity-model-slot-btn'
+    );
+
+    const portal = env.documentMock.getElementById('antigravity-model-slot-dropdown-portal');
+    assert.equal(portal, null, 'Portal does not need to exist open before first click');
+
+    // Click inside nested child span once -> opens portal
+    env.dispatchClick(plannerVal);
+    const openedPortal = env.documentMock.getElementById('antigravity-model-slot-dropdown-portal');
+    assert.ok(openedPortal, 'Portal must be created on first click');
+    assert.equal(openedPortal.classList.contains('open'), true, 'Single click must open portal');
+    assert.equal(plannerBtn.classList.contains('open'), true, 'Single click must mark button open');
+
+    // Click same button a second time -> closes portal cleanly
+    env.dispatchClick(plannerBtn);
+    assert.equal(openedPortal.classList.contains('open'), false, 'Second click must close portal');
+    assert.equal(plannerBtn.classList.contains('open'), false, 'Second click must clear button open state');
+
+    // Click again to reopen, then verify Escape closes it
+    env.dispatchClick(plannerBtn);
+    assert.equal(openedPortal.classList.contains('open'), true, 'Third click must reopen portal');
+    env.dispatchKeydown('Escape');
+    assert.equal(openedPortal.classList.contains('open'), false, 'Escape must close portal');
+
+    // Click again to reopen, then verify outside click closes it
+    env.dispatchClick(plannerBtn);
+    assert.equal(openedPortal.classList.contains('open'), true, 'Fourth click must reopen portal');
+    env.dispatchClick(env.body);
+    assert.equal(openedPortal.classList.contains('open'), false, 'Outside click must close portal');
+  });
+
+  it('__syncSubagentModelBadges is idempotent and __observeNativeModelSelector avoids redundant reconnects', () => {
+    const env = createStabilizationMockEnv({
+      modelSlots: {
+        planner: 'gemini-4-argon-high',
+        builder: 'gemini-4-hydrogen-high',
+        sessions: {
+          'conv-stable-1': { planner: 'gemini-4-argon-high', builder: 'claude-opus-5-5-high' }
+        }
+      }
+    });
+
+    const convContainer = env.createEl('div', { 'data-conversation-id': 'conv-stable-1' }, env.body);
+    const badge = env.createEl('div', { title: 'Subagent' }, convContainer);
+    const selfSpan = env.createEl('span', {}, badge);
+    selfSpan.textContent = 'self';
+    badge.appendChild(selfSpan);
+    convContainer.appendChild(badge);
+    env.body.appendChild(convContainer);
+
+    const nativeRow = env.createEl('div', { class: 'flex items-center' }, env.body);
+    const nativeTrigger = env.createEl('button', { 'data-testid': 'model-selector-trigger' }, nativeRow);
+    nativeTrigger.textContent = 'Gemini 4 Argon (High)';
+    const headerSlot = env.createEl('div', { id: 'antigravity-slot-header-actions' }, nativeRow);
+    nativeRow.appendChild(nativeTrigger);
+    nativeRow.appendChild(headerSlot);
+    env.body.appendChild(nativeRow);
+
+    // Ephemeral menu trigger inside [role="menu"] without header slot
+    const ephemeralMenu = env.createEl('div', { role: 'menu' }, env.body);
+    const ephemeralTrigger = env.createEl('button', { 'data-testid': 'model-selector-trigger' }, ephemeralMenu);
+    ephemeralMenu.appendChild(ephemeralTrigger);
+    env.body.appendChild(ephemeralMenu);
+
+    vm.runInContext(env.script, env.sandbox);
+
+    const pill = badge.querySelector('.antigravity-subagent-model-pill');
+    assert.ok(pill, 'Pill must be mounted on initial sync');
+    const label = pill.querySelector('.subagent-model-label');
+    const dot = pill.querySelector('.subagent-model-dot');
+
+    let setAttrCount = 0;
+    let removeAttrCount = 0;
+    let labelWriteCount = 0;
+    let pillStyleWrites = 0;
+    let dotStyleWrites = 0;
+
+    const origSetAttr = pill.setAttribute.bind(pill);
+    pill.setAttribute = (k, v) => { setAttrCount++; return origSetAttr(k, v); };
+    const origRemoveAttr = pill.removeAttribute.bind(pill);
+    pill.removeAttribute = (k) => { removeAttrCount++; return origRemoveAttr(k); };
+
+    let currentLabelText = label.textContent;
+    Object.defineProperty(label, 'textContent', {
+      get() { return currentLabelText; },
+      set(v) { labelWriteCount++; currentLabelText = String(v); }
+    });
+
+    pill.style = new Proxy(pill.style, {
+      set(target, prop, val) { pillStyleWrites++; target[prop] = val; return true; }
+    });
+    dot.style = new Proxy(dot.style, {
+      set(target, prop, val) { dotStyleWrites++; target[prop] = val; return true; }
+    });
+
+    // Repeated calls with unchanged session model must not mutate DOM
+    env.windowMock.__syncSubagentModelBadges();
+    env.windowMock.__syncSubagentModelBadges();
+    env.windowMock.__syncSubagentModelBadges();
+
+    assert.equal(setAttrCount, 0, 'Must not call pill.setAttribute when model is unchanged');
+    assert.equal(removeAttrCount, 0, 'Must not call pill.removeAttribute when model is unchanged');
+    assert.equal(labelWriteCount, 0, 'Must not rewrite label.textContent when model is unchanged');
+    assert.equal(pillStyleWrites, 0, 'Must not rewrite pill.style when model is unchanged');
+    assert.equal(dotStyleWrites, 0, 'Must not rewrite dot.style when model is unchanged');
+
+    // __observeNativeModelSelector must not disconnect and re-observe unchanged triggers
+    const nativeObserver = env.observerInstances.find(obs =>
+      obs.observeCalls.some(c => c.target === nativeTrigger)
+    );
+    assert.ok(nativeObserver, 'Native trigger observer must exist');
+    const initialObserveCalls = nativeObserver.observeCalls.length;
+    const initialDisconnects = nativeObserver.disconnectCalls;
+
+    env.windowMock.__observeNativeModelSelector();
+    env.windowMock.__observeNativeModelSelector();
+
+    assert.equal(nativeObserver.observeCalls.length, initialObserveCalls, 'Must not re-observe unchanged triggers');
+    assert.equal(nativeObserver.disconnectCalls, initialDisconnects, 'Must not disconnect unchanged triggers');
+
+    // Main mod observer must ignore ephemeral [role="menu"] trigger and not re-run mountAllMods
+    const modObserver = env.observerInstances.find(obs =>
+      obs.observeCalls.some(c => c.target === env.body)
+    );
+    assert.ok(modObserver, 'Mod body observer must exist');
+
+    let mountCount = 0;
+    const origMount = env.windowMock.__antigravityMountAll;
+    let updateTelemetryCalls = 0;
+    const origUpdateTelemetry = env.windowMock.__updateAntigravityTelemetry;
+    env.windowMock.__updateAntigravityTelemetry = (...args) => {
+      updateTelemetryCalls++;
+      return origUpdateTelemetry(...args);
+    };
+
+    modObserver.trigger();
+    while (env.scheduledTimeouts.length > 0) {
+      const t = env.scheduledTimeouts.shift();
+      t.fn();
+    }
+
+    assert.equal(
+      updateTelemetryCalls,
+      0,
+      'Opening ephemeral [role="menu"] trigger must not trigger mountAllMods / telemetry overwrite'
+    );
+  });
+
+  it('tachometer telemetry is not overwritten by stale initial snapshot after live updates', () => {
+    const staleSnapshot = {
+      estTokens: 0,
+      pct: '0.0',
+      displayTokens: '0',
+      steps: 0
+    };
+    const env = createStabilizationMockEnv({
+      telemetry: staleSnapshot,
+      allMetrics: {}
+    });
+
+    const convEl = env.createEl('div', { 'data-cascade-id': 'conv-live-1' }, env.body);
+    const tachBadge = env.createEl('div', {
+      id: 'antigravity-tachometer-badge',
+      class: 'antigravity-tachometer-badge',
+      title: 'Context: 0 tokens (0.0%)'
+    }, convEl);
+    const tokenSpan = env.createEl('span', { class: 'tachometer-tokens' }, tachBadge);
+    tokenSpan.textContent = '0';
+    const pctSpan = env.createEl('span', { class: 'tachometer-pct' }, tachBadge);
+    pctSpan.textContent = '(0.0%)';
+    const needleG = env.createEl('g', { filter: 'url(#glow)' }, tachBadge);
+    const needlePoly = env.createEl('polygon', { fill: '#22c55e' }, needleG);
+    needleG.appendChild(needlePoly);
+    tachBadge.appendChild(tokenSpan);
+    tachBadge.appendChild(pctSpan);
+    tachBadge.appendChild(needleG);
+    convEl.appendChild(tachBadge);
+    env.body.appendChild(convEl);
+
+    vm.runInContext(env.script, env.sandbox);
+
+    assert.equal(tokenSpan.textContent, '0');
+    assert.equal(pctSpan.textContent, '(0.0%)');
+    assert.equal(env.windowMock.__antigravityLiveTelemetryReceived, false);
+
+    // Simulate live telemetry push from ModDaemon.refreshTelemetry
+    const liveMetric = {
+      estTokens: 64200,
+      pct: '6.4',
+      displayTokens: '64.2k',
+      steps: 18
+    };
+    env.windowMock.__antigravityAllMetrics = { 'conv-live-1': liveMetric };
+    env.windowMock.__antigravityLatestMetric = liveMetric;
+    env.windowMock.__updateAntigravityTelemetry();
+
+    assert.equal(env.windowMock.__antigravityLiveTelemetryReceived, true, 'Live update must mark live telemetry flag');
+    assert.equal(tokenSpan.textContent, '64.2k');
+    assert.equal(pctSpan.textContent, '(6.4%)');
+
+    // Re-mounting mods or calling __updateAntigravityTelemetry with initial snapshot must NOT overwrite live metrics
+    env.windowMock.__antigravityMountAll();
+    env.windowMock.__updateAntigravityTelemetry(staleSnapshot, true);
+
+    assert.equal(tokenSpan.textContent, '64.2k', 'Live token count must not revert to stale snapshot');
+    assert.equal(pctSpan.textContent, '(6.4%)', 'Live percentage must not revert to stale snapshot');
   });
 });
