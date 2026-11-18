@@ -386,21 +386,69 @@ class SlotManager {
   }
 
   /**
-   * Generates browser-executable JavaScript to mount a mod within a target slot
-   * across ALL conversation tabs and split panels matching the selector.
-   * @param {Object} params
-   * @param {string} params.slotId
-   * @param {string} params.modId
-   * @param {string} params.htmlContent
+   * Computes a compact deterministic signature for an HTML snippet using djb2.
+   * @param {string} html
    * @returns {string}
    */
-  generateMountCode({ slotId, modId, htmlContent }) {
+  static computeHtmlSignature(html) {
+    const text = String(html || '');
+    let hash = 5381;
+    for (let i = 0; i < text.length; i++) {
+      hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
+    }
+    return `${text.length}:${(hash >>> 0).toString(36)}`;
+  }
+
+  /**
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * using default SlotManager definitions.
+   * @param {string} slotId
+   * @param {string} modId
+   * @param {string} htmlContent
+   * @returns {string}
+   */
+  static generateMountSnippet(slotId, modId, htmlContent) {
+    return new SlotManager().generateMountSnippet(slotId, modId, htmlContent);
+  }
+
+  /**
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * across ALL conversation tabs and split panels matching the selector.
+   * @param {string} slotId
+   * @param {string} modId
+   * @param {string} htmlContent
+   * @returns {string}
+   */
+  generateMountSnippet(slotId, modId, htmlContent) {
     const slot = this.getSlot(slotId);
     const containerId = this.getContainerId(slotId);
     const modWrapperId = `antigravity-mod-${modId}`;
+    const htmlSig = SlotManager.computeHtmlSignature(htmlContent);
 
     return `
       (() => {
+        const syncModNode = (container) => {
+          let modNode = container.querySelector('#${modWrapperId}');
+          if (!modNode) {
+            modNode = document.createElement('div');
+            modNode.id = '${modWrapperId}';
+            modNode.className = '${modWrapperId}';
+            modNode.style.display = 'inline-flex';
+            modNode.style.alignItems = 'center';
+            modNode.style.height = '28px';
+            container.appendChild(modNode);
+          }
+          if (modNode.getAttribute('data-version') !== '2') {
+            modNode.setAttribute('data-version', '2');
+          }
+          const prevSig = modNode.getAttribute('data-sig');
+          const isLiveStateMod = '${modId}' === 'agent-selector' || '${modId}' === 'context-tachometer';
+          if (!modNode.firstElementChild || (!isLiveStateMod && prevSig !== '${htmlSig}')) {
+            modNode.innerHTML = ${JSON.stringify(htmlContent)};
+            modNode.setAttribute('data-sig', '${htmlSig}');
+          }
+        };
+
         let anchors = Array.from(document.querySelectorAll('${slot.selector}'));
         if (!anchors.length && '${slotId}' === 'aux-pane-tab') {
           const auxBar = document.querySelector('[data-active-tab-id]') ||
@@ -412,28 +460,17 @@ class SlotManager {
         }
 
         // Clean up any misplaced legacy slot containers that were injected directly inside non-flex wrappers
-        document.querySelectorAll('#${containerId}').forEach(el => {
-          if (el.parentElement && !el.parentElement.className.includes('flex')) {
-            el.remove();
-          }
-        });
+        if ('${slotId}' === 'header-actions') {
+          document.querySelectorAll('#${containerId}').forEach(el => {
+            if (el.parentElement && (!el.parentElement.className || !String(el.parentElement.className).includes('flex'))) {
+              el.remove();
+            }
+          });
+        }
 
         // If containers already exist in the DOM, ensure mod nodes are refreshed immediately
         document.querySelectorAll('#${containerId}').forEach(container => {
-          let modNode = container.querySelector('#${modWrapperId}');
-          if (!modNode) {
-            modNode = document.createElement('div');
-            modNode.id = '${modWrapperId}';
-            modNode.className = '${modWrapperId}';
-            modNode.style.display = 'inline-flex';
-            modNode.style.alignItems = 'center';
-            modNode.style.height = '28px';
-            container.appendChild(modNode);
-          }
-          modNode.setAttribute('data-version', '2');
-          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
-            modNode.innerHTML = ${JSON.stringify(htmlContent)};
-          }
+          syncModNode(container);
         });
 
         if (!anchors.length) return;
@@ -503,23 +540,23 @@ class SlotManager {
             }
           }
 
-          let modNode = container.querySelector('#${modWrapperId}');
-          if (!modNode) {
-            modNode = document.createElement('div');
-            modNode.id = '${modWrapperId}';
-            modNode.className = '${modWrapperId}';
-            modNode.style.display = 'inline-flex';
-            modNode.style.alignItems = 'center';
-            modNode.style.height = '28px';
-            container.appendChild(modNode);
-          }
-          modNode.setAttribute('data-version', '2');
-          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
-            modNode.innerHTML = ${JSON.stringify(htmlContent)};
-          }
+          syncModNode(container);
         }
       })();
     `;
+  }
+
+  /**
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * across ALL conversation tabs and split panels matching the selector.
+   * @param {Object} params
+   * @param {string} params.slotId
+   * @param {string} params.modId
+   * @param {string} params.htmlContent
+   * @returns {string} Executable JavaScript.
+   */
+  generateMountCode({ slotId, modId, htmlContent }) {
+    return this.generateMountSnippet(slotId, modId, htmlContent);
   }
 }
 
@@ -3283,11 +3320,17 @@ class ModLoader {
 
         // 3. Mount individual mods into target slots across all conversations
         function mountAllMods() {
-          // Permanently remove legacy duplicate unmanaged badges & misplaced slot containers
-          document.querySelectorAll('.antigravity-context-badge').forEach(el => el.remove());
-          document.querySelectorAll('.min-w-0 > #antigravity-slot-header-actions, .no-focus-agent-input > #antigravity-slot-header-actions').forEach(el => el.remove());
+          if (window.__antigravityIsMountingMods) return;
+          window.__antigravityIsMountingMods = true;
+          if (window.__antigravityModObserver) {
+            try { window.__antigravityModObserver.disconnect(); } catch (e) {}
+          }
+          try {
+            // Permanently remove legacy duplicate unmanaged badges & misplaced slot containers
+            document.querySelectorAll('.antigravity-context-badge').forEach(el => el.remove());
+            document.querySelectorAll('.min-w-0 > #antigravity-slot-header-actions, .no-focus-agent-input > #antigravity-slot-header-actions').forEach(el => el.remove());
 
-          ${mountSnippets.join('\n')}
+            ${mountSnippets.join('\n')}
 
           // 3.1 Initialize Floating Portals in document.body
           let agentPortal = document.getElementById('antigravity-agent-dropdown-portal');
@@ -3428,8 +3471,16 @@ class ModLoader {
           if (typeof window.__syncSubagentModelBadges === 'function') {
             window.__syncSubagentModelBadges();
           }
-          if (typeof window.__observeNativeModelSelector === 'function') {
-            window.__observeNativeModelSelector();
+            if (typeof window.__observeNativeModelSelector === 'function') {
+              window.__observeNativeModelSelector();
+            }
+          } finally {
+            window.__antigravityIsMountingMods = false;
+            if (window.__antigravityModObserver && document.body) {
+              try {
+                window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
+              } catch (e) {}
+            }
           }
         }
 
@@ -3478,10 +3529,26 @@ class ModLoader {
         }
 
         let mountDebounce = null;
-        window.__antigravityModObserver = new MutationObserver(() => {
+        window.__antigravityModObserver = new MutationObserver((mutations) => {
+          if (window.__antigravityIsMountingMods) return;
+          if (Array.isArray(mutations) && mutations.length > 0) {
+            const isInternalModNode = (node) => {
+              let cur = node && node.nodeType === 1 ? node : (node ? node.parentElement : null);
+              while (cur) {
+                const id = typeof cur.getAttribute === 'function' ? (cur.getAttribute('id') || '') : (cur.id || '');
+                if (id.startsWith('antigravity-mod-')) return true;
+                if (cur.classList && typeof cur.classList.contains === 'function' && cur.classList.contains('antigravity-slot-container')) return true;
+                cur = cur.parentElement;
+              }
+              return false;
+            };
+            const hasExternalMutation = mutations.some(m => !m || !isInternalModNode(m.target));
+            if (!hasExternalMutation) return;
+          }
           if (mountDebounce) return;
           mountDebounce = setTimeout(() => {
             mountDebounce = null;
+            if (window.__antigravityIsMountingMods) return;
             const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
             let missingSlot = false;
             for (const btn of triggers) {
@@ -3497,13 +3564,13 @@ class ModLoader {
 
             if (!missingSlot) {
               const auxBtn = document.querySelector('button[data-testid="aux-pane-new-tab-button"]') || document.querySelector('.aux-pane-new-tab-button');
-              if (auxBtn && !document.querySelector('.antigravity-slot-aux-pane-tabs, #antigravity-slot-aux-pane-tabs')) {
+              if (auxBtn && !document.querySelector('.antigravity-slot-aux-pane-tab, #antigravity-slot-aux-pane-tab')) {
                 missingSlot = true;
               }
             }
             if (!missingSlot) {
               const sidebarSlot = document.querySelector('.shrink-0 > .bg-sidebar');
-              if (sidebarSlot && !document.querySelector('.antigravity-slot-sidebar-header, #antigravity-slot-sidebar-header')) {
+              if (sidebarSlot && !document.querySelector('.antigravity-slot-menubar-actions, #antigravity-slot-menubar-actions')) {
                 missingSlot = true;
               }
             }

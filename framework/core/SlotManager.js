@@ -77,21 +77,69 @@ export class SlotManager {
   }
 
   /**
-   * Generates browser-executable JavaScript to mount a mod within a target slot
-   * across ALL conversation tabs and split panels matching the selector.
-   * @param {Object} params
-   * @param {string} params.slotId
-   * @param {string} params.modId
-   * @param {string} params.htmlContent
+   * Computes a compact deterministic signature for an HTML snippet using djb2.
+   * @param {string} html
    * @returns {string}
    */
-  generateMountCode({ slotId, modId, htmlContent }) {
+  static computeHtmlSignature(html) {
+    const text = String(html || '');
+    let hash = 5381;
+    for (let i = 0; i < text.length; i++) {
+      hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
+    }
+    return `${text.length}:${(hash >>> 0).toString(36)}`;
+  }
+
+  /**
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * using default SlotManager definitions.
+   * @param {string} slotId
+   * @param {string} modId
+   * @param {string} htmlContent
+   * @returns {string}
+   */
+  static generateMountSnippet(slotId, modId, htmlContent) {
+    return new SlotManager().generateMountSnippet(slotId, modId, htmlContent);
+  }
+
+  /**
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * across ALL conversation tabs and split panels matching the selector.
+   * @param {string} slotId
+   * @param {string} modId
+   * @param {string} htmlContent
+   * @returns {string}
+   */
+  generateMountSnippet(slotId, modId, htmlContent) {
     const slot = this.getSlot(slotId);
     const containerId = this.getContainerId(slotId);
     const modWrapperId = `antigravity-mod-${modId}`;
+    const htmlSig = SlotManager.computeHtmlSignature(htmlContent);
 
     return `
       (() => {
+        const syncModNode = (container) => {
+          let modNode = container.querySelector('#${modWrapperId}');
+          if (!modNode) {
+            modNode = document.createElement('div');
+            modNode.id = '${modWrapperId}';
+            modNode.className = '${modWrapperId}';
+            modNode.style.display = 'inline-flex';
+            modNode.style.alignItems = 'center';
+            modNode.style.height = '28px';
+            container.appendChild(modNode);
+          }
+          if (modNode.getAttribute('data-version') !== '2') {
+            modNode.setAttribute('data-version', '2');
+          }
+          const prevSig = modNode.getAttribute('data-sig');
+          const isLiveStateMod = '${modId}' === 'agent-selector' || '${modId}' === 'context-tachometer';
+          if (!modNode.firstElementChild || (!isLiveStateMod && prevSig !== '${htmlSig}')) {
+            modNode.innerHTML = ${JSON.stringify(htmlContent)};
+            modNode.setAttribute('data-sig', '${htmlSig}');
+          }
+        };
+
         let anchors = Array.from(document.querySelectorAll('${slot.selector}'));
         if (!anchors.length && '${slotId}' === 'aux-pane-tab') {
           const auxBar = document.querySelector('[data-active-tab-id]') ||
@@ -103,28 +151,17 @@ export class SlotManager {
         }
 
         // Clean up any misplaced legacy slot containers that were injected directly inside non-flex wrappers
-        document.querySelectorAll('#${containerId}').forEach(el => {
-          if (el.parentElement && !el.parentElement.className.includes('flex')) {
-            el.remove();
-          }
-        });
+        if ('${slotId}' === 'header-actions') {
+          document.querySelectorAll('#${containerId}').forEach(el => {
+            if (el.parentElement && (!el.parentElement.className || !String(el.parentElement.className).includes('flex'))) {
+              el.remove();
+            }
+          });
+        }
 
         // If containers already exist in the DOM, ensure mod nodes are refreshed immediately
         document.querySelectorAll('#${containerId}').forEach(container => {
-          let modNode = container.querySelector('#${modWrapperId}');
-          if (!modNode) {
-            modNode = document.createElement('div');
-            modNode.id = '${modWrapperId}';
-            modNode.className = '${modWrapperId}';
-            modNode.style.display = 'inline-flex';
-            modNode.style.alignItems = 'center';
-            modNode.style.height = '28px';
-            container.appendChild(modNode);
-          }
-          modNode.setAttribute('data-version', '2');
-          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
-            modNode.innerHTML = ${JSON.stringify(htmlContent)};
-          }
+          syncModNode(container);
         });
 
         if (!anchors.length) return;
@@ -194,22 +231,22 @@ export class SlotManager {
             }
           }
 
-          let modNode = container.querySelector('#${modWrapperId}');
-          if (!modNode) {
-            modNode = document.createElement('div');
-            modNode.id = '${modWrapperId}';
-            modNode.className = '${modWrapperId}';
-            modNode.style.display = 'inline-flex';
-            modNode.style.alignItems = 'center';
-            modNode.style.height = '28px';
-            container.appendChild(modNode);
-          }
-          modNode.setAttribute('data-version', '2');
-          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
-            modNode.innerHTML = ${JSON.stringify(htmlContent)};
-          }
+          syncModNode(container);
         }
       })();
     `;
+  }
+
+  /**
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * across ALL conversation tabs and split panels matching the selector.
+   * @param {Object} params
+   * @param {string} params.slotId
+   * @param {string} params.modId
+   * @param {string} params.htmlContent
+   * @returns {string} Executable JavaScript.
+   */
+  generateMountCode({ slotId, modId, htmlContent }) {
+    return this.generateMountSnippet(slotId, modId, htmlContent);
   }
 }

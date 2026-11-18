@@ -21,6 +21,7 @@ import { ModelSlotsMod } from '../../mods/model-slots/index.js';
 import { AgentSyncServer } from '../../framework/services/AgentSyncServer.js';
 import { createDefaultHost } from '../../framework/core/ModDaemon.js';
 import { ModLoader } from '../../framework/core/ModLoader.js';
+import { SlotManager } from '../../framework/core/SlotManager.js';
 import { StyleIsolator } from '../../framework/sdk/StyleIsolator.js';
 
 describe('ModelSlotsMod - Catalog Symmetry & Completeness', () => {
@@ -1763,5 +1764,230 @@ describe('ModelSlotsMod & ModLoader - Single-Toggle & Observer Stabilization', (
     assert.ok(hoverBlock.includes('transform: none !important;'), '.antigravity-model-slot-btn:hover must enforce transform: none');
     assert.ok(hoverBlock.includes('-webkit-app-region: no-drag !important;'), '.antigravity-model-slot-btn:hover must enforce -webkit-app-region: no-drag');
     assert.ok(hoverBlock.includes('app-region: no-drag !important;'), '.antigravity-model-slot-btn:hover must enforce app-region: no-drag');
+  });
+
+  it('SlotManager.generateMountSnippet for menubar-actions/model-slots is idempotent and preserves <button> node reference across re-mounts', () => {
+    const html = renderModelSlotsMenubarHtml(DEFAULT_MODEL_SLOTS);
+    const snippet = SlotManager.generateMountSnippet('menubar-actions', 'model-slots', html);
+    const expectedSig = SlotManager.computeHtmlSignature(html);
+
+    let modInnerHtmlWrites = 0;
+    let dataVersionWrites = 0;
+
+    function createMockDomNode(tag, attrs = {}, parent = null) {
+      const listeners = {};
+      const style = {
+        setProperty(k, v) { this[k] = v; }
+      };
+      const node = {
+        tagName: tag.toUpperCase(),
+        nodeType: 1,
+        attributes: { ...attrs },
+        children: [],
+        parentElement: parent,
+        style,
+        classList: {
+          _set: new Set((attrs.class || '').split(/\s+/).filter(Boolean)),
+          add(c) { this._set.add(c); node.attributes.class = Array.from(this._set).join(' '); },
+          remove(c) { this._set.delete(c); node.attributes.class = Array.from(this._set).join(' '); },
+          contains(c) { return this._set.has(c); }
+        },
+        _innerHTML: '',
+        setAttribute(k, v) {
+          if (this.attributes.id === 'antigravity-mod-model-slots' && k === 'data-version') {
+            dataVersionWrites++;
+          }
+          this.attributes[k] = String(v);
+          if (k === 'class') {
+            this.classList._set = new Set(String(v).split(/\s+/).filter(Boolean));
+          }
+        },
+        getAttribute(k) {
+          return Object.prototype.hasOwnProperty.call(this.attributes, k) ? this.attributes[k] : null;
+        },
+        hasAttribute(k) {
+          return Object.prototype.hasOwnProperty.call(this.attributes, k);
+        },
+        appendChild(child) {
+          child.parentElement = this;
+          this.children.push(child);
+          return child;
+        },
+        remove() {
+          if (this.parentElement) {
+            this.parentElement.children = this.parentElement.children.filter(c => c !== this);
+            this.parentElement = null;
+          }
+        },
+        querySelectorAll(selector) {
+          const results = [];
+          const matchSingle = (el, sel) => {
+            if (sel === '.shrink-0 > .bg-sidebar') {
+              return el.classList.contains('bg-sidebar') && el.parentElement && el.parentElement.classList.contains('shrink-0');
+            }
+            if (sel.startsWith('#')) {
+              return el.getAttribute('id') === sel.slice(1);
+            }
+            if (sel.startsWith('.')) {
+              return sel.slice(1).split('.').every(c => el.classList.contains(c));
+            }
+            if (sel === 'button') {
+              return el.tagName === 'BUTTON';
+            }
+            return false;
+          };
+          const walk = (cur) => {
+            for (const child of cur.children) {
+              if (matchSingle(child, selector)) results.push(child);
+              walk(child);
+            }
+          };
+          walk(this);
+          return results;
+        },
+        querySelector(selector) {
+          return this.querySelectorAll(selector)[0] || null;
+        },
+        addEventListener(evt, fn) {
+          listeners[evt] = listeners[evt] || [];
+          listeners[evt].push(fn);
+        }
+      };
+
+      Object.defineProperty(node, 'id', {
+        get() { return this.getAttribute('id') || ''; },
+        set(val) { this.setAttribute('id', val); }
+      });
+      Object.defineProperty(node, 'className', {
+        get() { return this.getAttribute('class') || ''; },
+        set(val) { this.setAttribute('class', val); }
+      });
+      Object.defineProperty(node, 'firstElementChild', {
+        get() { return this.children[0] || null; }
+      });
+      Object.defineProperty(node, 'innerHTML', {
+        get() { return this._innerHTML; },
+        set(val) {
+          if (this.getAttribute('id') === 'antigravity-mod-model-slots') {
+            modInnerHtmlWrites++;
+          }
+          this._innerHTML = String(val);
+          this.children = [];
+          if (this._innerHTML.includes('antigravity-model-slot-planner')) {
+            const group = createMockDomNode('div', { class: 'antigravity-model-slots-group' }, this);
+            const plannerBtn = createMockDomNode('button', {
+              id: 'antigravity-model-slot-planner',
+              class: 'antigravity-model-slot-btn',
+              'data-slot-role': 'planner'
+            }, group);
+            const builderBtn = createMockDomNode('button', {
+              id: 'antigravity-model-slot-builder',
+              class: 'antigravity-model-slot-btn',
+              'data-slot-role': 'builder'
+            }, group);
+            group.appendChild(plannerBtn);
+            group.appendChild(builderBtn);
+            this.children.push(group);
+          }
+        }
+      });
+      return node;
+    }
+
+    const docEl = createMockDomNode('html');
+    const body = createMockDomNode('body', {}, docEl);
+    const shrinkWrapper = createMockDomNode('div', { class: 'shrink-0' }, body);
+    const sidebar = createMockDomNode('div', { class: 'bg-sidebar' }, shrinkWrapper);
+    shrinkWrapper.appendChild(sidebar);
+    body.appendChild(shrinkWrapper);
+    docEl.appendChild(body);
+
+    const documentMock = {
+      body,
+      documentElement: docEl,
+      createElement(tag) { return createMockDomNode(tag); },
+      querySelector(sel) { return docEl.querySelector(sel); },
+      querySelectorAll(sel) { return docEl.querySelectorAll(sel); }
+    };
+
+    const sandbox = vm.createContext({
+      document: documentMock,
+      Array
+    });
+
+    // First mount: creates slot container, modNode, and populates innerHTML once
+    vm.runInContext(snippet, sandbox);
+
+    const slotContainer = sidebar.querySelector('#antigravity-slot-menubar-actions');
+    assert.ok(slotContainer, 'Slot container must be created inside .shrink-0 > .bg-sidebar');
+    const modNode = slotContainer.querySelector('#antigravity-mod-model-slots');
+    assert.ok(modNode, 'Mod node must be created inside slot container');
+    assert.equal(modNode.getAttribute('data-version'), '2');
+    assert.equal(modNode.getAttribute('data-sig'), expectedSig);
+    assert.equal(modInnerHtmlWrites, 1, 'First mount (existing containers + anchors pass) must set innerHTML exactly once');
+    assert.equal(dataVersionWrites, 1, 'First mount must set data-version exactly once');
+
+    const plannerBtnFirst = modNode.querySelector('#antigravity-model-slot-planner');
+    const builderBtnFirst = modNode.querySelector('#antigravity-model-slot-builder');
+    assert.ok(plannerBtnFirst, 'Planner <button> must exist after first mount');
+    assert.ok(builderBtnFirst, 'Builder <button> must exist after first mount');
+
+    // Second mount (re-mount with identical HTML): must NOT touch innerHTML or recreate buttons
+    vm.runInContext(snippet, sandbox);
+
+    assert.equal(modInnerHtmlWrites, 1, 'Re-mounting identical HTML must NOT overwrite modNode.innerHTML');
+    assert.equal(dataVersionWrites, 1, 'Re-mounting must NOT rewrite data-version attribute');
+
+    const plannerBtnSecond = modNode.querySelector('#antigravity-model-slot-planner');
+    const builderBtnSecond = modNode.querySelector('#antigravity-model-slot-builder');
+    assert.strictEqual(plannerBtnSecond, plannerBtnFirst, 'Planner <button> DOM node reference must be preserved across re-mounts');
+    assert.strictEqual(builderBtnSecond, builderBtnFirst, 'Builder <button> DOM node reference must be preserved across re-mounts');
+  });
+
+  it('ModLoader __antigravityModObserver guards mountAllMods with __antigravityIsMountingMods and ignores internal mod mutations', () => {
+    const env = createStabilizationMockEnv({
+      modelSlots: {
+        planner: 'gemini-4-argon-high',
+        builder: 'gemini-4-hydrogen-high'
+      }
+    });
+
+    const shrinkWrapper = env.createEl('div', { class: 'shrink-0' }, env.body);
+    const sidebar = env.createEl('div', { class: 'bg-sidebar' }, shrinkWrapper);
+    const menubarSlot = env.createEl('div', {
+      id: 'antigravity-slot-menubar-actions',
+      class: 'antigravity-slot-container antigravity-slot-menubar-actions'
+    }, sidebar);
+    const modelSlotsModNode = env.createEl('div', {
+      id: 'antigravity-mod-model-slots',
+      class: 'antigravity-mod-model-slots'
+    }, menubarSlot);
+    const innerSpan = env.createEl('span', { class: 'model-slot-value' }, modelSlotsModNode);
+    modelSlotsModNode.appendChild(innerSpan);
+    menubarSlot.appendChild(modelSlotsModNode);
+    sidebar.appendChild(menubarSlot);
+    shrinkWrapper.appendChild(sidebar);
+    env.body.appendChild(shrinkWrapper);
+
+    // Execute injection payload
+    vm.runInContext(env.script, env.sandbox);
+
+    assert.equal(env.windowMock.__antigravityIsMountingMods, false, '__antigravityIsMountingMods must reset to false after mountAllMods finishes');
+
+    const modObserver = env.observerInstances.find(obs =>
+      obs.observeCalls.some(c => c.target === env.body)
+    );
+    assert.ok(modObserver, 'Mod body observer must exist');
+
+    // Mutation strictly inside #antigravity-mod-model-slots must be ignored without scheduling debounce
+    const initialTimeouts = env.scheduledTimeouts.length;
+    modObserver.cb([{ target: innerSpan }]);
+    assert.equal(env.scheduledTimeouts.length, initialTimeouts, 'Internal mod mutation must not schedule mount check');
+
+    // Mutation while __antigravityIsMountingMods is true must be ignored
+    env.windowMock.__antigravityIsMountingMods = true;
+    modObserver.cb([{ target: env.body }]);
+    assert.equal(env.scheduledTimeouts.length, initialTimeouts, 'Mutation while mounting must not schedule mount check');
+    env.windowMock.__antigravityIsMountingMods = false;
   });
 });
