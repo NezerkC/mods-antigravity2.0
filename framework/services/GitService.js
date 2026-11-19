@@ -602,7 +602,7 @@ export class GitService {
         }
       }
 
-      return this.computeTopology(rawCommits);
+      return this.computeTopology(rawCommits, { repoPath });
     } catch (err) {
       return [];
     }

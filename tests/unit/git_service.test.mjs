@@ -151,3 +151,26 @@ test('GitService - getGitHubMetadata caches results per repoPath', () => {
   const meta2 = service.getGitHubMetadata({ repoPath: process.cwd() });
   assert.deepEqual(meta1, meta2);
 });
+
+test('GitService - getGitLog passes repoPath to computeTopology instead of reading process.cwd()', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const { execSync } = await import('node:child_process');
+
+  const tmpRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'git-service-isolated-'));
+  try {
+    execSync('git init -b main', { cwd: tmpRepo, stdio: 'ignore' });
+    execSync('git config user.email "test@example.com"', { cwd: tmpRepo, stdio: 'ignore' });
+    execSync('git config user.name "Tester"', { cwd: tmpRepo, stdio: 'ignore' });
+    fs.writeFileSync(path.join(tmpRepo, 'README.md'), 'hello\n', 'utf-8');
+    execSync('git add README.md && git commit -m "chore: init"', { cwd: tmpRepo, stdio: 'ignore' });
+
+    const service = new GitService();
+    const commits = service.getGitLog({ repoPath: tmpRepo, limit: 5 });
+    assert.equal(commits.length, 1);
+    assert.equal(commits[0].subject, 'chore: init');
+    assert.equal(commits[0].pushed, true, 'Standalone local repo without remotes should compute topology against repoPath');
+  } finally {
+    fs.rmSync(tmpRepo, { recursive: true, force: true });
+  }
+});
