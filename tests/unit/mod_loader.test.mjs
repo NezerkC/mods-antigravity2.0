@@ -232,15 +232,73 @@ test('ModLoader - injection script unlocks Antigravity 2.29 native voice mode an
   assert.ok(script.includes('jetski.developer.customFlagOverrides'));
 });
 
-test('ModLoader - injection script includes window.__toggleVoiceAssistant and localStorage sync', () => {
+test('ModLoader - skips mounting empty-html mods and removes legacy speaker button DOM nodes', async () => {
+  const { VoiceAssistantMod } = await import('../../mods/voice-assistant/index.js');
   const loader = new ModLoader();
+  loader.register(new VoiceAssistantMod());
   const script = loader.buildInjectionPayload({});
 
-  assert.ok(script.includes('window.__toggleVoiceAssistant'));
-  assert.ok(script.includes('window.__syncVoiceAssistantButton'));
-  assert.ok(script.includes('__antigravity_voice_assistant_enabled'));
-  assert.ok(script.includes('data-mod-action="toggle-voice"'));
-  assert.ok(script.includes('#antigravity-voice-assistant-btn'));
+  assert.ok(!script.includes('window.__toggleVoiceAssistant'));
+  assert.ok(!script.includes('window.__syncVoiceAssistantButton'));
+  assert.ok(!script.includes('__antigravity_voice_assistant_enabled'));
+  assert.ok(!script.includes('data-mod-action="toggle-voice"'));
+  assert.ok(!script.includes("container.id = 'antigravity-slot-chat-input-actions'"));
+  assert.ok(script.includes('.antigravity-voice-toast-docked'));
+
+  let removedWrapper = false;
+  let removedSlot = false;
+  const legacyWrapper = {
+    remove() { removedWrapper = true; }
+  };
+  const emptyChatSlot = {
+    children: [],
+    remove() { removedSlot = true; }
+  };
+
+  const makeClassList = () => ({
+    add() {},
+    remove() {},
+    toggle() {},
+    contains() { return false; }
+  });
+
+  const mockDocument = {
+    hidden: false,
+    head: { appendChild() {} },
+    body: { appendChild() {} },
+    getElementById() { return null; },
+    createElement() {
+      return {
+        style: {},
+        classList: makeClassList(),
+        setAttribute() {},
+        getAttribute() { return '2'; },
+        querySelector() { return null; },
+        querySelectorAll() { return []; }
+      };
+    },
+    addEventListener() {},
+    querySelector() { return null; },
+    querySelectorAll(sel) {
+      if (sel.includes('#antigravity-voice-assistant-wrapper')) return [legacyWrapper];
+      if (sel.includes('#antigravity-slot-chat-input-actions')) return [emptyChatSlot];
+      return [];
+    }
+  };
+  const mockWindow = {
+    innerWidth: 1280,
+    innerHeight: 800,
+    location: { pathname: '/', search: '' },
+    addEventListener() {}
+  };
+  const mockLocalStorage = { getItem() { return null; }, setItem() {} };
+  class MockObserver { observe() {} disconnect() {} }
+
+  const runner = new Function('window', 'document', 'localStorage', 'ResizeObserver', 'MutationObserver', script);
+  runner(mockWindow, mockDocument, mockLocalStorage, MockObserver, MockObserver);
+
+  assert.equal(removedWrapper, true, 'Legacy speaker wrapper must be removed from live DOM');
+  assert.equal(removedSlot, true, 'Empty chat-input-actions slot container must be removed from live DOM');
 });
 
 test('ModLoader - includes RDP and window minimize zero-dimension guards, recovery listener, and voice conditioning', () => {
