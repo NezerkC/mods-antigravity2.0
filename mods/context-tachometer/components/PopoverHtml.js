@@ -1,15 +1,17 @@
 export function renderSvgIcon(name, size = 12, color = 'currentColor') {
   switch (name) {
     case 'zap':
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="${color}" fill-opacity="0.2"/></svg>`;
+      return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="${color}" fill-opacity="0.2"/></svg>`;
     case 'clock':
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
+      return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
     case 'calendar':
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`;
+      return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`;
     case 'bot':
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16" stroke-linecap="round"/><line x1="16" y1="16" x2="16" y2="16" stroke-linecap="round"/></svg>`;
+      return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16" stroke-linecap="round"/><line x1="16" y1="16" x2="16" y2="16" stroke-linecap="round"/></svg>`;
     case 'scissors':
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>`;
+      return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>`;
+    case 'chevron-right':
+      return `<svg class="tach-details-chevron" aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><polyline points="9 18 15 12 9 6"/></svg>`;
     default:
       return '';
   }
@@ -122,29 +124,95 @@ export function renderPopoverHtml(metric) {
     return '#22c55e';
   };
 
+  const escapeHtml = (val) => String(val ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+  const getSubagentStatusColor = (status) => {
+    if (status === 'running') return '#38bdf8';
+    if (status === 'killed') return '#71717a';
+    return '#22c55e';
+  };
+
+  const totalSubagentsCount = Array.isArray(m.subagents) && m.subagents.length > 0
+    ? m.subagents.length
+    : chatModels.reduce((sum, cm) => sum + (Array.isArray(cm.subagents) ? cm.subagents.length : 0), 0);
+
   let chatModelsLedgerHtml = '';
   if (chatModels.length > 0) {
     const modelRowsHtml = chatModels.map((cm) => {
-      const safeName = cleanModelName(cm.modelName) || 'Gemini';
+      const safeName = escapeHtml(cleanModelName(cm.modelName) || 'Gemini');
       const quotaShareText = cm.hasDualLimit
         ? `5h:${cm.chatRollingPct}% · 7d:${cm.chatWeeklyPct}%`
         : `7d:${cm.chatWeeklyPct}%`;
+      const modelSubs = Array.isArray(cm.subagents) ? cm.subagents : [];
+
+      if (modelSubs.length === 0) {
+        return `
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 10px; padding: 3px 0; border-top: 1px dashed rgba(255, 255, 255, 0.06); color: #d4d4d8; white-space: nowrap;">
+            <span style="display: flex; align-items: center; gap: 4px; font-weight: 500; color: #e4e4e7; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              ${icon('bot', 12, '#38bdf8')} ${safeName}
+            </span>
+            <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
+              ${cm.displayTokens} <span style="color: #38bdf8; font-weight: 600;">(${quotaShareText})</span>
+            </span>
+          </div>
+        `;
+      }
+
+      const subagentItemsHtml = modelSubs.map((sub) => {
+        const subRole = escapeHtml(sub.role || sub.typeName || 'Subagent');
+        const modeLabel = sub.isInherited ? 'inherit' : escapeHtml(sub.requestedModel || 'explicit');
+        const dotColor = getSubagentStatusColor(sub.status);
+        const subTokensText = escapeHtml(sub.displayTokens || formatCompactTokens(sub.tokens));
+        const indentPrefix = (Number(sub.depth) || 0) > 0 ? '↳ ' : '';
+
+        return `
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 5px; font-size: 9.5px; padding: 1.5px 2px; color: #d4d4d8; white-space: nowrap;">
+            <span style="display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden;">
+              <span style="width: 5px; height: 5px; border-radius: 9999px; background: ${dotColor}; flex-shrink: 0;"></span>
+              <span style="overflow: hidden; text-overflow: ellipsis; color: #e4e4e7;">${indentPrefix}${subRole}</span>
+            </span>
+            <span style="display: flex; align-items: center; gap: 4px; flex-shrink: 0; font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; font-size: 9px; color: #a1a1aa;">
+              <span style="padding: 0 4px; border-radius: 4px; background: rgba(255, 255, 255, 0.06); color: #94a3b8; font-size: 8.5px;">${modeLabel}</span>
+              <span>${subTokensText}</span>
+            </span>
+          </div>
+        `;
+      }).join('');
+
       return `
-        <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 10px; padding: 3px 0; border-top: 1px dashed rgba(255, 255, 255, 0.06); color: #d4d4d8; white-space: nowrap;">
-          <span style="display: flex; align-items: center; gap: 4px; font-weight: 500; color: #e4e4e7; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${safeName}">
-            ${icon('bot', 12, '#38bdf8')} ${safeName}
-          </span>
-          <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
-            ${cm.displayTokens} <span style="color: #38bdf8; font-weight: 600;">(${quotaShareText})</span>
-          </span>
-        </div>
+        <details class="tach-model-details" data-model-key="${safeName}">
+          <summary class="tach-model-summary">
+            <span style="display: flex; align-items: center; gap: 4px; font-weight: 500; color: #e4e4e7; min-width: 0; overflow: hidden;">
+              ${icon('chevron-right', 11, 'currentColor')}
+              ${icon('bot', 12, '#38bdf8')}
+              <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 112px;">${safeName}</span>
+              <span style="padding: 0 5px; border-radius: 9999px; background: rgba(56, 189, 248, 0.14); color: #38bdf8; font-size: 8.5px; font-weight: 600; flex-shrink: 0;">${modelSubs.length} sub</span>
+            </span>
+            <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
+              ${cm.displayTokens} <span style="color: #38bdf8; font-weight: 600;">(${quotaShareText})</span>
+            </span>
+          </summary>
+          <div class="tach-subagent-list">
+            ${subagentItemsHtml}
+          </div>
+        </details>
       `;
     }).join('');
 
+    const totalSubBadgeHtml = totalSubagentsCount > 0
+      ? `<span class="tach-subagent-total-pill" style="font-size: 8.5px; text-transform: none; letter-spacing: 0; padding: 1px 6px; border-radius: 9999px; background: rgba(56, 189, 248, 0.14); color: #38bdf8; font-weight: 600;">${totalSubagentsCount} subagente${totalSubagentsCount === 1 ? '' : 's'}</span>`
+      : '';
+
     chatModelsLedgerHtml = `
       <div style="margin-top: 7px; padding-top: 5px; border-top: 1px solid rgba(255, 255, 255, 0.08);">
-        <div style="font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 3px;">
-          Consumo por Modelo en este Chat
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 3px;">
+          <span>Consumo por Modelo en este Chat</span>
+          ${totalSubBadgeHtml}
         </div>
         ${modelRowsHtml}
       </div>

@@ -137,11 +137,10 @@ export function renderGitGraphPanelHtml(context = {}) {
     const isExpanded = !!c.expanded;
     const files = Array.isArray(c.files) ? c.files : [];
     const hasOrigin = (c.refs || []).some(r => r.includes('origin/'));
-    const commitType = (c.pushed !== undefined)
-      ? (c.pushed === false ? 'local' : 'remote')
-      : (hasOrigin ? 'remote' : 'local');
     const isUnpushed = c.pushed === false || c.syncStatus === 'ahead' || !!c.isUnpushed;
     const isUnpulled = c.syncStatus === 'behind' || !!c.isUnpulled;
+    const commitType = isUnpushed ? 'local' : (hasOrigin ? 'remote' : 'local');
+    const rowTypeCls = isUnpushed ? 'is-local-commit' : 'is-remote-commit';
     let syncPillHtml = '';
     if (isUnpushed) {
       syncPillHtml = `<span class="git-pill-sync git-pill-unpushed" title="Commit local pendiente de push">⇡ Unpushed</span>`;
@@ -186,7 +185,7 @@ export function renderGitGraphPanelHtml(context = {}) {
 
     return `
       <div class="git-commit-item ${isExpanded ? 'is-expanded' : ''}" data-hash="${escapeGitHtml(c.hash)}" data-index="${idx}" data-commit-type="${commitType}">
-        <div class="git-commit-row ${isSelected ? 'selected' : ''}"
+        <div class="git-commit-row ${isSelected ? 'selected' : ''} ${rowTypeCls}"
              data-hash="${escapeGitHtml(c.hash)}"
              data-index="${idx}"
              data-short-hash="${escapeGitHtml(c.shortHash || '')}"

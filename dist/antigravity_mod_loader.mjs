@@ -1993,7 +1993,8 @@ class ModLoader {
 
           const filtered = commits.filter(function(c) {
             const hasOrigin = Array.isArray(c.refs) && c.refs.some(function(r) { return r.indexOf('origin/') !== -1; });
-            const cType = (c.pushed !== undefined) ? (c.pushed === false ? 'local' : 'remote') : (hasOrigin ? 'remote' : 'local');
+            const isLocal = c.pushed === false || c.syncStatus === 'ahead' || !!c.isUnpushed;
+            const cType = isLocal ? 'local' : (hasOrigin ? 'remote' : 'local');
             return cType === filterType;
           });
 
@@ -3026,10 +3027,35 @@ class ModLoader {
                 tpl.innerHTML = renderedPopover;
               }
 
-              // Update live popover content if currently open on screen
+              // Update live popover content if currently open on screen, preserving expanded model disclosures
               const portal = document.getElementById('antigravity-tachometer-popover-portal');
               if (portal && portal.classList.contains('open')) {
+                const openKeys = new Set();
+                const scrollByKey = new Map();
+                portal.querySelectorAll('details.tach-model-details[open]').forEach(det => {
+                  const key = det.getAttribute('data-model-key');
+                  if (key) {
+                    openKeys.add(key);
+                    const listEl = det.querySelector('.tach-subagent-list');
+                    if (listEl && listEl.scrollTop > 0) {
+                      scrollByKey.set(key, listEl.scrollTop);
+                    }
+                  }
+                });
                 portal.innerHTML = renderedPopover;
+                if (openKeys.size > 0) {
+                  portal.querySelectorAll('details.tach-model-details').forEach(det => {
+                    const key = det.getAttribute('data-model-key');
+                    if (key && openKeys.has(key)) {
+                      det.setAttribute('open', '');
+                      const savedScroll = scrollByKey.get(key);
+                      const listEl = det.querySelector('.tach-subagent-list');
+                      if (listEl && savedScroll) {
+                        listEl.scrollTop = savedScroll;
+                      }
+                    }
+                  });
+                }
               }
             }
           });
@@ -3606,6 +3632,120 @@ class TelemetryService {
   }
 
   /**
+   * Unwraps potentially JSON-encoded tool call arguments from transcript logs.
+   * @param {any} rawVal
+   * @returns {any}
+   */
+  unwrapToolArg(rawVal) {
+    if (rawVal === undefined || rawVal === null) return '';
+    if (typeof rawVal !== 'string') return rawVal;
+    const trimmed = rawVal.trim();
+    if (!trimmed) return '';
+    if (
+      (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
+      (trimmed.startsWith('{') && trimmed.endsWith('}'))
+    ) {
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return trimmed.replace(/^["']|["']$/g, '').trim();
+      }
+    }
+    return trimmed;
+  }
+
+  /**
+   * Resolves the effective model name used by a subagent given its requested Model
+   * argument ('inherit', 'flash', 'flash_lite', 'pro', or explicit name) and parent model.
+   * @param {any} rawModelArg
+   * @param {string} [parentActiveModel='']
+   * @returns {{ modelName: string, requestedModel: string, isInherited: boolean }}
+   */
+  resolveSubagentModel(rawModelArg, parentActiveModel = '') {
+    const unwrapped = this.unwrapToolArg(rawModelArg);
+    const requested = typeof unwrapped === 'string' ? unwrapped.trim() : '';
+    const lower = (requested || 'inherit').toLowerCase();
+    const fallbackParent = this.sanitizeModelName(parentActiveModel) || 'Gemini 3.8 Flash';
+
+    if (!requested || lower === 'inherit') {
+      return {
+        modelName: fallbackParent,
+        requestedModel: 'inherit',
+        isInherited: true
+      };
+    }
+    if (lower === 'flash') {
+      return {
+        modelName: 'Gemini 3.8 Flash',
+        requestedModel: 'flash',
+        isInherited: false
+      };
+    }
+    if (lower === 'flash_lite' || lower === 'flash-lite') {
+      return {
+        modelName: 'Gemini 3.8 Flash-Lite',
+        requestedModel: 'flash_lite',
+        isInherited: false
+      };
+    }
+    if (lower === 'pro') {
+      return {
+        modelName: 'Gemini 3.8 Pro',
+        requestedModel: 'pro',
+        isInherited: false
+      };
+    }
+
+    return {
+      modelName: this.sanitizeModelName(requested) || fallbackParent,
+      requestedModel: requested,
+      isInherited: false
+    };
+  }
+
+  /**
+   * Infers conversation ID, conversation directory, and brain root from a transcript path.
+   * @param {string} filePath
+   * @returns {{ convId: string|null, convDir: string|null, brainRoot: string|null }}
+   */
+  inferConversationPaths(filePath) {
+    try {
+      const logsDir = path.dirname(filePath);
+      const sysGenDir = path.dirname(logsDir);
+      const convDir = path.dirname(sysGenDir);
+      const convName = path.basename(convDir);
+      if (
+        path.basename(sysGenDir) === '.system_generated' &&
+        /^[0-9a-fA-F-]{36}$/.test(convName)
+      ) {
+        return {
+          convId: convName,
+          convDir,
+          brainRoot: path.dirname(convDir)
+        };
+      }
+    } catch {}
+    return { convId: null, convDir: null, brainRoot: null };
+  }
+
+  /**
+   * Resolves the transcript file path for a given conversation ID inside brainRoot.
+   * @param {string} convId
+   * @param {string} [brainRoot]
+   * @returns {string|null}
+   */
+  resolveConversationTranscriptPath(convId, brainRoot = this.brainDir) {
+    if (!convId || !brainRoot) return null;
+    const baseLogs = path.join(brainRoot, convId, '.system_generated', 'logs');
+    const compactPath = path.join(baseLogs, 'transcript.jsonl');
+    if (fs.existsSync(compactPath)) return compactPath;
+    const fullPath = path.join(baseLogs, 'transcript_full.jsonl');
+    if (fs.existsSync(fullPath)) return fullPath;
+    return null;
+  }
+
+  /**
    * Default empty telemetry snapshot.
    */
   getEmptySnapshot() {
@@ -3617,6 +3757,7 @@ class TelemetryService {
       steps: 0,
       compactions: [],
       chatModels: [],
+      subagents: [],
       modelQuota: {
         hasDualLimit: true,
         modelName: 'Gemini 3.8 Flash',
@@ -3643,180 +3784,509 @@ class TelemetryService {
   }
 
   /**
-   * Parses a specific transcript JSONL file.
+   * Parses a single transcript file without resolving external child subagent files,
+   * caching raw results keyed by file path and inherited fallback model.
    * @param {string} filePath
+   * @param {string} [inheritedModel='']
+   * @returns {Object|null}
+   */
+  _parseSingleTranscript(filePath, inheritedModel = '') {
+    if (!filePath || !fs.existsSync(filePath)) {
+      return null;
+    }
+
+    const cleanInherited = this.sanitizeModelName(inheritedModel);
+    const stat = fs.statSync(filePath);
+    const totalBytes = stat.size;
+    const mtimeMs = stat.mtimeMs;
+
+    const { convDir } = this.inferConversationPaths(filePath);
+    const subagentsMetaDir = convDir ? path.join(convDir, '.system_generated', 'subagents') : null;
+    let subagentsDirSig = '';
+    if (subagentsMetaDir && fs.existsSync(subagentsMetaDir)) {
+      try {
+        const metaFiles = fs.readdirSync(subagentsMetaDir).filter(f => f.endsWith('.json'));
+        let maxSubMtime = 0;
+        for (const mf of metaFiles) {
+          const mst = fs.statSync(path.join(subagentsMetaDir, mf)).mtimeMs;
+          if (mst > maxSubMtime) maxSubMtime = mst;
+        }
+        subagentsDirSig = `${metaFiles.length}:${maxSubMtime}`;
+      } catch {}
+    }
+
+    const cacheKey = `${filePath}::${cleanInherited}`;
+    const cached = this.parseCache.get(cacheKey);
+    if (
+      cached &&
+      cached.mtimeMs === mtimeMs &&
+      cached.size === totalBytes &&
+      cached.subagentsDirSig === subagentsDirSig
+    ) {
+      return cached.rawResult;
+    }
+
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const lines = content.split('\n');
+
+    const raw = {
+      userChars: 0,
+      modelChars: 0,
+      thinkingChars: 0,
+      toolsChars: 0,
+      mcpChars: 0,
+      otherChars: 0,
+      totalChars: 0,
+      steps: 0
+    };
+
+    let totalRawChars = 0;
+    const stepEntries = [];
+    const compactions = [];
+    let detectedModel = cleanInherited || '';
+    const modelLedger = new Map();
+    let directBillingTokens = 0;
+
+    const pendingSubagentCalls = [];
+    const spawnedSubagentsMap = new Map();
+    const repliedSenders = new Set();
+    const killedSubagentIds = new Set();
+    let hasPlannerResponse = false;
+    let lastPlannerHasTools = false;
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      raw.steps++;
+
+      let obj;
+      try {
+        obj = JSON.parse(line);
+      } catch {
+        totalRawChars += line.length;
+        continue;
+      }
+
+      if (obj.type === 'CHECKPOINT') {
+        const preCompactTokens = Math.round(totalRawChars / this.charsPerToken);
+        const postCompactTokens = Math.round(line.length / this.charsPerToken);
+        compactions.push({
+          step: obj.step_index ?? raw.steps,
+          fromTokens: preCompactTokens,
+          toTokens: postCompactTokens,
+          displayFrom: this.formatTokens(preCompactTokens),
+          displayTo: this.formatTokens(postCompactTokens),
+          timestamp: obj.created_at || null
+        });
+        totalRawChars = line.length;
+        raw.userChars = 0;
+        raw.modelChars = 0;
+        raw.thinkingChars = 0;
+        raw.toolsChars = 0;
+        raw.mcpChars = 0;
+        raw.otherChars = 0;
+      } else {
+        totalRawChars += line.length;
+      }
+
+      if (
+        (obj.type === 'USER_INPUT' || obj.source === 'USER_EXPLICIT') &&
+        typeof obj.content === 'string' &&
+        obj.content.includes('<USER_SETTINGS_CHANGE>')
+      ) {
+        const sectionMatch = obj.content.match(/<USER_SETTINGS_CHANGE>([\s\S]*?)<\/USER_SETTINGS_CHANGE>/i);
+        const settingsBlock = sectionMatch ? sectionMatch[1] : obj.content;
+        const match = settingsBlock.match(/Model Selection[`'"]?\s+from\s+.*?\s+to\s+([^\n<]+)/i);
+        if (match && match[1]) {
+          detectedModel = this.sanitizeModelName(match[1]);
+        }
+      }
+
+      if (obj.model) {
+        detectedModel = this.sanitizeModelName(obj.model);
+      }
+
+      const activeModel = this.sanitizeModelName(detectedModel) || 'Gemini 3.8 Flash';
+      const len = (str) => (typeof str === 'string' ? str.length : 0);
+      const contentLen = len(obj.content);
+      const thinkingLen = len(obj.thinking);
+      const toolCallsLen = obj.tool_calls ? JSON.stringify(obj.tool_calls).length : 0;
+
+      if (obj.type === 'PLANNER_RESPONSE') {
+        hasPlannerResponse = true;
+        lastPlannerHasTools = Array.isArray(obj.tool_calls) && obj.tool_calls.length > 0;
+      }
+
+      if (Array.isArray(obj.tool_calls)) {
+        for (const tc of obj.tool_calls) {
+          if (!tc || !tc.name) continue;
+          const args = tc.args || tc.arguments || {};
+          if (tc.name === 'invoke_subagent') {
+            const batchSubagents = this.unwrapToolArg(args.Subagents);
+            if (Array.isArray(batchSubagents)) {
+              for (const subItem of batchSubagents) {
+                if (!subItem || typeof subItem !== 'object') continue;
+                pendingSubagentCalls.push({
+                  rawModel: subItem.Model,
+                  role: String(this.unwrapToolArg(subItem.Role) || '').trim(),
+                  typeName: String(this.unwrapToolArg(subItem.TypeName) || 'subagent').trim(),
+                  parentModel: activeModel,
+                  stepIndex: obj.step_index ?? raw.steps,
+                  timestamp: obj.created_at || null
+                });
+              }
+            } else {
+              pendingSubagentCalls.push({
+                rawModel: args.Model,
+                role: String(this.unwrapToolArg(args.Role) || '').trim(),
+                typeName: String(this.unwrapToolArg(args.TypeName) || 'subagent').trim(),
+                parentModel: activeModel,
+                stepIndex: obj.step_index ?? raw.steps,
+                timestamp: obj.created_at || null
+              });
+            }
+          } else if (tc.name === 'manage_subagents') {
+            const action = String(this.unwrapToolArg(args.Action) || '').toLowerCase();
+            if (action === 'kill_all') {
+              for (const existingId of spawnedSubagentsMap.keys()) {
+                killedSubagentIds.add(existingId);
+              }
+            } else if (action === 'kill') {
+              const ids = this.unwrapToolArg(args.ConversationIds);
+              if (Array.isArray(ids)) {
+                for (const id of ids) {
+                  if (typeof id === 'string') killedSubagentIds.add(id.trim());
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (
+        obj.type === 'GENERIC' &&
+        typeof obj.content === 'string' &&
+        obj.content.includes('Created the following subagent:')
+      ) {
+        const idMatch = obj.content.match(/Created the following subagent:[\s\S]*?"conversationId"\s*:\s*"([0-9a-fA-F-]{36})"/);
+        if (idMatch && idMatch[1]) {
+          const childId = idMatch[1];
+          const pending = pendingSubagentCalls.shift() || {
+            rawModel: 'inherit',
+            role: '',
+            typeName: 'subagent',
+            parentModel: activeModel,
+            stepIndex: obj.step_index ?? raw.steps,
+            timestamp: obj.created_at || null
+          };
+          spawnedSubagentsMap.set(childId, {
+            conversationId: childId,
+            rawModel: pending.rawModel,
+            role: pending.role,
+            typeName: pending.typeName || 'subagent',
+            parentModel: pending.parentModel || activeModel,
+            spawnStepIndex: pending.stepIndex,
+            timestamp: pending.timestamp || obj.created_at || null,
+            state: 'SUBAGENT_STATE_ALIVE'
+          });
+        }
+      }
+
+      if (typeof obj.content === 'string' && obj.content.includes('sender=')) {
+        const senderMatches = obj.content.matchAll(/\bsender=([0-9a-fA-F-]{36})\b/g);
+        for (const sm of senderMatches) {
+          if (sm[1]) repliedSenders.add(sm[1]);
+        }
+      }
+
+      let stepBillingTokens = 0;
+      if (obj.type === 'PLANNER_RESPONSE' && (obj.input_tokens !== undefined || obj.output_tokens !== undefined)) {
+        if (obj.cache_read_tokens !== undefined) {
+          stepBillingTokens = Math.max(
+            obj.output_tokens || 0,
+            Math.round((contentLen + thinkingLen + toolCallsLen) / this.charsPerToken)
+          );
+        } else {
+          stepBillingTokens = (obj.input_tokens || 0) + (obj.output_tokens || 0);
+        }
+      } else if (obj.type === 'USER_INPUT' || obj.type === 'PLANNER_RESPONSE') {
+        stepBillingTokens = Math.round((contentLen + thinkingLen) / this.charsPerToken);
+      }
+
+      directBillingTokens += stepBillingTokens;
+      const stepContextTokens = Math.round(line.length / this.charsPerToken);
+
+      if (!modelLedger.has(activeModel)) {
+        modelLedger.set(activeModel, {
+          tokens: 0,
+          contextTokens: 0
+        });
+      }
+      const ledgerEntry = modelLedger.get(activeModel);
+      ledgerEntry.tokens += stepBillingTokens;
+      ledgerEntry.contextTokens += stepContextTokens;
+
+      if (obj.created_at) {
+        const t = new Date(obj.created_at).getTime();
+        if (!isNaN(t)) {
+          stepEntries.push({
+            timestamp: t,
+            tokens: stepBillingTokens,
+            model: activeModel
+          });
+        }
+      }
+
+      if (obj.thinking) {
+        raw.thinkingChars += thinkingLen;
+      }
+
+      if (obj.tool_calls && Array.isArray(obj.tool_calls)) {
+        const isMcp = obj.tool_calls.some(tc =>
+          tc.name && (tc.name.startsWith('mcp_') || tc.name === 'call_mcp_tool')
+        );
+        if (isMcp) raw.mcpChars += contentLen + toolCallsLen;
+        else raw.toolsChars += contentLen + toolCallsLen;
+      } else if (obj.type === 'USER_INPUT') {
+        raw.userChars += contentLen;
+      } else if (obj.type === 'PLANNER_RESPONSE') {
+        raw.modelChars += contentLen;
+      } else if (obj.type === 'GENERIC') {
+        raw.toolsChars += contentLen + toolCallsLen;
+      } else {
+        raw.otherChars += contentLen;
+      }
+    }
+
+    if (subagentsMetaDir && fs.existsSync(subagentsMetaDir)) {
+      try {
+        const metaFiles = fs.readdirSync(subagentsMetaDir)
+          .filter(f => f.endsWith('.json'))
+          .sort();
+        for (const mf of metaFiles) {
+          try {
+            const metaObj = JSON.parse(fs.readFileSync(path.join(subagentsMetaDir, mf), 'utf-8'));
+            const cid = metaObj.conversationId || path.basename(mf, '.json');
+            if (!cid) continue;
+            const existing = spawnedSubagentsMap.get(cid);
+            const metaRole = metaObj.subagentDescriptor?.role || '';
+            const metaType = metaObj.subagentDescriptor?.typeName || '';
+            if (existing) {
+              if (metaRole && !existing.role) existing.role = metaRole;
+              if (metaType && (!existing.typeName || existing.typeName === 'subagent')) {
+                existing.typeName = metaType;
+              }
+              if (metaObj.state) existing.state = metaObj.state;
+              if (metaObj.spawnStepIndex !== undefined) existing.spawnStepIndex = metaObj.spawnStepIndex;
+            } else {
+              spawnedSubagentsMap.set(cid, {
+                conversationId: cid,
+                rawModel: 'inherit',
+                role: metaRole,
+                typeName: metaType || 'subagent',
+                parentModel: this.sanitizeModelName(detectedModel) || 'Gemini 3.8 Flash',
+                spawnStepIndex: metaObj.spawnStepIndex ?? 0,
+                timestamp: null,
+                state: metaObj.state || 'SUBAGENT_STATE_ALIVE'
+              });
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+
+    for (const killedId of killedSubagentIds) {
+      const entry = spawnedSubagentsMap.get(killedId);
+      if (entry) entry.state = 'SUBAGENT_STATE_KILLED';
+    }
+
+    raw.totalChars = totalRawChars;
+    const estTokens = Math.round(raw.totalChars / this.charsPerToken);
+    const pctVal = (estTokens / this.tokenLimit) * 100;
+    const pct = pctVal < 0.01 && estTokens > 0 ? '<0.01' : pctVal.toFixed(pctVal < 1 ? 2 : 1);
+
+    const toTokens = (chars) => Math.round(chars / this.charsPerToken);
+    const catPct = (t) => (estTokens > 0 ? Math.round((t / estTokens) * 100) : 0);
+
+    const userTokens = toTokens(raw.userChars);
+    const modelTokens = toTokens(raw.modelChars);
+    const thinkingTokens = toTokens(raw.thinkingChars);
+    const toolsTokens = toTokens(raw.toolsChars);
+    const mcpTokens = toTokens(raw.mcpChars);
+    const otherTokens = toTokens(raw.otherChars);
+
+    const rawModelEntries = Array.from(modelLedger.entries()).map(([modelName, data]) => ({
+      modelName,
+      tokens: data.tokens,
+      contextTokens: data.contextTokens
+    }));
+
+    const rawResult = {
+      estTokens,
+      pct,
+      displayTokens: this.formatTokens(estTokens),
+      sizeKb: Math.round(totalBytes / 1024),
+      steps: raw.steps,
+      compactions,
+      detectedModel: this.sanitizeModelName(detectedModel) || 'Gemini 3.8 Flash',
+      directBillingTokens,
+      stepEntries,
+      rawModelEntries,
+      spawnedSubagents: Array.from(spawnedSubagentsMap.values()),
+      repliedSenders: Array.from(repliedSenders),
+      hasPlannerResponse,
+      lastPlannerHasTools,
+      breakdown: {
+        user: { tokens: userTokens, pct: catPct(userTokens) },
+        model: { tokens: modelTokens, pct: catPct(modelTokens) },
+        thinking: { tokens: thinkingTokens, pct: catPct(thinkingTokens) },
+        tools: { tokens: toolsTokens, pct: catPct(toolsTokens) },
+        mcp: { tokens: mcpTokens, pct: catPct(mcpTokens) },
+        other: { tokens: otherTokens, pct: catPct(otherTokens) }
+      }
+    };
+
+    this.parseCache.set(cacheKey, {
+      mtimeMs,
+      size: totalBytes,
+      subagentsDirSig,
+      rawResult
+    });
+
+    return rawResult;
+  }
+
+  /**
+   * Recursively resolves the subagent execution tree for a parsed parent transcript.
+   * @param {Object} parentRaw
+   * @param {string} brainRoot
+   * @param {Set<string>} visitedIds
+   * @param {number} [depth=0]
+   * @returns {Array<Object>}
+   */
+  _collectSubagentTree(parentRaw, brainRoot, visitedIds, depth = 0) {
+    if (!parentRaw || !Array.isArray(parentRaw.spawnedSubagents) || depth > 6) {
+      return [];
+    }
+
+    const repliedSet = new Set(parentRaw.repliedSenders || []);
+    const collected = [];
+
+    for (const spawn of parentRaw.spawnedSubagents) {
+      const cid = spawn.conversationId;
+      if (!cid || visitedIds.has(cid)) continue;
+      visitedIds.add(cid);
+
+      const resolved = this.resolveSubagentModel(spawn.rawModel, spawn.parentModel);
+      const childPath = brainRoot ? this.resolveConversationTranscriptPath(cid, brainRoot) : null;
+      const childRaw = childPath ? this._parseSingleTranscript(childPath, resolved.modelName) : null;
+
+      const effectiveModel = childRaw && childRaw.detectedModel
+        ? childRaw.detectedModel
+        : resolved.modelName;
+      const childTokens = childRaw ? childRaw.directBillingTokens : 0;
+      const childSteps = childRaw ? childRaw.steps : 0;
+
+      let status = 'running';
+      if (spawn.state === 'SUBAGENT_STATE_KILLED') {
+        status = 'killed';
+      } else if (
+        repliedSet.has(cid) ||
+        (childRaw && childRaw.hasPlannerResponse && !childRaw.lastPlannerHasTools)
+      ) {
+        status = 'done';
+      }
+
+      collected.push({
+        conversationId: cid,
+        role: spawn.role || spawn.typeName || 'Subagent',
+        typeName: spawn.typeName || 'subagent',
+        modelName: effectiveModel,
+        requestedModel: resolved.requestedModel,
+        isInherited: resolved.isInherited,
+        tokens: childTokens,
+        displayTokens: this.formatTokens(childTokens),
+        steps: childSteps,
+        status,
+        spawnStepIndex: spawn.spawnStepIndex ?? 0,
+        depth,
+        stepEntries: childRaw ? childRaw.stepEntries : []
+      });
+
+      if (childRaw && Array.isArray(childRaw.spawnedSubagents) && childRaw.spawnedSubagents.length > 0) {
+        const nested = this._collectSubagentTree(childRaw, brainRoot, visitedIds, depth + 1);
+        collected.push(...nested);
+      }
+    }
+
+    return collected;
+  }
+
+  /**
+   * Parses a specific transcript JSONL file and resolves any spawned subagents
+   * along with their effective models and per-model consumption breakdown.
+   * @param {string} filePath
+   * @param {Object} [options]
+   * @param {string} [options.inheritedModel]
+   * @param {string} [options.brainDir]
    * @returns {Object}
    */
-  parseTranscriptFile(filePath) {
+  parseTranscriptFile(filePath, options = {}) {
     try {
-      if (!fs.existsSync(filePath)) {
+      if (!filePath || !fs.existsSync(filePath)) {
         return this.getEmptySnapshot();
       }
 
-      const stat = fs.statSync(filePath);
-      const totalBytes = stat.size;
-      const mtimeMs = stat.mtimeMs;
-      const cached = this.parseCache.get(filePath);
-      if (cached && cached.mtimeMs === mtimeMs && cached.size === totalBytes) {
-        return JSON.parse(JSON.stringify(cached.snapshot));
+      const { convId, brainRoot: inferredBrainRoot } = this.inferConversationPaths(filePath);
+      const effectiveBrainRoot = options.brainDir || inferredBrainRoot || this.brainDir;
+      const rawParsed = this._parseSingleTranscript(filePath, options.inheritedModel || '');
+      if (!rawParsed) {
+        return this.getEmptySnapshot();
       }
 
-      const content = fs.readFileSync(filePath, 'utf-8');
-      const lines = content.split('\n');
+      const visitedIds = new Set();
+      if (convId) visitedIds.add(convId);
 
-      const raw = {
-        userChars: 0,
-        modelChars: 0,
-        thinkingChars: 0,
-        toolsChars: 0,
-        mcpChars: 0,
-        otherChars: 0,
-        totalChars: 0,
-        steps: 0
-      };
+      const subagentNodes = this._collectSubagentTree(rawParsed, effectiveBrainRoot, visitedIds, 0);
 
-      let totalRawChars = 0;
-      const stepEntries = [];
-      const compactions = [];
-      let detectedModel = '';
-      const modelLedger = new Map();
+      const combinedLedger = new Map();
+      for (const entry of rawParsed.rawModelEntries) {
+        combinedLedger.set(entry.modelName, {
+          directTokens: entry.tokens,
+          subagentTokens: 0,
+          tokens: entry.tokens,
+          contextTokens: entry.contextTokens,
+          subagents: []
+        });
+      }
 
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        raw.steps++;
+      const combinedStepEntries = [...rawParsed.stepEntries];
+      const subagents = [];
 
-        let obj;
-        try {
-          obj = JSON.parse(line);
-        } catch {
-          totalRawChars += line.length;
-          continue;
+      for (const node of subagentNodes) {
+        const { stepEntries: childSteps, ...publicSubagent } = node;
+        subagents.push(publicSubagent);
+
+        if (Array.isArray(childSteps) && childSteps.length > 0) {
+          combinedStepEntries.push(...childSteps);
         }
 
-        if (obj.type === 'CHECKPOINT') {
-          const preCompactTokens = Math.round(totalRawChars / this.charsPerToken);
-          const postCompactTokens = Math.round(line.length / this.charsPerToken);
-          compactions.push({
-            step: obj.step_index ?? raw.steps,
-            fromTokens: preCompactTokens,
-            toTokens: postCompactTokens,
-            displayFrom: this.formatTokens(preCompactTokens),
-            displayTo: this.formatTokens(postCompactTokens),
-            timestamp: obj.created_at || null
-          });
-          totalRawChars = line.length;
-          raw.userChars = 0;
-          raw.modelChars = 0;
-          raw.thinkingChars = 0;
-          raw.toolsChars = 0;
-          raw.mcpChars = 0;
-          raw.otherChars = 0;
-        } else {
-          totalRawChars += line.length;
-        }
-
-        if (
-          (obj.type === 'USER_INPUT' || obj.source === 'USER_EXPLICIT') &&
-          typeof obj.content === 'string' &&
-          obj.content.includes('<USER_SETTINGS_CHANGE>')
-        ) {
-          const sectionMatch = obj.content.match(/<USER_SETTINGS_CHANGE>([\s\S]*?)<\/USER_SETTINGS_CHANGE>/i);
-          const settingsBlock = sectionMatch ? sectionMatch[1] : obj.content;
-          const match = settingsBlock.match(/Model Selection[`'"]?\s+from\s+.*?\s+to\s+([^\n<]+)/i);
-          if (match && match[1]) {
-            detectedModel = this.sanitizeModelName(match[1]);
-          }
-        }
-
-        if (obj.model) {
-          detectedModel = this.sanitizeModelName(obj.model);
-        }
-
-        const activeModel = this.sanitizeModelName(detectedModel) || 'Gemini 3.8 Flash';
-        const len = (str) => (typeof str === 'string' ? str.length : 0);
-        const contentLen = len(obj.content);
-        const thinkingLen = len(obj.thinking);
-        const toolCallsLen = obj.tool_calls ? JSON.stringify(obj.tool_calls).length : 0;
-
-        let stepBillingTokens = 0;
-        if (obj.type === 'PLANNER_RESPONSE' && (obj.input_tokens !== undefined || obj.output_tokens !== undefined)) {
-          if (obj.cache_read_tokens !== undefined) {
-            stepBillingTokens = Math.max(
-              obj.output_tokens || 0,
-              Math.round((contentLen + thinkingLen + toolCallsLen) / this.charsPerToken)
-            );
-          } else {
-            stepBillingTokens = (obj.input_tokens || 0) + (obj.output_tokens || 0);
-          }
-        } else if (obj.type === 'USER_INPUT' || obj.type === 'PLANNER_RESPONSE') {
-          stepBillingTokens = Math.round((contentLen + thinkingLen) / this.charsPerToken);
-        }
-
-        const stepContextTokens = Math.round(line.length / this.charsPerToken);
-
-        if (!modelLedger.has(activeModel)) {
-          modelLedger.set(activeModel, {
+        if (!combinedLedger.has(publicSubagent.modelName)) {
+          combinedLedger.set(publicSubagent.modelName, {
+            directTokens: 0,
+            subagentTokens: 0,
             tokens: 0,
-            contextTokens: 0
+            contextTokens: 0,
+            subagents: []
           });
         }
-        const ledgerEntry = modelLedger.get(activeModel);
-        ledgerEntry.tokens += stepBillingTokens;
-        ledgerEntry.contextTokens += stepContextTokens;
-
-        if (obj.created_at) {
-          const t = new Date(obj.created_at).getTime();
-          if (!isNaN(t)) {
-            stepEntries.push({
-              timestamp: t,
-              tokens: stepBillingTokens,
-              model: activeModel
-            });
-          }
-        }
-
-        if (obj.thinking) {
-          raw.thinkingChars += thinkingLen;
-        }
-
-        if (obj.tool_calls && Array.isArray(obj.tool_calls)) {
-          const isMcp = obj.tool_calls.some(tc =>
-            tc.name && (tc.name.startsWith('mcp_') || tc.name === 'call_mcp_tool')
-          );
-          if (isMcp) raw.mcpChars += contentLen + toolCallsLen;
-          else raw.toolsChars += contentLen + toolCallsLen;
-        } else if (obj.type === 'USER_INPUT') {
-          raw.userChars += contentLen;
-        } else if (obj.type === 'PLANNER_RESPONSE') {
-          raw.modelChars += contentLen;
-        } else if (obj.type === 'GENERIC') {
-          raw.toolsChars += contentLen + toolCallsLen;
-        } else {
-          raw.otherChars += contentLen;
-        }
+        const target = combinedLedger.get(publicSubagent.modelName);
+        target.subagentTokens += publicSubagent.tokens;
+        target.tokens += publicSubagent.tokens;
+        target.subagents.push(publicSubagent);
       }
-
-      // Total characters reflects real serialized message envelope sent to context window
-      raw.totalChars = totalRawChars;
-
-      const estTokens = Math.round(raw.totalChars / this.charsPerToken);
-      const pctVal = (estTokens / this.tokenLimit) * 100;
-      const pct = pctVal < 0.01 && estTokens > 0 ? '<0.01' : pctVal.toFixed(pctVal < 1 ? 2 : 1);
-
-      const toTokens = (chars) => Math.round(chars / this.charsPerToken);
-      const catPct = (t) => (estTokens > 0 ? Math.round((t / estTokens) * 100) : 0);
-
-      const userTokens = toTokens(raw.userChars);
-      const modelTokens = toTokens(raw.modelChars);
-      const thinkingTokens = toTokens(raw.thinkingChars);
-      const toolsTokens = toTokens(raw.toolsChars);
-      const mcpTokens = toTokens(raw.mcpChars);
-      const otherTokens = toTokens(raw.otherChars);
-
-      const displayTokens = this.formatTokens(estTokens);
 
       const chatModels = [];
-      for (const [modelName, data] of modelLedger.entries()) {
+      for (const [modelName, data] of combinedLedger.entries()) {
         const { family, hasDualLimit, rollingCeiling, weeklyCeiling } = this.classifyModelFamily(modelName);
         const chatRollingPct = hasDualLimit && rollingCeiling > 0
           ? Math.min(100, Math.round((data.tokens / rollingCeiling) * 100))
@@ -3829,38 +4299,35 @@ class TelemetryService {
           modelName,
           family,
           hasDualLimit,
+          directTokens: data.directTokens,
+          subagentTokens: data.subagentTokens,
           tokens: data.tokens,
           contextTokens: data.contextTokens,
           displayTokens: this.formatTokens(data.tokens),
           chatRollingPct,
-          chatWeeklyPct
+          chatWeeklyPct,
+          subagentCount: data.subagents.length,
+          subagents: data.subagents
         });
       }
 
-      const modelQuota = this.resolveModelQuota(detectedModel, stepEntries, chatModels);
+      const modelQuota = this.resolveModelQuota(rawParsed.detectedModel, combinedStepEntries, chatModels);
 
-      const snapshotResult = {
-        estTokens,
-        pct,
-        displayTokens,
-        sizeKb: Math.round(totalBytes / 1024),
-        steps: raw.steps,
-        compactions,
-        detectedModel: detectedModel || 'Gemini 3.8 Flash',
-        stepEntries,
+      return JSON.parse(JSON.stringify({
+        estTokens: rawParsed.estTokens,
+        pct: rawParsed.pct,
+        displayTokens: rawParsed.displayTokens,
+        sizeKb: rawParsed.sizeKb,
+        steps: rawParsed.steps,
+        compactions: rawParsed.compactions,
+        detectedModel: rawParsed.detectedModel,
+        directStepEntries: rawParsed.stepEntries,
+        stepEntries: combinedStepEntries,
         chatModels,
+        subagents,
         modelQuota,
-        breakdown: {
-          user: { tokens: userTokens, pct: catPct(userTokens) },
-          model: { tokens: modelTokens, pct: catPct(modelTokens) },
-          thinking: { tokens: thinkingTokens, pct: catPct(thinkingTokens) },
-          tools: { tokens: toolsTokens, pct: catPct(toolsTokens) },
-          mcp: { tokens: mcpTokens, pct: catPct(mcpTokens) },
-          other: { tokens: otherTokens, pct: catPct(otherTokens) }
-        }
-      };
-      this.parseCache.set(filePath, { mtimeMs, size: totalBytes, snapshot: snapshotResult });
-      return snapshotResult;
+        breakdown: rawParsed.breakdown
+      }));
     } catch {
       return this.getEmptySnapshot();
     }
@@ -4035,17 +4502,65 @@ class TelemetryService {
         .sort((a, b) => b.mtime - a.mtime);
 
       const activeDirs = dirs.filter((item, idx) => idx < 25 || (now - item.mtime) <= sevenDaysMs);
+      const inheritedModelByConv = new Map();
 
-      const globalStepEntries = [];
+      // First pass: discover parent -> subagent model inheritance across active conversations
       for (const item of activeDirs) {
-        const snapshot = this.parseTranscriptFile(item.targetPath);
-        metrics[item.id] = snapshot;
-        if (Array.isArray(snapshot.stepEntries)) {
-          globalStepEntries.push(...snapshot.stepEntries);
+        const raw = this._parseSingleTranscript(item.targetPath, inheritedModelByConv.get(item.id) || '');
+        if (!raw || !Array.isArray(raw.spawnedSubagents)) continue;
+        for (const spawn of raw.spawnedSubagents) {
+          if (!spawn.conversationId) continue;
+          const resolved = this.resolveSubagentModel(spawn.rawModel, spawn.parentModel || raw.detectedModel);
+          if (!inheritedModelByConv.has(spawn.conversationId)) {
+            inheritedModelByConv.set(spawn.conversationId, resolved.modelName);
+          }
         }
       }
 
-      // Re-resolve account-wide quota using global steps across active chats in brain
+      // Propagate multi-level inheritance (e.g. coordinator -> worker subagents)
+      for (const item of activeDirs) {
+        const inherited = inheritedModelByConv.get(item.id);
+        if (!inherited) continue;
+        const raw = this._parseSingleTranscript(item.targetPath, inherited);
+        if (!raw || !Array.isArray(raw.spawnedSubagents)) continue;
+        for (const spawn of raw.spawnedSubagents) {
+          if (!spawn.conversationId) continue;
+          const resolved = this.resolveSubagentModel(spawn.rawModel, spawn.parentModel || raw.detectedModel);
+          inheritedModelByConv.set(spawn.conversationId, resolved.modelName);
+        }
+      }
+
+      const countedConvIds = new Set();
+      const globalStepEntries = [];
+
+      for (const item of activeDirs) {
+        const snapshot = this.parseTranscriptFile(item.targetPath, {
+          inheritedModel: inheritedModelByConv.get(item.id) || '',
+          brainDir: this.brainDir
+        });
+        metrics[item.id] = snapshot;
+
+        if (!countedConvIds.has(item.id)) {
+          countedConvIds.add(item.id);
+          if (Array.isArray(snapshot.directStepEntries)) {
+            globalStepEntries.push(...snapshot.directStepEntries);
+          }
+        }
+
+        if (Array.isArray(snapshot.subagents)) {
+          for (const sub of snapshot.subagents) {
+            if (!sub.conversationId || countedConvIds.has(sub.conversationId)) continue;
+            countedConvIds.add(sub.conversationId);
+            const subPath = this.resolveConversationTranscriptPath(sub.conversationId, this.brainDir);
+            const subRaw = subPath ? this._parseSingleTranscript(subPath, sub.modelName) : null;
+            if (subRaw && Array.isArray(subRaw.stepEntries)) {
+              globalStepEntries.push(...subRaw.stepEntries);
+            }
+          }
+        }
+      }
+
+      // Re-resolve account-wide quota using deduplicated global steps across active chats & subagents
       for (const id of Object.keys(metrics)) {
         const snap = metrics[id];
         snap.modelQuota = this.resolveModelQuota(
@@ -4054,6 +4569,7 @@ class TelemetryService {
           snap.chatModels
         );
         delete snap.stepEntries;
+        delete snap.directStepEntries;
       }
     } catch {
       // Gracefully prevent background hook crashes
@@ -6253,15 +6769,17 @@ function renderGaugeSvg(pct = 0, size = 18) {
 function renderSvgIcon(name, size = 12, color = 'currentColor') {
   switch (name) {
     case 'zap':
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="${color}" fill-opacity="0.2"/></svg>`;
+      return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="${color}" fill-opacity="0.2"/></svg>`;
     case 'clock':
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
+      return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
     case 'calendar':
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`;
+      return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`;
     case 'bot':
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16" stroke-linecap="round"/><line x1="16" y1="16" x2="16" y2="16" stroke-linecap="round"/></svg>`;
+      return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16" stroke-linecap="round"/><line x1="16" y1="16" x2="16" y2="16" stroke-linecap="round"/></svg>`;
     case 'scissors':
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>`;
+      return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>`;
+    case 'chevron-right':
+      return `<svg class="tach-details-chevron" aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><polyline points="9 18 15 12 9 6"/></svg>`;
     default:
       return '';
   }
@@ -6374,29 +6892,95 @@ function renderPopoverHtml(metric) {
     return '#22c55e';
   };
 
+  const escapeHtml = (val) => String(val ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+  const getSubagentStatusColor = (status) => {
+    if (status === 'running') return '#38bdf8';
+    if (status === 'killed') return '#71717a';
+    return '#22c55e';
+  };
+
+  const totalSubagentsCount = Array.isArray(m.subagents) && m.subagents.length > 0
+    ? m.subagents.length
+    : chatModels.reduce((sum, cm) => sum + (Array.isArray(cm.subagents) ? cm.subagents.length : 0), 0);
+
   let chatModelsLedgerHtml = '';
   if (chatModels.length > 0) {
     const modelRowsHtml = chatModels.map((cm) => {
-      const safeName = cleanModelName(cm.modelName) || 'Gemini';
+      const safeName = escapeHtml(cleanModelName(cm.modelName) || 'Gemini');
       const quotaShareText = cm.hasDualLimit
         ? `5h:${cm.chatRollingPct}% · 7d:${cm.chatWeeklyPct}%`
         : `7d:${cm.chatWeeklyPct}%`;
+      const modelSubs = Array.isArray(cm.subagents) ? cm.subagents : [];
+
+      if (modelSubs.length === 0) {
+        return `
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 10px; padding: 3px 0; border-top: 1px dashed rgba(255, 255, 255, 0.06); color: #d4d4d8; white-space: nowrap;">
+            <span style="display: flex; align-items: center; gap: 4px; font-weight: 500; color: #e4e4e7; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+              ${icon('bot', 12, '#38bdf8')} ${safeName}
+            </span>
+            <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
+              ${cm.displayTokens} <span style="color: #38bdf8; font-weight: 600;">(${quotaShareText})</span>
+            </span>
+          </div>
+        `;
+      }
+
+      const subagentItemsHtml = modelSubs.map((sub) => {
+        const subRole = escapeHtml(sub.role || sub.typeName || 'Subagent');
+        const modeLabel = sub.isInherited ? 'inherit' : escapeHtml(sub.requestedModel || 'explicit');
+        const dotColor = getSubagentStatusColor(sub.status);
+        const subTokensText = escapeHtml(sub.displayTokens || formatCompactTokens(sub.tokens));
+        const indentPrefix = (Number(sub.depth) || 0) > 0 ? '↳ ' : '';
+
+        return `
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 5px; font-size: 9.5px; padding: 1.5px 2px; color: #d4d4d8; white-space: nowrap;">
+            <span style="display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden;">
+              <span style="width: 5px; height: 5px; border-radius: 9999px; background: ${dotColor}; flex-shrink: 0;"></span>
+              <span style="overflow: hidden; text-overflow: ellipsis; color: #e4e4e7;">${indentPrefix}${subRole}</span>
+            </span>
+            <span style="display: flex; align-items: center; gap: 4px; flex-shrink: 0; font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; font-size: 9px; color: #a1a1aa;">
+              <span style="padding: 0 4px; border-radius: 4px; background: rgba(255, 255, 255, 0.06); color: #94a3b8; font-size: 8.5px;">${modeLabel}</span>
+              <span>${subTokensText}</span>
+            </span>
+          </div>
+        `;
+      }).join('');
+
       return `
-        <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 10px; padding: 3px 0; border-top: 1px dashed rgba(255, 255, 255, 0.06); color: #d4d4d8; white-space: nowrap;">
-          <span style="display: flex; align-items: center; gap: 4px; font-weight: 500; color: #e4e4e7; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${safeName}">
-            ${icon('bot', 12, '#38bdf8')} ${safeName}
-          </span>
-          <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
-            ${cm.displayTokens} <span style="color: #38bdf8; font-weight: 600;">(${quotaShareText})</span>
-          </span>
-        </div>
+        <details class="tach-model-details" data-model-key="${safeName}">
+          <summary class="tach-model-summary">
+            <span style="display: flex; align-items: center; gap: 4px; font-weight: 500; color: #e4e4e7; min-width: 0; overflow: hidden;">
+              ${icon('chevron-right', 11, 'currentColor')}
+              ${icon('bot', 12, '#38bdf8')}
+              <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 112px;">${safeName}</span>
+              <span style="padding: 0 5px; border-radius: 9999px; background: rgba(56, 189, 248, 0.14); color: #38bdf8; font-size: 8.5px; font-weight: 600; flex-shrink: 0;">${modelSubs.length} sub</span>
+            </span>
+            <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
+              ${cm.displayTokens} <span style="color: #38bdf8; font-weight: 600;">(${quotaShareText})</span>
+            </span>
+          </summary>
+          <div class="tach-subagent-list">
+            ${subagentItemsHtml}
+          </div>
+        </details>
       `;
     }).join('');
 
+    const totalSubBadgeHtml = totalSubagentsCount > 0
+      ? `<span class="tach-subagent-total-pill" style="font-size: 8.5px; text-transform: none; letter-spacing: 0; padding: 1px 6px; border-radius: 9999px; background: rgba(56, 189, 248, 0.14); color: #38bdf8; font-weight: 600;">${totalSubagentsCount} subagente${totalSubagentsCount === 1 ? '' : 's'}</span>`
+      : '';
+
     chatModelsLedgerHtml = `
       <div style="margin-top: 7px; padding-top: 5px; border-top: 1px solid rgba(255, 255, 255, 0.08);">
-        <div style="font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 3px;">
-          Consumo por Modelo en este Chat
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 3px;">
+          <span>Consumo por Modelo en este Chat</span>
+          ${totalSubBadgeHtml}
         </div>
         ${modelRowsHtml}
       </div>
@@ -6592,7 +7176,7 @@ class ContextTachometerMod extends AntigravityMod {
       priority: 50
     });
 
-    this.cachedCss = ".antigravity-tachometer-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 8px 0 6px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #e4e4e7;\r\n  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.antigravity-tachometer-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-tachometer-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n/* Responsive compact mode (Speedometer SVG only, hides labels, exact 28x28 circle) */\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) {\r\n  width: 28px !important;\r\n  height: 28px !important;\r\n  min-width: 28px !important;\r\n  padding: 0 !important;\r\n  gap: 0 !important;\r\n  justify-content: center !important;\r\n  border-radius: 9999px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n/* Responsive shrinking for narrow screen resolutions */\r\n@media (max-width: 960px) {\r\n  .antigravity-tachometer-badge.compact:not(.open):not(.pinned) {\r\n    width: 28px !important;\r\n    height: 28px !important;\r\n    min-width: 28px !important;\r\n    padding: 0 !important;\r\n    gap: 0 !important;\r\n    justify-content: center !important;\r\n    border-radius: 9999px !important;\r\n    box-sizing: border-box !important;\r\n  }\r\n  .antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,\r\n  .antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {\r\n    display: none !important;\r\n  }\r\n}\r\n\r\n/* Interactive Tachometer Popover Portal (Fixed to Viewport) */\r\n.antigravity-tachometer-popover-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\r\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\r\n}\r\n\r\n.antigravity-tachometer-popover-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-popover-container {\r\n  display: none !important;\r\n}\r\n\r\n@keyframes popoverFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-4px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n";
+    this.cachedCss = ".antigravity-tachometer-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 8px 0 6px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #e4e4e7;\r\n  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.antigravity-tachometer-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-tachometer-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n/* Responsive compact mode (Speedometer SVG only, hides labels, exact 28x28 circle) */\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) {\r\n  width: 28px !important;\r\n  height: 28px !important;\r\n  min-width: 28px !important;\r\n  padding: 0 !important;\r\n  gap: 0 !important;\r\n  justify-content: center !important;\r\n  border-radius: 9999px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n/* Responsive shrinking for narrow screen resolutions */\r\n@media (max-width: 960px) {\r\n  .antigravity-tachometer-badge.compact:not(.open):not(.pinned) {\r\n    width: 28px !important;\r\n    height: 28px !important;\r\n    min-width: 28px !important;\r\n    padding: 0 !important;\r\n    gap: 0 !important;\r\n    justify-content: center !important;\r\n    border-radius: 9999px !important;\r\n    box-sizing: border-box !important;\r\n  }\r\n  .antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,\r\n  .antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {\r\n    display: none !important;\r\n  }\r\n}\r\n\r\n/* Interactive Tachometer Popover Portal (Fixed to Viewport) */\r\n.antigravity-tachometer-popover-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\r\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\r\n}\r\n\r\n.antigravity-tachometer-popover-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-tachometer-popover-portal .tach-model-details {\r\n  border-top: 1px dashed rgba(255, 255, 255, 0.06);\r\n}\r\n\r\n.antigravity-tachometer-popover-portal .tach-model-summary {\r\n  list-style: none;\r\n  cursor: pointer;\r\n  display: flex;\r\n  justify-content: space-between;\r\n  align-items: center;\r\n  gap: 6px;\r\n  font-size: 10px;\r\n  padding: 3px 2px;\r\n  border-radius: 4px;\r\n  color: #d4d4d8;\r\n  white-space: nowrap;\r\n  user-select: none;\r\n  transition: background-color 0.15s ease;\r\n}\r\n\r\n.antigravity-tachometer-popover-portal .tach-model-summary::-webkit-details-marker {\r\n  display: none;\r\n}\r\n\r\n.antigravity-tachometer-popover-portal .tach-model-summary:hover {\r\n  background: rgba(255, 255, 255, 0.04);\r\n}\r\n\r\n.antigravity-tachometer-popover-portal .tach-model-summary:focus-visible {\r\n  outline: 2px solid #38bdf8;\r\n  outline-offset: 2px;\r\n}\r\n\r\n.antigravity-tachometer-popover-portal .tach-details-chevron {\r\n  color: #71717a;\r\n  transition: transform 0.16s ease, color 0.16s ease;\r\n}\r\n\r\n.antigravity-tachometer-popover-portal .tach-model-details[open] .tach-details-chevron {\r\n  transform: rotate(90deg);\r\n  color: #38bdf8;\r\n}\r\n\r\n.antigravity-tachometer-popover-portal .tach-subagent-list {\r\n  margin: 2px 0 5px 10px;\r\n  padding: 3px 0 3px 7px;\r\n  border-left: 1px solid rgba(56, 189, 248, 0.28);\r\n  max-height: 116px;\r\n  overflow-y: auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n}\r\n\r\n.antigravity-popover-container {\r\n  display: none !important;\r\n}\r\n\r\n@keyframes popoverFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-4px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n";
   }
 
   /**
@@ -7830,6 +8414,9 @@ const LANE_COLORS = [
   '#06b6d4'  // Cyan
 ];
 
+const COLOR_GIT_LOCAL = '#f59e0b';     // Amber (Git Local / Unpushed)
+const COLOR_GITHUB_REMOTE = '#38bdf8'; // Sky Blue (GitHub Remote)
+
 /**
  * Returns color associated with a lane index.
  * Self-contained palette so getLaneColor.toString() works cleanly in browser runtime.
@@ -7863,6 +8450,10 @@ function renderGitGraphSvg(commits = [], options = {}) {
   if (!Array.isArray(commits) || commits.length === 0) {
     return '';
   }
+
+  // Self-contained helpers so renderGitGraphSvg.toString() works in ModLoader browser payload
+  const COLOR_GIT_LOCAL = '#f59e0b';
+  const escapeSvgAttr = (str = '') => String(str).replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   const rowHeight = options.rowHeight ?? 26;
   const fileRowHeight = options.fileRowHeight ?? 22;
@@ -7932,12 +8523,30 @@ function renderGitGraphSvg(commits = [], options = {}) {
         const fromY = cy;
         const toX = startX + route.toLane * laneWidth;
         const toY = nextCoord.cy;
-        const routeColor = getLaneColor(typeof route.colorLane === 'number' ? route.colorLane : Math.min(route.fromLane, route.toLane));
+        const isCurrentLocal = commit.pushed === false || commit.syncStatus === 'ahead' || !!commit.isUnpushed;
+        const nextCommit = commits[nextIdx];
+        const isNextLocal = nextCommit ? (nextCommit.pushed === false || nextCommit.syncStatus === 'ahead' || !!nextCommit.isUnpushed) : false;
+
+        const isSyncBridge = isCurrentLocal !== isNextLocal;
+        const isLocalRoute = isCurrentLocal && isNextLocal;
+
+        let strokeColor = getLaneColor(typeof route.colorLane === 'number' ? route.colorLane : Math.min(route.fromLane, route.toLane));
+        let routeCls = 'git-route-remote';
+        let dashAttr = '';
+
+        if (isSyncBridge) {
+          strokeColor = COLOR_GIT_LOCAL;
+          routeCls = 'git-route-sync-bridge';
+          dashAttr = 'stroke-dasharray="3,2"';
+        } else if (isLocalRoute || isCurrentLocal) {
+          strokeColor = (typeof route.colorLane === 'number' && route.colorLane > 0) ? strokeColor : COLOR_GIT_LOCAL;
+          routeCls = 'git-route-local';
+        }
 
         if (route.fromLane === route.toLane) {
           // Straight vertical trunk line
           pathsMarkup += `
-            <line x1="${fromX}" y1="${fromY}" x2="${toX}" y2="${toY}" stroke="${routeColor}" stroke-width="2" stroke-linecap="round"/>
+            <line x1="${fromX}" y1="${fromY}" x2="${toX}" y2="${toY}" stroke="${strokeColor}" stroke-width="2" stroke-linecap="round" class="${routeCls}" ${dashAttr}/>
           `;
         } else {
           // Curved Bezier branch or merge
@@ -7945,7 +8554,7 @@ function renderGitGraphSvg(commits = [], options = {}) {
           const cpY1 = fromY + deltaY * 0.45;
           const cpY2 = toY - deltaY * 0.45;
           pathsMarkup += `
-            <path d="M ${fromX} ${fromY} C ${fromX} ${cpY1}, ${toX} ${cpY2}, ${toX} ${toY}" fill="none" stroke="${routeColor}" stroke-width="2" stroke-linecap="round"/>
+            <path d="M ${fromX} ${fromY} C ${fromX} ${cpY1}, ${toX} ${cpY2}, ${toX} ${toY}" fill="none" stroke="${strokeColor}" stroke-width="2" stroke-linecap="round" class="${routeCls}" ${dashAttr}/>
           `;
         }
       }
@@ -7999,23 +8608,27 @@ function renderGitGraphSvg(commits = [], options = {}) {
 
     // Node Circle
     const isHead = (Array.isArray(commit.refs) && commit.refs.some(r => r.includes('HEAD'))) || i === 0;
-    const isPushed = commit.pushed !== false;
+    const isPushed = commit.pushed !== false && commit.syncStatus !== 'ahead' && !commit.isUnpushed;
+    const nodeColor = !isPushed ? COLOR_GIT_LOCAL : color;
+    const safeHash = escapeSvgAttr(commit.hash);
 
     if (isHead) {
       // Glowing halo ring around current/HEAD commit
+      const haloClass = isPushed ? 'git-node-halo is-remote' : 'git-node-halo is-local';
       nodesMarkup += `
-        <circle cx="${cx}" cy="${cy}" r="6.5" fill="none" stroke="${color}" stroke-width="1.8" class="git-node-halo"/>
-        <circle cx="${cx}" cy="${cy}" r="3" fill="${color}" class="git-node-head" data-hash="${commit.hash}"/>
+        <circle cx="${cx}" cy="${cy}" r="6.5" fill="none" stroke="${nodeColor}" stroke-width="1.8" class="${haloClass}"/>
+        <circle cx="${cx}" cy="${cy}" r="3" fill="${nodeColor}" class="git-node-head" data-hash="${safeHash}"/>
       `;
     } else if (!isPushed) {
-      // Local unpushed commit: concentric target ring
+      // Local unpushed commit: concentric target ring with Git Local identity
       nodesMarkup += `
-        <circle cx="${cx}" cy="${cy}" r="5.5" fill="none" stroke="${color}" stroke-width="1.5" stroke-dasharray="2,2" class="git-node-unpushed-ring"/>
-        <circle cx="${cx}" cy="${cy}" r="3" fill="${color}" stroke="#181a1f" stroke-width="1" class="git-node git-node-unpushed" data-hash="${commit.hash}"/>
+        <circle cx="${cx}" cy="${cy}" r="5.5" fill="none" stroke="${COLOR_GIT_LOCAL}" stroke-width="1.5" stroke-dasharray="2,2" class="git-node-unpushed-ring"/>
+        <circle cx="${cx}" cy="${cy}" r="3" fill="${COLOR_GIT_LOCAL}" stroke="#181a1f" stroke-width="1" class="git-node git-node-local git-node-unpushed" data-hash="${safeHash}"/>
       `;
     } else {
+      // GitHub consolidated remote commit
       nodesMarkup += `
-        <circle cx="${cx}" cy="${cy}" r="3.5" fill="${color}" stroke="#181a1f" stroke-width="1.5" class="git-node" data-hash="${commit.hash}"/>
+        <circle cx="${cx}" cy="${cy}" r="3.5" fill="${color}" stroke="#181a1f" stroke-width="1.5" class="git-node git-node-remote git-node-pushed" data-hash="${safeHash}"/>
       `;
     }
   }
@@ -8171,11 +8784,10 @@ function renderGitGraphPanelHtml(context = {}) {
     const isExpanded = !!c.expanded;
     const files = Array.isArray(c.files) ? c.files : [];
     const hasOrigin = (c.refs || []).some(r => r.includes('origin/'));
-    const commitType = (c.pushed !== undefined)
-      ? (c.pushed === false ? 'local' : 'remote')
-      : (hasOrigin ? 'remote' : 'local');
     const isUnpushed = c.pushed === false || c.syncStatus === 'ahead' || !!c.isUnpushed;
     const isUnpulled = c.syncStatus === 'behind' || !!c.isUnpulled;
+    const commitType = isUnpushed ? 'local' : (hasOrigin ? 'remote' : 'local');
+    const rowTypeCls = isUnpushed ? 'is-local-commit' : 'is-remote-commit';
     let syncPillHtml = '';
     if (isUnpushed) {
       syncPillHtml = `<span class="git-pill-sync git-pill-unpushed" title="Commit local pendiente de push">⇡ Unpushed</span>`;
@@ -8220,7 +8832,7 @@ function renderGitGraphPanelHtml(context = {}) {
 
     return `
       <div class="git-commit-item ${isExpanded ? 'is-expanded' : ''}" data-hash="${escapeGitHtml(c.hash)}" data-index="${idx}" data-commit-type="${commitType}">
-        <div class="git-commit-row ${isSelected ? 'selected' : ''}"
+        <div class="git-commit-row ${isSelected ? 'selected' : ''} ${rowTypeCls}"
              data-hash="${escapeGitHtml(c.hash)}"
              data-index="${idx}"
              data-short-hash="${escapeGitHtml(c.shortHash || '')}"
@@ -8442,7 +9054,7 @@ class GitGraphMod extends AntigravityMod {
     });
 
     this.initialContext = options.initialContext || {};
-    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY GIT & GITHUB GRAPH MOD - VS CODE STYLE\r\n   Ultra-compact, lightweight DAG commit tree & inline file diff visualizer\r\n   ========================================================================= */\r\n\r\n/* Tab Button in Auxiliary Pane Header */\r\n.antigravity-git-tab-wrapper {\r\n  display: inline-flex;\r\n  align-items: center;\r\n}\r\n\r\n.antigravity-git-tab-btn {\r\n  height: 28px !important;\r\n  padding: 0 8px !important;\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #94a3b8 !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.antigravity-git-tab-btn:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  color: #f8fafc !important;\r\n}\r\n\r\n.antigravity-git-tab-btn.active {\r\n  background: #1e2438 !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n#antigravity-git-panel-host[data-open=\"false\"] {\r\n  display: none !important;\r\n}\r\n\r\n/* Full Auxiliary Panel Body */\r\n.antigravity-git-panel {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  background: #181a1f !important;\r\n  color: #e2e8f0 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, monospace, sans-serif !important;\r\n  overflow: hidden !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* VS Code Minimal Header Bar */\r\n.git-panel-header {\r\n  height: 32px !important;\r\n  min-height: 32px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  padding: 0 10px !important;\r\n  background: #1e222b !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.git-panel-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-header-caret {\r\n  font-size: 12px !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n.git-header-title {\r\n  font-size: 12px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-header-repo {\r\n  font-size: 11px !important;\r\n  color: #64748b !important;\r\n  max-width: 140px !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-branch-pill {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-header-actions {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pill-auto {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 3px !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-tool-btn {\r\n  background: transparent !important;\r\n  border: none !important;\r\n  color: #94a3b8 !important;\r\n  font-size: 12px !important;\r\n  cursor: pointer !important;\r\n  padding: 2px 4px !important;\r\n  border-radius: 4px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n}\r\n\r\n.git-tool-btn:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-tool-close:hover {\r\n  background: rgba(239, 68, 68, 0.2) !important;\r\n  color: #ef4444 !important;\r\n}\r\n\r\n/* Status Toast Banner */\r\n.git-vcs-toast {\r\n  padding: 4px 10px !important;\r\n  font-size: 10px !important;\r\n  font-family: monospace !important;\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #7dd3fc !important;\r\n  border-bottom: 1px solid rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-vcs-toast.is-error {\r\n  background: rgba(239, 68, 68, 0.16) !important;\r\n  color: #fca5a5 !important;\r\n  border-bottom-color: rgba(239, 68, 68, 0.35) !important;\r\n}\r\n\r\n/* Graph & Commits Viewport */\r\n.git-graph-container {\r\n  display: flex !important;\r\n  flex: 1 1 0% !important;\r\n  overflow-y: auto !important;\r\n  overflow-x: hidden !important;\r\n  position: relative !important;\r\n  scrollbar-width: thin !important;\r\n  scrollbar-color: rgba(255, 255, 255, 0.15) transparent !important;\r\n}\r\n\r\n.git-graph-container::-webkit-scrollbar {\r\n  width: 6px !important;\r\n}\r\n\r\n.git-graph-container::-webkit-scrollbar-thumb {\r\n  background: rgba(255, 255, 255, 0.15) !important;\r\n  border-radius: 3px !important;\r\n}\r\n\r\n.git-svg-column {\r\n  flex-shrink: 0 !important;\r\n  position: relative !important;\r\n}\r\n\r\n.git-graph-svg {\r\n  display: block !important;\r\n}\r\n\r\n.git-commits-column {\r\n  flex: 1 1 0% !important;\r\n  min-width: 0 !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n/* Individual Commit Item */\r\n.git-commit-item {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  width: 100% !important;\r\n}\r\n\r\n.git-commit-row {\r\n  height: 26px !important;\r\n  min-height: 26px !important;\r\n  box-sizing: border-box !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  padding: 0 8px 0 4px !important;\r\n  cursor: pointer !important;\r\n  border-radius: 0 !important;\r\n  transition: background 0.1s ease !important;\r\n  user-select: none !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-commit-row:hover {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.git-commit-row.selected {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n}\r\n\r\n.git-commit-main {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  min-width: 0 !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-commit-subject {\r\n  font-size: 12px !important;\r\n  color: #e2e8f0 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-commit-badges {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n/* Branch & Ref Badges (VS Code Pill Style) */\r\n.git-pill-branch {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 10px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  white-space: nowrap !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-pill-local {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.git-pill-head {\r\n  background: rgba(56, 189, 248, 0.22) !important;\r\n  color: #7dd3fc !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.5) !important;\r\n  box-shadow: 0 0 6px rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-pill-origin {\r\n  background: rgba(249, 115, 22, 0.15) !important;\r\n  color: #fb923c !important;\r\n  border: 1px solid rgba(249, 115, 22, 0.35) !important;\r\n}\r\n\r\n/* Selective Commit Push Button */\r\n.git-commit-push-btn {\r\n  font-size: 9px !important;\r\n  font-weight: 600 !important;\r\n  font-family: monospace !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(34, 197, 94, 0.14) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(34, 197, 94, 0.35) !important;\r\n  cursor: pointer !important;\r\n  white-space: nowrap !important;\r\n  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease !important;\r\n}\r\n\r\n.git-commit-push-btn:hover {\r\n  background: rgba(34, 197, 94, 0.28) !important;\r\n  color: #dcfce7 !important;\r\n}\r\n\r\n.git-icon-cloud {\r\n  font-size: 10px !important;\r\n}\r\n\r\n.git-icon-dot {\r\n  font-size: 9px !important;\r\n}\r\n\r\n.git-commit-chevron {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n  width: 12px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-commit-chevron.has-files {\r\n  color: #94a3b8 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n/* Expandable Inline File Diff List (strictly 22px * fileCount, 0 vertical padding for 1:1 SVG alignment) */\r\n.git-commit-files-container {\r\n  display: none !important;\r\n  flex-direction: column !important;\r\n  background: rgba(0, 0, 0, 0.3) !important;\r\n  border-left: 2px solid rgba(56, 189, 248, 0.35) !important;\r\n  margin-left: 14px !important;\r\n  padding: 0 !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.git-commit-item.is-expanded > .git-commit-files-container {\r\n  display: flex !important;\r\n}\r\n\r\n.git-file-row {\r\n  height: 22px !important;\r\n  min-height: 22px !important;\r\n  box-sizing: border-box !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  padding: 0 10px 0 8px !important;\r\n  font-size: 11px !important;\r\n  gap: 8px !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-file-row:hover {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.git-file-ext {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 4px !important;\r\n  border-radius: 3px !important;\r\n  font-family: monospace !important;\r\n  letter-spacing: -0.02em !important;\r\n}\r\n\r\n.ext-js {\r\n  background: rgba(234, 179, 8, 0.18) !important;\r\n  color: #facc15 !important;\r\n  border: 1px solid rgba(234, 179, 8, 0.35) !important;\r\n}\r\n\r\n.ext-ts {\r\n  background: rgba(59, 130, 246, 0.18) !important;\r\n  color: #60a5fa !important;\r\n  border: 1px solid rgba(59, 130, 246, 0.35) !important;\r\n}\r\n\r\n.ext-json {\r\n  background: rgba(34, 197, 94, 0.18) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(34, 197, 94, 0.35) !important;\r\n}\r\n\r\n.ext-css {\r\n  background: rgba(6, 182, 212, 0.18) !important;\r\n  color: #22d3ee !important;\r\n  border: 1px solid rgba(6, 182, 212, 0.35) !important;\r\n}\r\n\r\n.ext-md {\r\n  background: rgba(168, 85, 247, 0.18) !important;\r\n  color: #c084fc !important;\r\n  border: 1px solid rgba(168, 85, 247, 0.35) !important;\r\n}\r\n\r\n.ext-html {\r\n  background: rgba(249, 115, 22, 0.18) !important;\r\n  color: #fb923c !important;\r\n  border: 1px solid rgba(249, 115, 22, 0.35) !important;\r\n}\r\n\r\n.ext-default {\r\n  background: rgba(148, 163, 184, 0.18) !important;\r\n  color: #cbd5e1 !important;\r\n  border: 1px solid rgba(148, 163, 184, 0.3) !important;\r\n}\r\n\r\n.git-file-name {\r\n  color: #e2e8f0 !important;\r\n  font-weight: 500 !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-file-dir {\r\n  color: #64748b !important;\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-file-status {\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.status-modified {\r\n  color: #eab308 !important;\r\n}\r\n\r\n.status-added {\r\n  color: #22c55e !important;\r\n}\r\n\r\n.status-deleted {\r\n  color: #ef4444 !important;\r\n}\r\n\r\n\r\n/* =========================================================================\r\n   PULL REQUEST & CI/CD STATUS CARD STYLES\r\n   ========================================================================= */\r\n\r\n.git-pr-card {\r\n  padding: 8px 12px !important;\r\n  background: #13161f !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n  font-size: 11px !important;\r\n}\r\n\r\n.git-pr-none {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  align-items: stretch !important;\r\n  color: #64748b !important;\r\n  background: #11141c !important;\r\n  padding: 6px 12px !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pr-none-main {\r\n  display: flex !important;\r\n  flex-direction: row !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 8px !important;\r\n  width: 100% !important;\r\n}\r\n\r\n.git-pr-none-left {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  min-width: 0 !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-pr-none-text {\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-pr-icon {\r\n  font-size: 13px !important;\r\n  color: #38bdf8 !important;\r\n}\r\n\r\n.git-pr-none-right {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-pr-sync-badge {\r\n  font-size: 10px !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n.git-pr-action-btn {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  font-family: monospace !important;\r\n  padding: 2px 5px !important;\r\n  border-radius: 4px !important;\r\n  cursor: pointer !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n.git-pr-action-btn.btn-push {\r\n  background: rgba(34, 197, 94, 0.16) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.35) !important;\r\n}\r\n\r\n.git-pr-action-btn.btn-pull {\r\n  background: rgba(249, 115, 22, 0.16) !important;\r\n  color: #fb923c !important;\r\n  border-color: rgba(249, 115, 22, 0.35) !important;\r\n}\r\n\r\n.git-pr-create-btn {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\r\n  cursor: pointer !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-pr-create-btn:hover {\r\n  background: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-pr-create-link {\r\n  font-size: 10px !important;\r\n  color: #38bdf8 !important;\r\n  text-decoration: none !important;\r\n  font-weight: 500 !important;\r\n}\r\n\r\n.git-pr-create-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-pr-commits-drawer {\r\n  padding: 6px 8px !important;\r\n  border-radius: 6px !important;\r\n  background: #0d1017 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n}\r\n\r\n.git-pr-commits-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 3px !important;\r\n  max-height: 120px !important;\r\n  overflow-y: auto !important;\r\n  margin-bottom: 6px !important;\r\n}\r\n\r\n.git-pr-commit-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  padding: 2px 4px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n}\r\n\r\n.git-pr-commit-sha {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  color: #93c5fd !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-pr-commit-msg {\r\n  font-size: 10px !important;\r\n  color: #cbd5e1 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-pr-drawer-footer {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 8px !important;\r\n  padding-top: 4px !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n}\r\n\r\n.git-pr-submit-btn {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 3px 8px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.2) !important;\r\n  color: #7dd3fc !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.45) !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-pr-submit-btn:hover {\r\n  background: rgba(56, 189, 248, 0.32) !important;\r\n}\r\n\r\n.git-pr-card-main {\r\n  display: flex !important;\r\n  align-items: flex-start !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.git-pr-header-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 3px !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-pr-badge-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pr-state-badge {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  letter-spacing: 0.5px !important;\r\n}\r\n\r\n.state-open {\r\n  background: rgba(34, 197, 94, 0.2) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(34, 197, 94, 0.4) !important;\r\n}\r\n\r\n.state-merged {\r\n  background: rgba(168, 85, 247, 0.2) !important;\r\n  color: #c084fc !important;\r\n  border: 1px solid rgba(168, 85, 247, 0.4) !important;\r\n}\r\n\r\n.state-closed {\r\n  background: rgba(239, 68, 68, 0.2) !important;\r\n  color: #f87171 !important;\r\n  border: 1px solid rgba(239, 68, 68, 0.4) !important;\r\n}\r\n\r\n.git-pr-num-link {\r\n  font-weight: 700 !important;\r\n  color: #60a5fa !important;\r\n  text-decoration: none !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-pr-num-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-pr-branch-flow {\r\n  color: #94a3b8 !important;\r\n  font-size: 10px !important;\r\n  font-family: monospace !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-pr-title {\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n/* CI/CD Rollup Button */\r\n.git-pr-ci-badge-wrap {\r\n  flex-shrink: 0 !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.git-ci-rollup-btn {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  padding: 3px 8px !important;\r\n  border-radius: 5px !important;\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  cursor: pointer !important;\r\n  border: 1px solid transparent !important;\r\n  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.ci-status-success {\r\n  background: rgba(34, 197, 94, 0.15) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.3) !important;\r\n}\r\n\r\n.ci-status-success:hover {\r\n  background: rgba(34, 197, 94, 0.25) !important;\r\n}\r\n\r\n.ci-status-pending {\r\n  background: rgba(234, 179, 8, 0.15) !important;\r\n  color: #facc15 !important;\r\n  border-color: rgba(234, 179, 8, 0.3) !important;\r\n}\r\n\r\n.ci-status-pending:hover {\r\n  background: rgba(234, 179, 8, 0.25) !important;\r\n}\r\n\r\n.ci-status-failure {\r\n  background: rgba(239, 68, 68, 0.15) !important;\r\n  color: #f87171 !important;\r\n  border-color: rgba(239, 68, 68, 0.3) !important;\r\n}\r\n\r\n.ci-status-failure:hover {\r\n  background: rgba(239, 68, 68, 0.25) !important;\r\n}\r\n\r\n.git-ci-caret {\r\n  font-size: 10px !important;\r\n  opacity: 0.7 !important;\r\n}\r\n\r\n/* CI Checks Accordion */\r\n.git-ci-checks-accordion {\r\n  margin-top: 4px !important;\r\n  padding: 6px 8px !important;\r\n  border-radius: 6px !important;\r\n  background: #0d1017 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.05) !important;\r\n}\r\n\r\n.git-ci-checks-header {\r\n  display: flex !important;\r\n  justify-content: space-between !important;\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  color: #94a3b8 !important;\r\n  margin-bottom: 6px !important;\r\n  text-transform: uppercase !important;\r\n  letter-spacing: 0.5px !important;\r\n}\r\n\r\n.git-ci-checks-count {\r\n  font-family: monospace !important;\r\n  color: #4ade80 !important;\r\n}\r\n\r\n.git-ci-checks-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.git-ci-check-item {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  padding: 3px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  font-size: 11px !important;\r\n}\r\n\r\n.git-ci-check-icon {\r\n  font-size: 11px !important;\r\n  width: 14px !important;\r\n  text-align: center !important;\r\n}\r\n\r\n.check-success .git-ci-check-icon {\r\n  color: #22c55e !important;\r\n}\r\n\r\n.check-fail .git-ci-check-icon {\r\n  color: #ef4444 !important;\r\n}\r\n\r\n.check-pending .git-ci-check-icon {\r\n  color: #eab308 !important;\r\n}\r\n\r\n.git-ci-check-info {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-ci-check-name {\r\n  color: #e2e8f0 !important;\r\n  font-weight: 500 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-ci-check-wf {\r\n  color: #64748b !important;\r\n  font-size: 9px !important;\r\n}\r\n\r\n.git-ci-check-link {\r\n  font-size: 10px !important;\r\n  color: #38bdf8 !important;\r\n  text-decoration: none !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-ci-check-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-ci-empty {\r\n  color: #64748b !important;\r\n  font-size: 10px !important;\r\n  padding: 4px !important;\r\n}\r\n\r\n/* Branches Filter Toolbar */\r\n.git-branches-filter-bar {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  padding: 4px 10px !important;\r\n  background: #11141c !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  font-size: 11px !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.git-branches-pills {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.git-filter-pill {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  color: #94a3b8 !important;\r\n  border: 1px solid transparent !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;\r\n}\r\n\r\n.git-filter-pill:hover {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-filter-pill.active {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.git-branches-drawer-btn {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: transparent !important;\r\n  color: #64748b !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n}\r\n\r\n.git-branches-drawer-btn:hover {\r\n  color: #f1f5f9 !important;\r\n  border-color: rgba(255, 255, 255, 0.15) !important;\r\n}\r\n\r\n/* Branches Drawer Dropdown */\r\n.git-branches-drawer {\r\n  background: #0d1017 !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  max-height: 220px !important;\r\n  overflow-y: auto !important;\r\n  padding: 6px 10px !important;\r\n}\r\n\r\n.git-branches-section-title {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  letter-spacing: 0.5px !important;\r\n  color: #64748b !important;\r\n  margin: 4px 0 2px !important;\r\n}\r\n\r\n.git-branch-cluster-header {\r\n  font-size: 9px !important;\r\n  font-weight: 600 !important;\r\n  color: #94a3b8 !important;\r\n  padding: 4px 4px 1px !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.04) !important;\r\n  margin-top: 2px !important;\r\n}\r\n\r\n.git-branches-list-wrap {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  margin-bottom: 6px !important;\r\n}\r\n\r\n.git-branch-drawer-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  padding: 3px 6px !important;\r\n  border-radius: 4px !important;\r\n  font-size: 11px !important;\r\n  color: #cbd5e1 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-branch-drawer-row:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n}\r\n\r\n.git-branch-drawer-row.is-active-branch {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #38bdf8 !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.git-branch-drawer-name {\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-branch-sync-badges {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-branch-sync-badge {\r\n  font-family: monospace !important;\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 4px !important;\r\n  border-radius: 3px !important;\r\n  border: 1px solid transparent !important;\r\n  line-height: 1.2 !important;\r\n}\r\n\r\n.git-branch-sync-badge.badge-ahead {\r\n  background: rgba(34, 197, 94, 0.15) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.35) !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-branch-sync-badge.badge-behind {\r\n  background: rgba(249, 115, 22, 0.15) !important;\r\n  color: #fb923c !important;\r\n  border-color: rgba(249, 115, 22, 0.35) !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-branch-sync-badge.badge-dirty {\r\n  background: rgba(234, 179, 8, 0.15) !important;\r\n  color: #facc15 !important;\r\n  border-color: rgba(234, 179, 8, 0.35) !important;\r\n}\r\n\r\n.git-branch-sync-badge.badge-merged {\r\n  background: rgba(168, 85, 247, 0.15) !important;\r\n  color: #c084fc !important;\r\n  border-color: rgba(168, 85, 247, 0.3) !important;\r\n}\r\n\r\n.git-branch-drawer-hash {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n}\r\n\r\n.git-branch-current-badge {\r\n  font-size: 8px !important;\r\n  font-weight: 700 !important;\r\n  padding: 0 4px !important;\r\n  border-radius: 3px !important;\r\n  background: #38bdf8 !important;\r\n  color: #0f172a !important;\r\n}\r\n\r\n.git-branch-empty {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n  padding: 2px 4px !important;\r\n}\r\n\r\n/* Redesigned High-Quality Commit Inspector */\r\n.git-inspector-mount {\r\n  position: sticky !important;\r\n  bottom: 0 !important;\r\n  z-index: 40 !important;\r\n  background: #11141c !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4) !important;\r\n  padding: 8px 12px !important;\r\n}\r\n\r\n.git-inspector-card {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-inspector-top {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.git-inspector-author-group {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-avatar-frame {\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 50% !important;\r\n  overflow: hidden !important;\r\n  flex-shrink: 0 !important;\r\n  position: relative !important;\r\n}\r\n\r\n.git-inspector-avatar {\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  object-fit: cover !important;\r\n  border-radius: 50% !important;\r\n}\r\n\r\n.git-inspector-avatar-fallback {\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  border-radius: 50% !important;\r\n  background: linear-gradient(135deg, #0284c7, #6366f1) !important;\r\n  color: #ffffff !important;\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  text-transform: uppercase !important;\r\n}\r\n\r\n.git-inspector-author-text {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  min-width: 0 !important;\r\n  line-height: 1.2 !important;\r\n}\r\n\r\n.git-inspector-name-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-inspector-author-name {\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-inspector-date {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n}\r\n\r\n.git-inspector-author-email {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n  font-family: monospace !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-inspector-meta-group {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-inspector-hash-pill {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #93c5fd !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n}\r\n\r\n.git-inspector-btn-gh {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n  text-decoration: none !important;\r\n  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;\r\n}\r\n\r\n.git-inspector-btn-gh:hover {\r\n  background: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-inspector-btn-close {\r\n  font-size: 12px !important;\r\n  padding: 2px 5px !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n  color: #64748b !important;\r\n  cursor: pointer !important;\r\n  border-radius: 4px !important;\r\n  line-height: 1 !important;\r\n}\r\n\r\n.git-inspector-btn-close:hover {\r\n  color: #f1f5f9 !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-inspector-subject-line {\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  color: #e2e8f0 !important;\r\n  padding: 4px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(0, 0, 0, 0.25) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.04) !important;\r\n  line-height: 1.35 !important;\r\n  word-break: break-word !important;\r\n}\r\n\r\n.git-inspector-footer-stats {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-inspector-files-badge {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n/* --- Sync & Ahead/Behind Indicators --- */\r\n.git-sync-badge {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 10px !important;\r\n  background: rgba(234, 179, 8, 0.15) !important;\r\n  color: #eab308 !important;\r\n  border: 1px solid rgba(234, 179, 8, 0.35) !important;\r\n  margin-left: 4px !important;\r\n  line-height: 1.2 !important;\r\n}\r\n\r\n.git-sync-badge.is-behind {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.git-sync-badge.is-synced {\r\n  background: rgba(34, 197, 94, 0.12) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.3) !important;\r\n}\r\n\r\n.git-pill-sync {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  letter-spacing: 0.3px !important;\r\n  margin-left: 4px !important;\r\n}\r\n\r\n.git-pill-unpushed {\r\n  background: rgba(245, 158, 11, 0.2) !important;\r\n  color: #fbbf24 !important;\r\n  border: 1px solid rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.git-pill-unpulled {\r\n  background: rgba(14, 165, 233, 0.2) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(14, 165, 233, 0.4) !important;\r\n}\r\n\r\n.git-inspector-sync-badge {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n.git-inspector-sync-badge.is-unpushed {\r\n  background: rgba(245, 158, 11, 0.2) !important;\r\n  color: #fbbf24 !important;\r\n  border: 1px solid rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.git-inspector-sync-badge.is-unpulled {\r\n  background: rgba(14, 165, 233, 0.2) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(14, 165, 233, 0.4) !important;\r\n}\r\n";
+    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY GIT & GITHUB GRAPH MOD - VS CODE STYLE\r\n   Ultra-compact, lightweight DAG commit tree & inline file diff visualizer\r\n   ========================================================================= */\r\n\r\n/* Tab Button in Auxiliary Pane Header */\r\n.antigravity-git-tab-wrapper {\r\n  display: inline-flex;\r\n  align-items: center;\r\n}\r\n\r\n.antigravity-git-tab-btn {\r\n  height: 28px !important;\r\n  padding: 0 8px !important;\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #94a3b8 !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.antigravity-git-tab-btn:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  color: #f8fafc !important;\r\n}\r\n\r\n.antigravity-git-tab-btn.active {\r\n  background: #1e2438 !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n#antigravity-git-panel-host[data-open=\"false\"] {\r\n  display: none !important;\r\n}\r\n\r\n/* Full Auxiliary Panel Body */\r\n.antigravity-git-panel {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  background: #181a1f !important;\r\n  color: #e2e8f0 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, monospace, sans-serif !important;\r\n  overflow: hidden !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* VS Code Minimal Header Bar */\r\n.git-panel-header {\r\n  height: 32px !important;\r\n  min-height: 32px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  padding: 0 10px !important;\r\n  background: #1e222b !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.git-panel-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-header-caret {\r\n  font-size: 12px !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n.git-header-title {\r\n  font-size: 12px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-header-repo {\r\n  font-size: 11px !important;\r\n  color: #64748b !important;\r\n  max-width: 140px !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-branch-pill {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-header-actions {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pill-auto {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 3px !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-tool-btn {\r\n  background: transparent !important;\r\n  border: none !important;\r\n  color: #94a3b8 !important;\r\n  font-size: 12px !important;\r\n  cursor: pointer !important;\r\n  padding: 2px 4px !important;\r\n  border-radius: 4px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n}\r\n\r\n.git-tool-btn:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-tool-close:hover {\r\n  background: rgba(239, 68, 68, 0.2) !important;\r\n  color: #ef4444 !important;\r\n}\r\n\r\n/* Status Toast Banner */\r\n.git-vcs-toast {\r\n  padding: 4px 10px !important;\r\n  font-size: 10px !important;\r\n  font-family: monospace !important;\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #7dd3fc !important;\r\n  border-bottom: 1px solid rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-vcs-toast.is-error {\r\n  background: rgba(239, 68, 68, 0.16) !important;\r\n  color: #fca5a5 !important;\r\n  border-bottom-color: rgba(239, 68, 68, 0.35) !important;\r\n}\r\n\r\n/* Graph & Commits Viewport */\r\n.git-graph-container {\r\n  display: flex !important;\r\n  flex: 1 1 0% !important;\r\n  overflow-y: auto !important;\r\n  overflow-x: hidden !important;\r\n  position: relative !important;\r\n  scrollbar-width: thin !important;\r\n  scrollbar-color: rgba(255, 255, 255, 0.15) transparent !important;\r\n}\r\n\r\n.git-graph-container::-webkit-scrollbar {\r\n  width: 6px !important;\r\n}\r\n\r\n.git-graph-container::-webkit-scrollbar-thumb {\r\n  background: rgba(255, 255, 255, 0.15) !important;\r\n  border-radius: 3px !important;\r\n}\r\n\r\n.git-svg-column {\r\n  flex-shrink: 0 !important;\r\n  position: relative !important;\r\n}\r\n\r\n.git-graph-svg {\r\n  display: block !important;\r\n}\r\n\r\n.git-commits-column {\r\n  flex: 1 1 0% !important;\r\n  min-width: 0 !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n/* Individual Commit Item */\r\n.git-commit-item {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  width: 100% !important;\r\n}\r\n\r\n.git-commit-row {\r\n  height: 26px !important;\r\n  min-height: 26px !important;\r\n  box-sizing: border-box !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  padding: 0 8px 0 4px !important;\r\n  cursor: pointer !important;\r\n  border-radius: 0 !important;\r\n  transition: background 0.1s ease !important;\r\n  user-select: none !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-commit-row:hover {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.git-commit-row.selected {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n}\r\n\r\n.git-commit-main {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  min-width: 0 !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-commit-subject {\r\n  font-size: 12px !important;\r\n  color: #e2e8f0 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-commit-badges {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n/* Branch & Ref Badges (VS Code Pill Style) */\r\n.git-pill-branch {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 10px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  white-space: nowrap !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-pill-local {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.git-pill-head {\r\n  background: rgba(56, 189, 248, 0.22) !important;\r\n  color: #7dd3fc !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.5) !important;\r\n  box-shadow: 0 0 6px rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-pill-origin {\r\n  background: rgba(249, 115, 22, 0.15) !important;\r\n  color: #fb923c !important;\r\n  border: 1px solid rgba(249, 115, 22, 0.35) !important;\r\n}\r\n\r\n/* Selective Commit Push Button */\r\n.git-commit-push-btn {\r\n  font-size: 9px !important;\r\n  font-weight: 600 !important;\r\n  font-family: monospace !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(34, 197, 94, 0.14) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(34, 197, 94, 0.35) !important;\r\n  cursor: pointer !important;\r\n  white-space: nowrap !important;\r\n  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease !important;\r\n}\r\n\r\n.git-commit-push-btn:hover {\r\n  background: rgba(34, 197, 94, 0.28) !important;\r\n  color: #dcfce7 !important;\r\n}\r\n\r\n.git-icon-cloud {\r\n  font-size: 10px !important;\r\n}\r\n\r\n.git-icon-dot {\r\n  font-size: 9px !important;\r\n}\r\n\r\n.git-commit-chevron {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n  width: 12px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-commit-chevron.has-files {\r\n  color: #94a3b8 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n/* Expandable Inline File Diff List (strictly 22px * fileCount, 0 vertical padding for 1:1 SVG alignment) */\r\n.git-commit-files-container {\r\n  display: none !important;\r\n  flex-direction: column !important;\r\n  background: rgba(0, 0, 0, 0.3) !important;\r\n  border-left: 2px solid rgba(56, 189, 248, 0.35) !important;\r\n  margin-left: 14px !important;\r\n  padding: 0 !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.git-commit-item.is-expanded > .git-commit-files-container {\r\n  display: flex !important;\r\n}\r\n\r\n.git-file-row {\r\n  height: 22px !important;\r\n  min-height: 22px !important;\r\n  box-sizing: border-box !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  padding: 0 10px 0 8px !important;\r\n  font-size: 11px !important;\r\n  gap: 8px !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-file-row:hover {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.git-file-ext {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 4px !important;\r\n  border-radius: 3px !important;\r\n  font-family: monospace !important;\r\n  letter-spacing: -0.02em !important;\r\n}\r\n\r\n.ext-js {\r\n  background: rgba(234, 179, 8, 0.18) !important;\r\n  color: #facc15 !important;\r\n  border: 1px solid rgba(234, 179, 8, 0.35) !important;\r\n}\r\n\r\n.ext-ts {\r\n  background: rgba(59, 130, 246, 0.18) !important;\r\n  color: #60a5fa !important;\r\n  border: 1px solid rgba(59, 130, 246, 0.35) !important;\r\n}\r\n\r\n.ext-json {\r\n  background: rgba(34, 197, 94, 0.18) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(34, 197, 94, 0.35) !important;\r\n}\r\n\r\n.ext-css {\r\n  background: rgba(6, 182, 212, 0.18) !important;\r\n  color: #22d3ee !important;\r\n  border: 1px solid rgba(6, 182, 212, 0.35) !important;\r\n}\r\n\r\n.ext-md {\r\n  background: rgba(168, 85, 247, 0.18) !important;\r\n  color: #c084fc !important;\r\n  border: 1px solid rgba(168, 85, 247, 0.35) !important;\r\n}\r\n\r\n.ext-html {\r\n  background: rgba(249, 115, 22, 0.18) !important;\r\n  color: #fb923c !important;\r\n  border: 1px solid rgba(249, 115, 22, 0.35) !important;\r\n}\r\n\r\n.ext-default {\r\n  background: rgba(148, 163, 184, 0.18) !important;\r\n  color: #cbd5e1 !important;\r\n  border: 1px solid rgba(148, 163, 184, 0.3) !important;\r\n}\r\n\r\n.git-file-name {\r\n  color: #e2e8f0 !important;\r\n  font-weight: 500 !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-file-dir {\r\n  color: #64748b !important;\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-file-status {\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.status-modified {\r\n  color: #eab308 !important;\r\n}\r\n\r\n.status-added {\r\n  color: #22c55e !important;\r\n}\r\n\r\n.status-deleted {\r\n  color: #ef4444 !important;\r\n}\r\n\r\n\r\n/* =========================================================================\r\n   PULL REQUEST & CI/CD STATUS CARD STYLES\r\n   ========================================================================= */\r\n\r\n.git-pr-card {\r\n  padding: 8px 12px !important;\r\n  background: #13161f !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n  font-size: 11px !important;\r\n}\r\n\r\n.git-pr-none {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  align-items: stretch !important;\r\n  color: #64748b !important;\r\n  background: #11141c !important;\r\n  padding: 6px 12px !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pr-none-main {\r\n  display: flex !important;\r\n  flex-direction: row !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 8px !important;\r\n  width: 100% !important;\r\n}\r\n\r\n.git-pr-none-left {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  min-width: 0 !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-pr-none-text {\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-pr-icon {\r\n  font-size: 13px !important;\r\n  color: #38bdf8 !important;\r\n}\r\n\r\n.git-pr-none-right {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-pr-sync-badge {\r\n  font-size: 10px !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n.git-pr-action-btn {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  font-family: monospace !important;\r\n  padding: 2px 5px !important;\r\n  border-radius: 4px !important;\r\n  cursor: pointer !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n.git-pr-action-btn.btn-push {\r\n  background: rgba(34, 197, 94, 0.16) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.35) !important;\r\n}\r\n\r\n.git-pr-action-btn.btn-pull {\r\n  background: rgba(249, 115, 22, 0.16) !important;\r\n  color: #fb923c !important;\r\n  border-color: rgba(249, 115, 22, 0.35) !important;\r\n}\r\n\r\n.git-pr-create-btn {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\r\n  cursor: pointer !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-pr-create-btn:hover {\r\n  background: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-pr-create-link {\r\n  font-size: 10px !important;\r\n  color: #38bdf8 !important;\r\n  text-decoration: none !important;\r\n  font-weight: 500 !important;\r\n}\r\n\r\n.git-pr-create-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-pr-commits-drawer {\r\n  padding: 6px 8px !important;\r\n  border-radius: 6px !important;\r\n  background: #0d1017 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n}\r\n\r\n.git-pr-commits-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 3px !important;\r\n  max-height: 120px !important;\r\n  overflow-y: auto !important;\r\n  margin-bottom: 6px !important;\r\n}\r\n\r\n.git-pr-commit-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  padding: 2px 4px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n}\r\n\r\n.git-pr-commit-sha {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  color: #93c5fd !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-pr-commit-msg {\r\n  font-size: 10px !important;\r\n  color: #cbd5e1 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-pr-drawer-footer {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 8px !important;\r\n  padding-top: 4px !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n}\r\n\r\n.git-pr-submit-btn {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 3px 8px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.2) !important;\r\n  color: #7dd3fc !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.45) !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-pr-submit-btn:hover {\r\n  background: rgba(56, 189, 248, 0.32) !important;\r\n}\r\n\r\n.git-pr-card-main {\r\n  display: flex !important;\r\n  align-items: flex-start !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.git-pr-header-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 3px !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-pr-badge-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pr-state-badge {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  letter-spacing: 0.5px !important;\r\n}\r\n\r\n.state-open {\r\n  background: rgba(34, 197, 94, 0.2) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(34, 197, 94, 0.4) !important;\r\n}\r\n\r\n.state-merged {\r\n  background: rgba(168, 85, 247, 0.2) !important;\r\n  color: #c084fc !important;\r\n  border: 1px solid rgba(168, 85, 247, 0.4) !important;\r\n}\r\n\r\n.state-closed {\r\n  background: rgba(239, 68, 68, 0.2) !important;\r\n  color: #f87171 !important;\r\n  border: 1px solid rgba(239, 68, 68, 0.4) !important;\r\n}\r\n\r\n.git-pr-num-link {\r\n  font-weight: 700 !important;\r\n  color: #60a5fa !important;\r\n  text-decoration: none !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-pr-num-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-pr-branch-flow {\r\n  color: #94a3b8 !important;\r\n  font-size: 10px !important;\r\n  font-family: monospace !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-pr-title {\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n/* CI/CD Rollup Button */\r\n.git-pr-ci-badge-wrap {\r\n  flex-shrink: 0 !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.git-ci-rollup-btn {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  padding: 3px 8px !important;\r\n  border-radius: 5px !important;\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  cursor: pointer !important;\r\n  border: 1px solid transparent !important;\r\n  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.ci-status-success {\r\n  background: rgba(34, 197, 94, 0.15) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.3) !important;\r\n}\r\n\r\n.ci-status-success:hover {\r\n  background: rgba(34, 197, 94, 0.25) !important;\r\n}\r\n\r\n.ci-status-pending {\r\n  background: rgba(234, 179, 8, 0.15) !important;\r\n  color: #facc15 !important;\r\n  border-color: rgba(234, 179, 8, 0.3) !important;\r\n}\r\n\r\n.ci-status-pending:hover {\r\n  background: rgba(234, 179, 8, 0.25) !important;\r\n}\r\n\r\n.ci-status-failure {\r\n  background: rgba(239, 68, 68, 0.15) !important;\r\n  color: #f87171 !important;\r\n  border-color: rgba(239, 68, 68, 0.3) !important;\r\n}\r\n\r\n.ci-status-failure:hover {\r\n  background: rgba(239, 68, 68, 0.25) !important;\r\n}\r\n\r\n.git-ci-caret {\r\n  font-size: 10px !important;\r\n  opacity: 0.7 !important;\r\n}\r\n\r\n/* CI Checks Accordion */\r\n.git-ci-checks-accordion {\r\n  margin-top: 4px !important;\r\n  padding: 6px 8px !important;\r\n  border-radius: 6px !important;\r\n  background: #0d1017 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.05) !important;\r\n}\r\n\r\n.git-ci-checks-header {\r\n  display: flex !important;\r\n  justify-content: space-between !important;\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  color: #94a3b8 !important;\r\n  margin-bottom: 6px !important;\r\n  text-transform: uppercase !important;\r\n  letter-spacing: 0.5px !important;\r\n}\r\n\r\n.git-ci-checks-count {\r\n  font-family: monospace !important;\r\n  color: #4ade80 !important;\r\n}\r\n\r\n.git-ci-checks-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.git-ci-check-item {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  padding: 3px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  font-size: 11px !important;\r\n}\r\n\r\n.git-ci-check-icon {\r\n  font-size: 11px !important;\r\n  width: 14px !important;\r\n  text-align: center !important;\r\n}\r\n\r\n.check-success .git-ci-check-icon {\r\n  color: #22c55e !important;\r\n}\r\n\r\n.check-fail .git-ci-check-icon {\r\n  color: #ef4444 !important;\r\n}\r\n\r\n.check-pending .git-ci-check-icon {\r\n  color: #eab308 !important;\r\n}\r\n\r\n.git-ci-check-info {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-ci-check-name {\r\n  color: #e2e8f0 !important;\r\n  font-weight: 500 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-ci-check-wf {\r\n  color: #64748b !important;\r\n  font-size: 9px !important;\r\n}\r\n\r\n.git-ci-check-link {\r\n  font-size: 10px !important;\r\n  color: #38bdf8 !important;\r\n  text-decoration: none !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-ci-check-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-ci-empty {\r\n  color: #64748b !important;\r\n  font-size: 10px !important;\r\n  padding: 4px !important;\r\n}\r\n\r\n/* Branches Filter Toolbar */\r\n.git-branches-filter-bar {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  padding: 4px 10px !important;\r\n  background: #11141c !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  font-size: 11px !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.git-branches-pills {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.git-filter-pill {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  color: #94a3b8 !important;\r\n  border: 1px solid transparent !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;\r\n}\r\n\r\n.git-filter-pill:hover {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-filter-pill.active {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.git-branches-drawer-btn {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: transparent !important;\r\n  color: #64748b !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n}\r\n\r\n.git-branches-drawer-btn:hover {\r\n  color: #f1f5f9 !important;\r\n  border-color: rgba(255, 255, 255, 0.15) !important;\r\n}\r\n\r\n/* Branches Drawer Dropdown */\r\n.git-branches-drawer {\r\n  background: #0d1017 !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  max-height: 220px !important;\r\n  overflow-y: auto !important;\r\n  padding: 6px 10px !important;\r\n}\r\n\r\n.git-branches-section-title {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  letter-spacing: 0.5px !important;\r\n  color: #64748b !important;\r\n  margin: 4px 0 2px !important;\r\n}\r\n\r\n.git-branch-cluster-header {\r\n  font-size: 9px !important;\r\n  font-weight: 600 !important;\r\n  color: #94a3b8 !important;\r\n  padding: 4px 4px 1px !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.04) !important;\r\n  margin-top: 2px !important;\r\n}\r\n\r\n.git-branches-list-wrap {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  margin-bottom: 6px !important;\r\n}\r\n\r\n.git-branch-drawer-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  padding: 3px 6px !important;\r\n  border-radius: 4px !important;\r\n  font-size: 11px !important;\r\n  color: #cbd5e1 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-branch-drawer-row:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n}\r\n\r\n.git-branch-drawer-row.is-active-branch {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #38bdf8 !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.git-branch-drawer-name {\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-branch-sync-badges {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-branch-sync-badge {\r\n  font-family: monospace !important;\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 4px !important;\r\n  border-radius: 3px !important;\r\n  border: 1px solid transparent !important;\r\n  line-height: 1.2 !important;\r\n}\r\n\r\n.git-branch-sync-badge.badge-ahead {\r\n  background: rgba(34, 197, 94, 0.15) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.35) !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-branch-sync-badge.badge-behind {\r\n  background: rgba(249, 115, 22, 0.15) !important;\r\n  color: #fb923c !important;\r\n  border-color: rgba(249, 115, 22, 0.35) !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-branch-sync-badge.badge-dirty {\r\n  background: rgba(234, 179, 8, 0.15) !important;\r\n  color: #facc15 !important;\r\n  border-color: rgba(234, 179, 8, 0.35) !important;\r\n}\r\n\r\n.git-branch-sync-badge.badge-merged {\r\n  background: rgba(168, 85, 247, 0.15) !important;\r\n  color: #c084fc !important;\r\n  border-color: rgba(168, 85, 247, 0.3) !important;\r\n}\r\n\r\n.git-branch-drawer-hash {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n}\r\n\r\n.git-branch-current-badge {\r\n  font-size: 8px !important;\r\n  font-weight: 700 !important;\r\n  padding: 0 4px !important;\r\n  border-radius: 3px !important;\r\n  background: #38bdf8 !important;\r\n  color: #0f172a !important;\r\n}\r\n\r\n.git-branch-empty {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n  padding: 2px 4px !important;\r\n}\r\n\r\n/* Redesigned High-Quality Commit Inspector */\r\n.git-inspector-mount {\r\n  position: sticky !important;\r\n  bottom: 0 !important;\r\n  z-index: 40 !important;\r\n  background: #11141c !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4) !important;\r\n  padding: 8px 12px !important;\r\n}\r\n\r\n.git-inspector-card {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-inspector-top {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.git-inspector-author-group {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-avatar-frame {\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 50% !important;\r\n  overflow: hidden !important;\r\n  flex-shrink: 0 !important;\r\n  position: relative !important;\r\n}\r\n\r\n.git-inspector-avatar {\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  object-fit: cover !important;\r\n  border-radius: 50% !important;\r\n}\r\n\r\n.git-inspector-avatar-fallback {\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  border-radius: 50% !important;\r\n  background: linear-gradient(135deg, #0284c7, #6366f1) !important;\r\n  color: #ffffff !important;\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  text-transform: uppercase !important;\r\n}\r\n\r\n.git-inspector-author-text {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  min-width: 0 !important;\r\n  line-height: 1.2 !important;\r\n}\r\n\r\n.git-inspector-name-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-inspector-author-name {\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-inspector-date {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n}\r\n\r\n.git-inspector-author-email {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n  font-family: monospace !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-inspector-meta-group {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-inspector-hash-pill {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #93c5fd !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n}\r\n\r\n.git-inspector-btn-gh {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n  text-decoration: none !important;\r\n  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;\r\n}\r\n\r\n.git-inspector-btn-gh:hover {\r\n  background: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-inspector-btn-close {\r\n  font-size: 12px !important;\r\n  padding: 2px 5px !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n  color: #64748b !important;\r\n  cursor: pointer !important;\r\n  border-radius: 4px !important;\r\n  line-height: 1 !important;\r\n}\r\n\r\n.git-inspector-btn-close:hover {\r\n  color: #f1f5f9 !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-inspector-subject-line {\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  color: #e2e8f0 !important;\r\n  padding: 4px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(0, 0, 0, 0.25) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.04) !important;\r\n  line-height: 1.35 !important;\r\n  word-break: break-word !important;\r\n}\r\n\r\n.git-inspector-footer-stats {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-inspector-files-badge {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n/* --- Sync & Ahead/Behind Indicators --- */\r\n.git-sync-badge {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 10px !important;\r\n  background: rgba(234, 179, 8, 0.15) !important;\r\n  color: #eab308 !important;\r\n  border: 1px solid rgba(234, 179, 8, 0.35) !important;\r\n  margin-left: 4px !important;\r\n  line-height: 1.2 !important;\r\n}\r\n\r\n.git-sync-badge.is-behind {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.git-sync-badge.is-synced {\r\n  background: rgba(34, 197, 94, 0.12) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.3) !important;\r\n}\r\n\r\n.git-pill-sync {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  letter-spacing: 0.3px !important;\r\n  margin-left: 4px !important;\r\n}\r\n\r\n.git-pill-unpushed {\r\n  background: rgba(245, 158, 11, 0.2) !important;\r\n  color: #fbbf24 !important;\r\n  border: 1px solid rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.git-pill-unpulled {\r\n  background: rgba(14, 165, 233, 0.2) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(14, 165, 233, 0.4) !important;\r\n}\r\n\r\n.git-inspector-sync-badge {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n.git-inspector-sync-badge.is-unpushed {\r\n  background: rgba(245, 158, 11, 0.2) !important;\r\n  color: #fbbf24 !important;\r\n  border: 1px solid rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.git-inspector-sync-badge.is-unpulled {\r\n  background: rgba(14, 165, 233, 0.2) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(14, 165, 233, 0.4) !important;\r\n}\r\n\r\n/* =========================================================================\r\n   GIT LOCAL VS GITHUB REMOTE VISUAL DISTINCTION\r\n   ========================================================================= */\r\n\r\n.git-route-local {\r\n  stroke: #f59e0b !important;\r\n}\r\n\r\n.git-route-remote {\r\n  stroke-opacity: 0.95;\r\n}\r\n\r\n.git-route-sync-bridge {\r\n  stroke: #f59e0b !important;\r\n  stroke-dasharray: 3, 2 !important;\r\n  stroke-opacity: 0.9;\r\n}\r\n\r\n.git-commit-row.is-local-commit {\r\n  border-left: 2px solid rgba(245, 158, 11, 0.7) !important;\r\n}\r\n\r\n.git-commit-row.is-remote-commit {\r\n  border-left: 2px solid rgba(56, 189, 248, 0.4) !important;\r\n}\r\n\r\n.git-filter-pill[data-branch-filter=\"local\"].active {\r\n  background: rgba(245, 158, 11, 0.18) !important;\r\n  color: #fbbf24 !important;\r\n  border-color: rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.git-filter-pill[data-branch-filter=\"remote\"].active {\r\n  background: rgba(56, 189, 248, 0.18) !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.4) !important;\r\n}\r\n";
   }
 
   /**

@@ -83,6 +83,60 @@
   display: block !important;
 }
 
+.antigravity-tachometer-popover-portal .tach-model-details {
+  border-top: 1px dashed rgba(255, 255, 255, 0.06);
+}
+
+.antigravity-tachometer-popover-portal .tach-model-summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  padding: 3px 2px;
+  border-radius: 4px;
+  color: #d4d4d8;
+  white-space: nowrap;
+  user-select: none;
+  transition: background-color 0.15s ease;
+}
+
+.antigravity-tachometer-popover-portal .tach-model-summary::-webkit-details-marker {
+  display: none;
+}
+
+.antigravity-tachometer-popover-portal .tach-model-summary:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.antigravity-tachometer-popover-portal .tach-model-summary:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}
+
+.antigravity-tachometer-popover-portal .tach-details-chevron {
+  color: #71717a;
+  transition: transform 0.16s ease, color 0.16s ease;
+}
+
+.antigravity-tachometer-popover-portal .tach-model-details[open] .tach-details-chevron {
+  transform: rotate(90deg);
+  color: #38bdf8;
+}
+
+.antigravity-tachometer-popover-portal .tach-subagent-list {
+  margin: 2px 0 5px 10px;
+  padding: 3px 0 3px 7px;
+  border-left: 1px solid rgba(56, 189, 248, 0.28);
+  max-height: 116px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .antigravity-popover-container {
   display: none !important;
 }

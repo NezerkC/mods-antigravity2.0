@@ -337,3 +337,56 @@ test('GitGraphPanelHtml - renders sync badges and unpushed/unpulled indicators',
   assert.ok(cardHtml.includes('git-inspector-sync-badge'));
   assert.ok(cardHtml.includes('is-unpushed'));
 });
+
+
+test('GitGraphSvg & GitGraphPanelHtml - distinguish git local vs github remote topology and row styles', () => {
+  const commits = [
+    {
+      hash: 'local_c1',
+      lane: 0,
+      pushed: false,
+      syncStatus: 'ahead',
+      isUnpushed: true,
+      routes: [{ fromLane: 0, toLane: 0, type: 'straight' }],
+      refs: ['HEAD -> feat/test']
+    },
+    {
+      hash: 'remote_c2',
+      lane: 0,
+      pushed: true,
+      routes: [],
+      refs: ['origin/main']
+    }
+  ];
+
+  const svg = renderGitGraphSvg(commits, { rowHeight: 44, laneWidth: 20 });
+  // Bridge route between local unpushed commit and remote commit
+  assert.ok(svg.includes('git-route-sync-bridge'));
+  // Local unpushed node class
+  assert.ok(svg.includes('git-node-halo is-local'));
+
+  const panelHtml = renderGitGraphPanelHtml({
+    commits: [
+      {
+        hash: 'local_c1',
+        shortHash: 'lc1',
+        subject: 'local commit',
+        pushed: false,
+        syncStatus: 'ahead',
+        isUnpushed: true,
+        files: []
+      },
+      {
+        hash: 'remote_c2',
+        shortHash: 'rc2',
+        subject: 'remote commit',
+        pushed: true,
+        refs: ['origin/main'],
+        files: []
+      }
+    ]
+  });
+
+  assert.ok(panelHtml.includes('is-local-commit'));
+  assert.ok(panelHtml.includes('is-remote-commit'));
+});

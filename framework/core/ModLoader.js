@@ -1155,7 +1155,8 @@ export class ModLoader {
 
           const filtered = commits.filter(function(c) {
             const hasOrigin = Array.isArray(c.refs) && c.refs.some(function(r) { return r.indexOf('origin/') !== -1; });
-            const cType = (c.pushed !== undefined) ? (c.pushed === false ? 'local' : 'remote') : (hasOrigin ? 'remote' : 'local');
+            const isLocal = c.pushed === false || c.syncStatus === 'ahead' || !!c.isUnpushed;
+            const cType = isLocal ? 'local' : (hasOrigin ? 'remote' : 'local');
             return cType === filterType;
           });
 
@@ -2188,10 +2189,35 @@ export class ModLoader {
                 tpl.innerHTML = renderedPopover;
               }
 
-              // Update live popover content if currently open on screen
+              // Update live popover content if currently open on screen, preserving expanded model disclosures
               const portal = document.getElementById('antigravity-tachometer-popover-portal');
               if (portal && portal.classList.contains('open')) {
+                const openKeys = new Set();
+                const scrollByKey = new Map();
+                portal.querySelectorAll('details.tach-model-details[open]').forEach(det => {
+                  const key = det.getAttribute('data-model-key');
+                  if (key) {
+                    openKeys.add(key);
+                    const listEl = det.querySelector('.tach-subagent-list');
+                    if (listEl && listEl.scrollTop > 0) {
+                      scrollByKey.set(key, listEl.scrollTop);
+                    }
+                  }
+                });
                 portal.innerHTML = renderedPopover;
+                if (openKeys.size > 0) {
+                  portal.querySelectorAll('details.tach-model-details').forEach(det => {
+                    const key = det.getAttribute('data-model-key');
+                    if (key && openKeys.has(key)) {
+                      det.setAttribute('open', '');
+                      const savedScroll = scrollByKey.get(key);
+                      const listEl = det.querySelector('.tach-subagent-list');
+                      if (listEl && savedScroll) {
+                        listEl.scrollTop = savedScroll;
+                      }
+                    }
+                  });
+                }
               }
             }
           });

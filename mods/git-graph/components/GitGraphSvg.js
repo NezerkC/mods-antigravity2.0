@@ -12,6 +12,9 @@ export const LANE_COLORS = [
   '#06b6d4'  // Cyan
 ];
 
+export const COLOR_GIT_LOCAL = '#f59e0b';     // Amber (Git Local / Unpushed)
+export const COLOR_GITHUB_REMOTE = '#38bdf8'; // Sky Blue (GitHub Remote)
+
 /**
  * Returns color associated with a lane index.
  * Self-contained palette so getLaneColor.toString() works cleanly in browser runtime.
@@ -45,6 +48,10 @@ export function renderGitGraphSvg(commits = [], options = {}) {
   if (!Array.isArray(commits) || commits.length === 0) {
     return '';
   }
+
+  // Self-contained helpers so renderGitGraphSvg.toString() works in ModLoader browser payload
+  const COLOR_GIT_LOCAL = '#f59e0b';
+  const escapeSvgAttr = (str = '') => String(str).replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   const rowHeight = options.rowHeight ?? 26;
   const fileRowHeight = options.fileRowHeight ?? 22;
@@ -114,12 +121,30 @@ export function renderGitGraphSvg(commits = [], options = {}) {
         const fromY = cy;
         const toX = startX + route.toLane * laneWidth;
         const toY = nextCoord.cy;
-        const routeColor = getLaneColor(typeof route.colorLane === 'number' ? route.colorLane : Math.min(route.fromLane, route.toLane));
+        const isCurrentLocal = commit.pushed === false || commit.syncStatus === 'ahead' || !!commit.isUnpushed;
+        const nextCommit = commits[nextIdx];
+        const isNextLocal = nextCommit ? (nextCommit.pushed === false || nextCommit.syncStatus === 'ahead' || !!nextCommit.isUnpushed) : false;
+
+        const isSyncBridge = isCurrentLocal !== isNextLocal;
+        const isLocalRoute = isCurrentLocal && isNextLocal;
+
+        let strokeColor = getLaneColor(typeof route.colorLane === 'number' ? route.colorLane : Math.min(route.fromLane, route.toLane));
+        let routeCls = 'git-route-remote';
+        let dashAttr = '';
+
+        if (isSyncBridge) {
+          strokeColor = COLOR_GIT_LOCAL;
+          routeCls = 'git-route-sync-bridge';
+          dashAttr = 'stroke-dasharray="3,2"';
+        } else if (isLocalRoute || isCurrentLocal) {
+          strokeColor = (typeof route.colorLane === 'number' && route.colorLane > 0) ? strokeColor : COLOR_GIT_LOCAL;
+          routeCls = 'git-route-local';
+        }
 
         if (route.fromLane === route.toLane) {
           // Straight vertical trunk line
           pathsMarkup += `
-            <line x1="${fromX}" y1="${fromY}" x2="${toX}" y2="${toY}" stroke="${routeColor}" stroke-width="2" stroke-linecap="round"/>
+            <line x1="${fromX}" y1="${fromY}" x2="${toX}" y2="${toY}" stroke="${strokeColor}" stroke-width="2" stroke-linecap="round" class="${routeCls}" ${dashAttr}/>
           `;
         } else {
           // Curved Bezier branch or merge
@@ -127,7 +152,7 @@ export function renderGitGraphSvg(commits = [], options = {}) {
           const cpY1 = fromY + deltaY * 0.45;
           const cpY2 = toY - deltaY * 0.45;
           pathsMarkup += `
-            <path d="M ${fromX} ${fromY} C ${fromX} ${cpY1}, ${toX} ${cpY2}, ${toX} ${toY}" fill="none" stroke="${routeColor}" stroke-width="2" stroke-linecap="round"/>
+            <path d="M ${fromX} ${fromY} C ${fromX} ${cpY1}, ${toX} ${cpY2}, ${toX} ${toY}" fill="none" stroke="${strokeColor}" stroke-width="2" stroke-linecap="round" class="${routeCls}" ${dashAttr}/>
           `;
         }
       }
@@ -181,23 +206,27 @@ export function renderGitGraphSvg(commits = [], options = {}) {
 
     // Node Circle
     const isHead = (Array.isArray(commit.refs) && commit.refs.some(r => r.includes('HEAD'))) || i === 0;
-    const isPushed = commit.pushed !== false;
+    const isPushed = commit.pushed !== false && commit.syncStatus !== 'ahead' && !commit.isUnpushed;
+    const nodeColor = !isPushed ? COLOR_GIT_LOCAL : color;
+    const safeHash = escapeSvgAttr(commit.hash);
 
     if (isHead) {
       // Glowing halo ring around current/HEAD commit
+      const haloClass = isPushed ? 'git-node-halo is-remote' : 'git-node-halo is-local';
       nodesMarkup += `
-        <circle cx="${cx}" cy="${cy}" r="6.5" fill="none" stroke="${color}" stroke-width="1.8" class="git-node-halo"/>
-        <circle cx="${cx}" cy="${cy}" r="3" fill="${color}" class="git-node-head" data-hash="${commit.hash}"/>
+        <circle cx="${cx}" cy="${cy}" r="6.5" fill="none" stroke="${nodeColor}" stroke-width="1.8" class="${haloClass}"/>
+        <circle cx="${cx}" cy="${cy}" r="3" fill="${nodeColor}" class="git-node-head" data-hash="${safeHash}"/>
       `;
     } else if (!isPushed) {
-      // Local unpushed commit: concentric target ring
+      // Local unpushed commit: concentric target ring with Git Local identity
       nodesMarkup += `
-        <circle cx="${cx}" cy="${cy}" r="5.5" fill="none" stroke="${color}" stroke-width="1.5" stroke-dasharray="2,2" class="git-node-unpushed-ring"/>
-        <circle cx="${cx}" cy="${cy}" r="3" fill="${color}" stroke="#181a1f" stroke-width="1" class="git-node git-node-unpushed" data-hash="${commit.hash}"/>
+        <circle cx="${cx}" cy="${cy}" r="5.5" fill="none" stroke="${COLOR_GIT_LOCAL}" stroke-width="1.5" stroke-dasharray="2,2" class="git-node-unpushed-ring"/>
+        <circle cx="${cx}" cy="${cy}" r="3" fill="${COLOR_GIT_LOCAL}" stroke="#181a1f" stroke-width="1" class="git-node git-node-local git-node-unpushed" data-hash="${safeHash}"/>
       `;
     } else {
+      // GitHub consolidated remote commit
       nodesMarkup += `
-        <circle cx="${cx}" cy="${cy}" r="3.5" fill="${color}" stroke="#181a1f" stroke-width="1.5" class="git-node" data-hash="${commit.hash}"/>
+        <circle cx="${cx}" cy="${cy}" r="3.5" fill="${color}" stroke="#181a1f" stroke-width="1.5" class="git-node git-node-remote git-node-pushed" data-hash="${safeHash}"/>
       `;
     }
   }
