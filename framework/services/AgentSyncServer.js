@@ -26,9 +26,136 @@ export class AgentSyncServer {
     this.port = options.port ?? 53912;
     this.host = options.host || '127.0.0.1';
     this.configPath = options.configPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'active_agents.json');
+    this.brainDir = options.brainDir || path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
+    this.sessionRepos = new Map();
     this.repoPath = options.repoPath || process.cwd();
     this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ repoPath: this.repoPath });
     this.server = null;
+  }
+
+  /**
+   * Normalizes a candidate file/directory path or file:// URI into a valid Git repository root.
+   * @param {string} [candidate='']
+   * @param {boolean} [requireGit=false]
+   * @returns {string|null}
+   */
+  normalizeRepoCandidate(candidate = '', requireGit = false) {
+    if (!candidate || typeof candidate !== 'string') return null;
+    let clean = candidate.trim();
+    if (!clean) return null;
+
+    try {
+      if (clean.startsWith('file://')) {
+        clean = decodeURIComponent(clean.replace(/^file:\/\/\/?/, ''));
+      } else if (clean.includes('%')) {
+        clean = decodeURIComponent(clean);
+      }
+      if (/^\/([a-zA-Z]:)/.test(clean)) {
+        clean = clean.slice(1);
+      }
+    } catch {}
+
+    clean = path.normalize(clean);
+    if (!fs.existsSync(clean)) return null;
+
+    let startDir = clean;
+    try {
+      const stat = fs.statSync(clean);
+      startDir = stat.isDirectory() ? clean : path.dirname(clean);
+    } catch {
+      return null;
+    }
+
+    let curr = startDir;
+    while (curr && curr !== path.dirname(curr)) {
+      if (fs.existsSync(path.join(curr, '.git'))) {
+        return curr;
+      }
+      curr = path.dirname(curr);
+    }
+    if (curr && fs.existsSync(path.join(curr, '.git'))) {
+      return curr;
+    }
+
+    return requireGit ? null : startDir;
+  }
+
+  /**
+   * Resolves the Git repository root for a specific conversation cascadeId or explicit path.
+   * @param {string} [cascadeId]
+   * @param {string} [explicitRepoPath]
+   * @returns {string}
+   */
+  resolveRepoForCascade(cascadeId, explicitRepoPath) {
+    if (explicitRepoPath) {
+      const normalized = this.normalizeRepoCandidate(explicitRepoPath, false);
+      if (normalized) {
+        this.repoPath = normalized;
+        if (cascadeId) {
+          this.sessionRepos.set(cascadeId, normalized);
+        }
+        return normalized;
+      }
+    }
+
+    if (cascadeId && this.sessionRepos.has(cascadeId)) {
+      const cached = this.sessionRepos.get(cascadeId);
+      if (cached && fs.existsSync(cached)) {
+        this.repoPath = cached;
+        return cached;
+      }
+      this.sessionRepos.delete(cascadeId);
+    }
+
+    if (cascadeId && /^[0-9a-fA-F-]{36}$/.test(cascadeId)) {
+      const logsDir = path.join(this.brainDir, cascadeId, '.system_generated', 'logs');
+      const candidates = [
+        path.join(logsDir, 'transcript.jsonl'),
+        path.join(logsDir, 'transcript_full.jsonl')
+      ];
+      for (const transcriptPath of candidates) {
+        if (!fs.existsSync(transcriptPath)) continue;
+        try {
+          const fd = fs.openSync(transcriptPath, 'r');
+          const buf = Buffer.alloc(65536);
+          const bytesRead = fs.readSync(fd, buf, 0, 65536, 0);
+          fs.closeSync(fd);
+          const sample = buf.toString('utf-8', 0, bytesRead);
+          const isJsonl = sample.trimStart().startsWith('{');
+          const cleanSample = isJsonl
+            ? sample.replace(/\\\\/g, '/').replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\"/g, '"')
+            : sample.replace(/\\\\/g, '/').replace(/\\/g, '/');
+
+          const cwdMatch = cleanSample.match(/Command Working Directory:\s*([^\r\n\\"]+)/i) ||
+                           cleanSample.match(/Active Workspaces:\s*(?:\\n|\r?\n)-\s*([^\r\n\\"]+)/i);
+          if (cwdMatch && cwdMatch[1]) {
+            const resolved = this.normalizeRepoCandidate(cwdMatch[1].trim(), false);
+            if (resolved) {
+              this.sessionRepos.set(cascadeId, resolved);
+              this.repoPath = resolved;
+              return resolved;
+            }
+          }
+
+          const pathRegex = /"Path"\s*:\s*"([^"]+)"/gi;
+          let m;
+          while ((m = pathRegex.exec(cleanSample)) !== null) {
+            const p = m[1];
+            if (!p || p.includes('.gemini/antigravity/builtin') || p.includes('.gemini/antigravity/brain')) {
+              continue;
+            }
+            const resolved = this.normalizeRepoCandidate(p, true);
+            if (resolved) {
+              this.sessionRepos.set(cascadeId, resolved);
+              this.repoPath = resolved;
+              return resolved;
+            }
+          }
+        } catch {}
+      }
+    }
+
+    return this.repoPath;
   }
 
   /**
@@ -208,16 +335,15 @@ export class AgentSyncServer {
 
         if (req.method === 'GET' && (req.url === '/vcs/overview' || req.url.startsWith('/vcs/overview?'))) {
           try {
-            let targetRepo = this.repoPath;
+            let qRepo = null;
+            let qCascade = null;
             try {
               const urlObj = new URL(req.url, 'http://127.0.0.1');
-              const qRepo = urlObj.searchParams.get('repoPath');
-              if (qRepo && fs.existsSync(qRepo)) {
-                targetRepo = qRepo;
-                this.repoPath = qRepo;
-              }
+              qRepo = urlObj.searchParams.get('repoPath');
+              qCascade = urlObj.searchParams.get('cascadeId');
             } catch {}
 
+            const targetRepo = this.resolveRepoForCascade(qCascade, qRepo) || this.repoPath;
             const data = this.vcsOrchestrator.getRepositoryOverview({ repoPath: targetRepo });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(data));
@@ -228,17 +354,36 @@ export class AgentSyncServer {
           return;
         }
 
-        if (req.method === 'POST' && req.url === '/vcs/fetch') {
-          try {
-            if (this.vcsOrchestrator?.gitService && typeof this.vcsOrchestrator.gitService.fetch === 'function') {
-              this.vcsOrchestrator.gitService.fetch({ repoPath: this.repoPath });
+        if (req.method === 'POST' && (req.url === '/vcs/fetch' || req.url.startsWith('/vcs/fetch?'))) {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            try {
+              let qRepo = null;
+              let qCascade = null;
+              try {
+                const urlObj = new URL(req.url, 'http://127.0.0.1');
+                qRepo = urlObj.searchParams.get('repoPath');
+                qCascade = urlObj.searchParams.get('cascadeId');
+              } catch {}
+              if (body) {
+                try {
+                  const parsed = JSON.parse(body);
+                  if (parsed.repoPath) qRepo = parsed.repoPath;
+                  if (parsed.cascadeId) qCascade = parsed.cascadeId;
+                } catch {}
+              }
+              const targetRepo = this.resolveRepoForCascade(qCascade, qRepo) || this.repoPath;
+              if (this.vcsOrchestrator?.gitService && typeof this.vcsOrchestrator.gitService.fetch === 'function') {
+                this.vcsOrchestrator.gitService.fetch({ repoPath: targetRepo });
+              }
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: true, repoPath: targetRepo }));
+            } catch (err) {
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: err.message }));
             }
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true }));
-          } catch (err) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: err.message }));
-          }
+          });
           return;
         }
 
@@ -248,13 +393,14 @@ export class AgentSyncServer {
           req.on('end', () => {
             try {
               const payload = JSON.parse(body || '{}');
-              const { action, branch, targetSha } = payload;
+              const { action, branch, targetSha, cascadeId, repoPath } = payload;
               if (!action) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Missing action parameter' }));
                 return;
               }
 
+              const targetRepo = this.resolveRepoForCascade(cascadeId, repoPath) || this.repoPath;
               let result = {};
               if (action === 'checkout') {
                 if (!branch) {
@@ -262,24 +408,24 @@ export class AgentSyncServer {
                   res.end(JSON.stringify({ error: 'Missing branch for checkout' }));
                   return;
                 }
-                execSync(`git checkout ${branch}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-                result = { success: true, action: 'checkout', branch };
+                execSync(`git checkout ${branch}`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                result = { success: true, action: 'checkout', branch, repoPath: targetRepo };
               } else if (action === 'pull') {
                 const targetBranch = branch || 'main';
-                execSync(`git pull origin ${targetBranch}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-                result = { success: true, action: 'pull', branch: targetBranch };
+                execSync(`git pull origin ${targetBranch}`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                result = { success: true, action: 'pull', branch: targetBranch, repoPath: targetRepo };
               } else if (action === 'push') {
                 const targetBranch = branch || 'main';
                 const refspec = targetSha ? `${targetSha}:refs/heads/${targetBranch}` : targetBranch;
-                execSync(`git push origin ${refspec}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-                result = { success: true, action: 'push', branch: targetBranch, refspec };
+                execSync(`git push origin ${refspec}`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                result = { success: true, action: 'push', branch: targetBranch, refspec, repoPath: targetRepo };
               } else if (action === 'create-pr') {
                 try {
-                  const prOut = execSync(`gh pr create --fill`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-                  result = { success: true, action: 'create-pr', output: prOut.trim() };
+                  const prOut = execSync(`gh pr create --fill`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                  result = { success: true, action: 'create-pr', output: prOut.trim(), repoPath: targetRepo };
                 } catch (e) {
                   try {
-                    const remoteUrl = execSync('git remote get-url origin', { cwd: this.repoPath, encoding: 'utf-8' }).trim();
+                    const remoteUrl = execSync('git remote get-url origin', { cwd: targetRepo, encoding: 'utf-8' }).trim();
                     const cleanRemote = remoteUrl.replace(/\.git$/, '').replace(/^git@github\.com:/, 'https://github.com/');
                     result = { success: false, fallbackUrl: `${cleanRemote}/compare`, error: e.message };
                   } catch {

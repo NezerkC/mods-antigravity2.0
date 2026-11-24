@@ -167,4 +167,42 @@ describe('AgentSyncServer', () => {
     assert.ok(server.server);
     assert.equal(typeof server.server.unref, 'function');
   });
+
+  it('normalizes file:// URIs and resolves per-cascade repositories from transcripts', async () => {
+    const repoRoot = path.join(tmpDir, 'mock-session-repo');
+    const subDir = path.join(repoRoot, 'packages', 'core');
+    const mockBrain = path.join(tmpDir, 'brain');
+    const cascadeId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const logsDir = path.join(mockBrain, cascadeId, '.system_generated', 'logs');
+
+    fs.mkdirSync(path.join(repoRoot, '.git'), { recursive: true });
+    fs.mkdirSync(subDir, { recursive: true });
+    fs.mkdirSync(logsDir, { recursive: true });
+
+    const transcriptLine = JSON.stringify({
+      step_index: 1,
+      content: `Command Working Directory: ${subDir}\n`
+    }) + '\n';
+    fs.writeFileSync(path.join(logsDir, 'transcript.jsonl'), transcriptLine, 'utf-8');
+
+    server.brainDir = mockBrain;
+
+    const uriCandidate = 'file:///' + subDir.replace(/\\/g, '/');
+    assert.equal(server.normalizeRepoCandidate(uriCandidate, true), path.normalize(repoRoot));
+    assert.equal(server.resolveRepoForCascade(cascadeId), path.normalize(repoRoot));
+
+    let capturedRepo = null;
+    const prevOverview = mockVcs.getRepositoryOverview;
+    mockVcs.getRepositoryOverview = ({ repoPath }) => {
+      capturedRepo = repoPath;
+      return prevOverview({ repoPath });
+    };
+    try {
+      const res = await fetch(`http://127.0.0.1:53913/vcs/overview?cascadeId=${cascadeId}`);
+      assert.equal(res.status, 200);
+      assert.equal(capturedRepo, path.normalize(repoRoot));
+    } finally {
+      mockVcs.getRepositoryOverview = prevOverview;
+    }
+  });
 });

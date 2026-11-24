@@ -134,7 +134,7 @@ export class GitService {
     const remoteHashes = new Set();
     const localHashes = new Set();
     try {
-      const trunkLog = execSync('git rev-list --first-parent origin/main || git rev-list --first-parent main || git rev-list origin/main || git rev-list main', {
+      const trunkLog = execSync('git rev-list --first-parent origin/main || git rev-list --first-parent main || git rev-list --first-parent origin/master || git rev-list --first-parent master || git rev-list origin/main || git rev-list main', {
         cwd: repoPath,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore']
