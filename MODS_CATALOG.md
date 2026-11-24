@@ -360,7 +360,7 @@ Service to manage Windows startup persistence and background lifecycle for Antig
 ---
 ## 5. Test Suite Mapping & Coverage
 
-Total verified tests: **273 tests** across **34 unit test files** and **1 functional integration test file**.
+Total verified tests: **278 tests** across **34 unit test files** and **1 functional integration test file**.
 
 | Test Suite File | Type | Tests | Target Under Test (SUT) | Sample / Primary Assertion |
 |---|:---:|:---:|---|---|
@@ -369,7 +369,7 @@ Total verified tests: **273 tests** across **34 unit test files** and **1 functi
 | `tests/unit/agent_selector_mod.test.mjs` | **Unit** | 10 | `mods/agent-selector/index.js`, `mods/agent-selector/components/AgentDropdownHtml.js` | AgentSelectorMod - loads correct manifest metadata |
 | `tests/unit/agent_sync_server.test.mjs` | **Unit** | 8 | `framework/services/AgentSyncServer.js` | reads empty agents when file does not exist |
 | `tests/unit/antigravity_mod.test.mjs` | **Unit** | 3 | `framework/sdk/AntigravityMod.js` | AntigravityMod - enforces required manifest properties |
-| `tests/unit/antigravity_mods_hook.test.mjs` | **Unit** | 6 | `plugins/antigravity-mods/scripts/context-hook.mjs` | hooks.json - configures PreInvocation, PostInvocation, and Stop with distin |
+| `tests/unit/antigravity_mods_hook.test.mjs` | **Unit** | 11 | `plugins/antigravity-mods/scripts/context-hook.mjs` | hooks.json - configures PreInvocation, PostInvocation, and Stop with distin |
 | `tests/unit/antigravity_mods_sidecar.test.mjs` | **Unit** | 13 | `plugins/antigravity-mods/sidecars/dashboard/server.mjs` | plugin.json contains only allowed top-level Antigravity manifest keys |
 | `tests/unit/build_bundle.test.mjs` | **Unit** | 3 | Framework / System | build.js - reads and orders VoicePromptConditioner before VoiceAssistantMod |
 | `tests/unit/cdp_client.test.mjs` | **Unit** | 8 | `framework/core/CdpWebSocketClient.js` | CdpWebSocketClient - generates structured Runtime.evaluate command payload |
@@ -469,7 +469,7 @@ A dense, token-saving lookup table mapping every file in the repository to its e
 ### Ecosystem Plugins
 - `plugins/antigravity-mods/hooks.json`: Repository module file.
 - `plugins/antigravity-mods/plugin.json`: Repository module file.
-- `plugins/antigravity-mods/scripts/context-hook.mjs`: Antigravity Native Lifecycle Hook & Telemetry Engine Plugin: antigravity-mods Runtime: Node.js (ESM) - Zero External Dependencies.
+- `plugins/antigravity-mods/scripts/context-hook.mjs`: Antigravity Native Lifecycle Hook & Telemetry Engine (SSOT) Plugin: antigravity-mods Runtime: Node.js (ESM) - Zero External Dependencies.
 - `plugins/antigravity-mods/sidecars/dashboard/server.mjs`: Antigravity Mods & Telemetry Native Sidecar Server.
 - `plugins/antigravity-mods/sidecars/dashboard/sidecar.json`: Repository module file.
 - `plugins/antigravity-voice-control/mcp_config.json`: MCP server configuration registering voice control tool definitions.
