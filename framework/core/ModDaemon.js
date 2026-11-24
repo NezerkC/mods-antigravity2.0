@@ -6,6 +6,7 @@ import { AgentSelectorMod } from '../../mods/agent-selector/index.js';
 import { ModsManagerMod } from '../../mods/mods-manager/index.js';
 import { GitGraphMod } from '../../mods/git-graph/index.js';
 import { ModelSlotsMod } from '../../mods/model-slots/index.js';
+import { VoiceAssistantMod } from '../../mods/voice-assistant/index.js';
 
 /**
  * Creates a ModHost instance pre-configured with default first-party mods.
@@ -19,6 +20,7 @@ export function createDefaultHost(options = {}) {
   host.registerMod(new ModsManagerMod());
   host.registerMod(new GitGraphMod());
   host.registerMod(new ModelSlotsMod());
+  host.registerMod(new VoiceAssistantMod());
   return host;
 }
 
