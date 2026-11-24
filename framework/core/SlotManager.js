@@ -92,14 +92,25 @@ export class SlotManager {
 
   /**
    * Generates browser-executable JavaScript to mount a mod within a target slot
-   * across ALL conversation tabs and split panels matching the selector.
-   * @param {Object} params
-   * @param {string} params.slotId
-   * @param {string} params.modId
-   * @param {string} params.htmlContent
+   * using default SlotManager definitions.
+   * @param {string} slotId
+   * @param {string} modId
+   * @param {string} htmlContent
    * @returns {string}
    */
-  generateMountCode({ slotId, modId, htmlContent }) {
+  static generateMountSnippet(slotId, modId, htmlContent) {
+    return new SlotManager().generateMountSnippet(slotId, modId, htmlContent);
+  }
+
+  /**
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * across ALL conversation tabs and split panels matching the selector.
+   * @param {string} slotId
+   * @param {string} modId
+   * @param {string} htmlContent
+   * @returns {string}
+   */
+  generateMountSnippet(slotId, modId, htmlContent) {
     const slot = this.getSlot(slotId);
     const containerId = this.getContainerId(slotId);
     const modWrapperId = `antigravity-mod-${modId}`;
@@ -261,5 +272,18 @@ export class SlotManager {
         }
       })();
     `;
+  }
+
+  /**
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * across ALL conversation tabs and split panels matching the selector.
+   * @param {Object} params
+   * @param {string} params.slotId
+   * @param {string} params.modId
+   * @param {string} params.htmlContent
+   * @returns {string} Executable JavaScript.
+   */
+  generateMountCode({ slotId, modId, htmlContent }) {
+    return this.generateMountSnippet(slotId, modId, htmlContent);
   }
 }

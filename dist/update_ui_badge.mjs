@@ -492,14 +492,25 @@ class SlotManager {
 
   /**
    * Generates browser-executable JavaScript to mount a mod within a target slot
-   * across ALL conversation tabs and split panels matching the selector.
-   * @param {Object} params
-   * @param {string} params.slotId
-   * @param {string} params.modId
-   * @param {string} params.htmlContent
+   * using default SlotManager definitions.
+   * @param {string} slotId
+   * @param {string} modId
+   * @param {string} htmlContent
    * @returns {string}
    */
-  generateMountCode({ slotId, modId, htmlContent }) {
+  static generateMountSnippet(slotId, modId, htmlContent) {
+    return new SlotManager().generateMountSnippet(slotId, modId, htmlContent);
+  }
+
+  /**
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * across ALL conversation tabs and split panels matching the selector.
+   * @param {string} slotId
+   * @param {string} modId
+   * @param {string} htmlContent
+   * @returns {string}
+   */
+  generateMountSnippet(slotId, modId, htmlContent) {
     const slot = this.getSlot(slotId);
     const containerId = this.getContainerId(slotId);
     const modWrapperId = `antigravity-mod-${modId}`;
@@ -662,6 +673,19 @@ class SlotManager {
       })();
     `;
   }
+
+  /**
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * across ALL conversation tabs and split panels matching the selector.
+   * @param {Object} params
+   * @param {string} params.slotId
+   * @param {string} params.modId
+   * @param {string} params.htmlContent
+   * @returns {string} Executable JavaScript.
+   */
+  generateMountCode({ slotId, modId, htmlContent }) {
+    return this.generateMountSnippet(slotId, modId, htmlContent);
+  }
 }
 
 
@@ -746,6 +770,9 @@ class StyleIsolator {
             sel.startsWith('.mods-manager-') ||
             sel.startsWith('.agent-') ||
             sel.startsWith('.antigravity-agent-item') ||
+            sel.startsWith('.model-slot-') ||
+            sel.startsWith('.model-effort-') ||
+            sel.includes('antigravity-subagent-model') ||
             sel.startsWith('body') ||
             sel.startsWith(':root')
           ) {
@@ -839,6 +866,7 @@ class AntigravityMod {
 
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 
 
 
@@ -1362,6 +1390,7 @@ class ModLoader {
               const box = triggerEl.querySelector('.caveman-reticle-box');
               if (box && reticleSvg) {
                 box.innerHTML = reticleSvg;
+                box.setAttribute('data-focus-state', String(nextVal));
               }
             }
           });
@@ -1572,6 +1601,809 @@ class ModLoader {
           }
           if (agent && agent.classList.contains('compact') !== shouldCompact) {
             agent.classList.toggle('compact', shouldCompact);
+          }
+        };
+
+        window.__BASE_MODELS = ${JSON.stringify(BASE_MODELS)};
+        window.__MODEL_CATALOG = ${JSON.stringify(MODEL_CATALOG)};
+        window.__DEFAULT_MODEL_SLOTS = ${JSON.stringify(DEFAULT_MODEL_SLOTS)};
+        window.__antigravitySubagentSessionSlots = Object.assign(
+          window.__antigravitySubagentSessionSlots || {},
+          ${JSON.stringify((context.modelSlots && context.modelSlots.sessions) ? context.modelSlots.sessions : {})}
+        );
+        window.__getModelById = function(modelId, catalog) { const list = catalog || window.__MODEL_CATALOG || []; return list.find(m => m.id === modelId) || list[0]; };
+        window.getModelById = window.__getModelById;
+        window.__renderModelSlotDropdownHtml = ${renderModelSlotDropdownHtml.toString()};
+        window.__renderSubagentModelPill = ${renderSubagentModelPill.toString()};
+
+        window.__getSavedModelSlots = function() {
+          try {
+            const raw = localStorage.getItem('__antigravity_model_slots');
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (parsed && typeof parsed === 'object') {
+                return { ...window.__DEFAULT_MODEL_SLOTS, ...parsed };
+              }
+            }
+          } catch (e) {}
+          return { ...window.__DEFAULT_MODEL_SLOTS };
+        };
+
+        window.__resolveSubagentSessionId = function(el) {
+          if (el && typeof el.closest === 'function') {
+            const convEl = el.closest('[data-conversation-id]');
+            const convId = convEl ? convEl.getAttribute('data-conversation-id') : null;
+            if (convId) return convId;
+
+            const cascadeEl = el.closest('[data-cascade-id]');
+            const cascadeId = cascadeEl ? cascadeEl.getAttribute('data-cascade-id') : null;
+            if (cascadeId) return cascadeId;
+
+            const existingEl = el.closest('[data-subagent-session-id]');
+            const existingId = existingEl ? existingEl.getAttribute('data-subagent-session-id') : null;
+            if (existingId) return existingId;
+          } else if (el && typeof el.getAttribute === 'function') {
+            const directConv = el.getAttribute('data-conversation-id');
+            if (directConv) return directConv;
+            const directCascade = el.getAttribute('data-cascade-id');
+            if (directCascade) return directCascade;
+            const directSession = el.getAttribute('data-subagent-session-id');
+            if (directSession) return directSession;
+          }
+
+          const urlPath = (typeof window !== 'undefined' && window.location && window.location.pathname)
+            ? window.location.pathname
+            : '';
+          const pathParts = urlPath.split('/c/');
+          const urlPathId = (pathParts.length > 1 && pathParts[1]) ? pathParts[1].split('/')[0].split('?')[0] : null;
+          if (urlPathId) return urlPathId;
+
+          const urlSearch = (typeof window !== 'undefined' && window.location && window.location.search)
+            ? window.location.search
+            : '';
+          const searchMatch = urlSearch.match(/[?&](?:conversationId|focused)=([0-9a-zA-Z_-]+)/);
+          if (searchMatch && searchMatch[1]) return searchMatch[1];
+
+          if (!el) return null;
+
+          const generatedId = 'subagent-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+          if (typeof el.setAttribute === 'function') {
+            const target = (typeof el.closest === 'function' && el.closest('[data-subagent-container], .subagent-container')) || el;
+            target.setAttribute('data-subagent-session-id', generatedId);
+          }
+          return generatedId;
+        };
+
+        window.__hasSavedSubagentSessionSlots = function(sessionId) {
+          if (!sessionId) return false;
+          try {
+            const rawMap = localStorage.getItem('__antigravity_subagent_model_slots_map');
+            if (rawMap) {
+              const map = JSON.parse(rawMap);
+              if (map && typeof map === 'object' && map[sessionId] && typeof map[sessionId] === 'object') {
+                return true;
+              }
+            }
+          } catch (e) {}
+          const serverSessions = window.__antigravitySubagentSessionSlots;
+          return Boolean(
+            serverSessions &&
+            typeof serverSessions === 'object' &&
+            serverSessions[sessionId] &&
+            typeof serverSessions[sessionId] === 'object'
+          );
+        };
+
+        window.__getSavedSubagentSessionSlots = function(sessionId) {
+          const globalSlots = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+          if (!sessionId) {
+            return { ...globalSlots };
+          }
+          try {
+            const rawMap = localStorage.getItem('__antigravity_subagent_model_slots_map');
+            if (rawMap) {
+              const map = JSON.parse(rawMap);
+              if (map && typeof map === 'object' && map[sessionId] && typeof map[sessionId] === 'object') {
+                return { ...globalSlots, ...map[sessionId] };
+              }
+            }
+          } catch (e) {}
+          try {
+            const serverSessions = window.__antigravitySubagentSessionSlots;
+            if (serverSessions && typeof serverSessions === 'object' && serverSessions[sessionId] && typeof serverSessions[sessionId] === 'object') {
+              return { ...globalSlots, ...serverSessions[sessionId] };
+            }
+          } catch (e) {}
+          return { ...globalSlots };
+        };
+
+        window.__saveSubagentSessionSlots = function(sessionId, slots) {
+          if (!sessionId || !slots || typeof slots !== 'object') return null;
+          const globalSlots = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+
+          let map = {};
+          try {
+            const rawMap = localStorage.getItem('__antigravity_subagent_model_slots_map');
+            if (rawMap) {
+              const parsed = JSON.parse(rawMap);
+              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                map = parsed;
+              }
+            }
+          } catch (e) {}
+
+          const existing = (map[sessionId] && typeof map[sessionId] === 'object')
+            ? map[sessionId]
+            : ((window.__antigravitySubagentSessionSlots && window.__antigravitySubagentSessionSlots[sessionId]) || {});
+
+          const nextSession = {
+            ...existing,
+            ...slots,
+            planner: slots.planner || existing.planner || globalSlots.planner,
+            builder: slots.builder || existing.builder || globalSlots.builder,
+            updatedAt: Date.now()
+          };
+
+          map[sessionId] = nextSession;
+          window.__antigravitySubagentSessionSlots = window.__antigravitySubagentSessionSlots || {};
+          window.__antigravitySubagentSessionSlots[sessionId] = nextSession;
+
+          try {
+            localStorage.setItem('__antigravity_subagent_model_slots_map', JSON.stringify(map));
+          } catch (e) {}
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/subagent-model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  sessionId: sessionId,
+                  slots: nextSession
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+
+          return nextSession;
+        };
+
+        window.__isElementVisible = function(el) {
+          if (!el) return false;
+          let cur = el;
+          while (cur && cur.nodeType === 1) {
+            if (cur.hasAttribute && cur.hasAttribute('hidden')) return false;
+            if (cur.style && (cur.style.display === 'none' || cur.style.visibility === 'hidden')) return false;
+            if (typeof window !== 'undefined' && typeof window.getComputedStyle === 'function') {
+              try {
+                const cs = window.getComputedStyle(cur);
+                if (cs && (cs.display === 'none' || cs.visibility === 'hidden')) return false;
+              } catch (e) {}
+            }
+            cur = cur.parentElement;
+          }
+          return true;
+        };
+
+        window.__getSubagentBadges = function() {
+          let candidates = [];
+          try {
+            candidates = Array.from(document.querySelectorAll('div[title="Subagent"], .text-secondary-foreground:has(> span)'));
+          } catch (e) {
+            candidates = Array.from(document.querySelectorAll('div[title="Subagent"], .text-secondary-foreground'));
+          }
+          return candidates.filter(badge =>
+            Array.from(badge.querySelectorAll('span')).some(s => s.textContent.trim() === 'self')
+          );
+        };
+
+        window.__findActiveSubagentSession = function() {
+          const badges = window.__getSubagentBadges ? window.__getSubagentBadges() : [];
+          const visibleBadges = badges.filter(b => window.__isElementVisible(b));
+          const activeEl = (typeof document !== 'undefined') ? document.activeElement : null;
+
+          if (visibleBadges.length > 0) {
+            if (activeEl && activeEl !== document.body && activeEl !== document.documentElement) {
+              for (const badge of visibleBadges) {
+                const container = (badge.closest && badge.closest('[data-conversation-id], [data-cascade-id], [data-subagent-session-id], [data-subagent-container]')) || badge.parentElement;
+                if (container && (container === activeEl || (typeof container.contains === 'function' && container.contains(activeEl)))) {
+                  return { badge, sessionId: window.__resolveSubagentSessionId(badge) };
+                }
+              }
+            }
+            const selectedBadge = visibleBadges[visibleBadges.length - 1];
+            return { badge: selectedBadge, sessionId: window.__resolveSubagentSessionId(selectedBadge) };
+          }
+
+          if (activeEl && activeEl !== document.body && activeEl !== document.documentElement && typeof activeEl.closest === 'function') {
+            const focusedSub = activeEl.closest('[data-subagent-session-id], [data-subagent-container]');
+            if (focusedSub && window.__isElementVisible(focusedSub)) {
+              return { badge: focusedSub, sessionId: window.__resolveSubagentSessionId(focusedSub) };
+            }
+          }
+
+          return null;
+        };
+
+        window.__getActiveMenubarSlotModels = function() {
+          const globalSlots = window.__getSavedModelSlots();
+          const activeSubagent = (typeof window.__findActiveSubagentSession === 'function')
+            ? window.__findActiveSubagentSession()
+            : null;
+          if (activeSubagent && activeSubagent.sessionId && typeof window.__getSavedSubagentSessionSlots === 'function') {
+            const sessionSlots = window.__getSavedSubagentSessionSlots(activeSubagent.sessionId);
+            return {
+              ...globalSlots,
+              builder: sessionSlots.builder || globalSlots.builder,
+              activeSessionId: activeSubagent.sessionId
+            };
+          }
+          return { ...globalSlots, activeSessionId: null };
+        };
+
+        window.__updateMenubarSlotButtons = function(slots) {
+          const effectiveSlots = slots || window.__getActiveMenubarSlotModels();
+          ['planner', 'builder'].forEach(role => {
+            const modelId = effectiveSlots[role];
+            const model = window.__getModelById ? window.__getModelById(modelId) : null;
+            if (!model) return;
+            document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="' + role + '"]').forEach(btn => {
+              const expectedSessionId = (role === 'builder' && effectiveSlots.activeSessionId)
+                ? effectiveSlots.activeSessionId
+                : '';
+              const expectedTitle = (role === 'planner' ? 'Planner Model: ' : 'Builder Model: ') + model.name;
+              const expectedVal = model.shortName || model.name;
+              const valEl = btn.querySelector('.model-slot-value');
+              const dotEl = btn.querySelector('.model-slot-dot');
+
+              const isUnchanged = (
+                (btn.getAttribute('data-model-id') || '') === model.id &&
+                (btn.getAttribute('data-session-id') || '') === expectedSessionId &&
+                (btn.getAttribute('title') || '') === expectedTitle &&
+                (!valEl || valEl.textContent === expectedVal)
+              );
+              if (isUnchanged) return;
+
+              btn.setAttribute('data-model-id', model.id);
+              if (expectedSessionId) {
+                btn.setAttribute('data-session-id', expectedSessionId);
+              } else if (btn.hasAttribute('data-session-id')) {
+                btn.removeAttribute('data-session-id');
+              }
+              btn.setAttribute('title', expectedTitle);
+              if (valEl && valEl.textContent !== expectedVal) {
+                valEl.textContent = expectedVal;
+              }
+              if (dotEl) {
+                dotEl.style.background = model.color;
+                dotEl.style.boxShadow = '0 0 6px ' + model.color;
+              }
+            });
+          });
+        };
+
+        window.__syncSubagentModelBadges = function() {
+          const badges = window.__getSubagentBadges ? window.__getSubagentBadges() : [];
+
+          badges.forEach(badge => {
+            const selfSpan = Array.from(badge.querySelectorAll('span')).find(s => s.textContent.trim() === 'self');
+            if (!selfSpan) return;
+
+            const sessionId = window.__resolveSubagentSessionId(badge);
+            const hasSaved = window.__hasSavedSubagentSessionSlots ? window.__hasSavedSubagentSessionSlots(sessionId) : false;
+            const sessionSlots = window.__getSavedSubagentSessionSlots(sessionId);
+
+            if (sessionId && !hasSaved && typeof window.__saveSubagentSessionSlots === 'function') {
+              window.__saveSubagentSessionSlots(sessionId, {
+                planner: sessionSlots.planner,
+                builder: sessionSlots.builder
+              });
+            }
+
+            const builderModelId = sessionSlots.builder || 'gemini-4-hydrogen-high';
+            const model = (typeof window.__getModelById === 'function')
+              ? window.__getModelById(builderModelId)
+              : { id: builderModelId, name: builderModelId, shortName: builderModelId, color: '#34d399' };
+
+            let pill = badge.querySelector('#antigravity-subagent-model-pill');
+            if (!pill) {
+              pill = badge.querySelector('.antigravity-subagent-model-pill');
+            }
+
+            if (pill) {
+              const expectedSessionId = sessionId || '';
+              const currentModelId = pill.getAttribute('data-model-id') || '';
+              const currentSessionId = pill.getAttribute('data-session-id') || '';
+              const expectedTitle = 'Subagent Builder Model: ' + model.name;
+              const currentTitle = pill.getAttribute('title') || '';
+              const label = pill.querySelector('.subagent-model-label');
+              const isUnchanged = (
+                currentModelId === model.id &&
+                currentSessionId === expectedSessionId &&
+                currentTitle === expectedTitle &&
+                (!label || label.textContent === model.shortName)
+              );
+              if (!isUnchanged) {
+                pill.setAttribute('data-model-id', model.id);
+                if (sessionId) {
+                  pill.setAttribute('data-session-id', sessionId);
+                } else if (pill.hasAttribute('data-session-id')) {
+                  pill.removeAttribute('data-session-id');
+                }
+                pill.setAttribute('title', expectedTitle);
+                pill.style.borderColor = model.color + '55';
+                pill.style.background = model.color + '18';
+                pill.style.color = model.color;
+                const dot = pill.querySelector('.subagent-model-dot');
+                if (dot) {
+                  dot.style.background = model.color;
+                  dot.style.boxShadow = '0 0 5px ' + model.color;
+                }
+                if (label) {
+                  label.textContent = model.shortName;
+                }
+              }
+            } else if (typeof window.__renderSubagentModelPill === 'function') {
+              const temp = document.createElement('div');
+              temp.innerHTML = window.__renderSubagentModelPill(builderModelId, window.__MODEL_CATALOG);
+              const newPill = temp.firstElementChild;
+              if (newPill) {
+                if (sessionId) {
+                  newPill.setAttribute('data-session-id', sessionId);
+                }
+                selfSpan.after(newPill);
+              }
+            }
+          });
+
+          if (typeof window.__updateMenubarSlotButtons === 'function') {
+            window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+          }
+        };
+
+        window.__syncModelSlotsUI = function() {
+          if (typeof window.__updateMenubarSlotButtons === 'function') {
+            window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+          }
+          if (typeof window.__syncSubagentModelBadges === 'function') {
+            window.__syncSubagentModelBadges();
+          }
+        };
+
+        window.__resolveNativeModelTarget = function(modelId) {
+          if (!modelId || typeof modelId !== 'string') return null;
+          const resolved = (typeof window.__getModelById === 'function')
+            ? window.__getModelById(modelId)
+            : null;
+          const effectiveId = (resolved && resolved.id === modelId) ? resolved.id : modelId;
+
+          if (effectiveId === 'gemini-pro-orchestrator-g1-pro') {
+            return { base: 'Orchestrator', effort: null };
+          }
+          if (effectiveId.startsWith('gpt-oss-120b-')) {
+            return { base: 'GPT-OSS 120B', effort: null };
+          }
+
+          const basePrefixes = [
+            { prefix: 'gemini-4-argon-', base: 'Gemini 4 Argon' },
+            { prefix: 'gemini-4-hydrogen-', base: 'Gemini 4 Hydrogen' },
+            { prefix: 'gemini-3.8-flash-', base: 'Gemini 3.8 Flash' },
+            { prefix: 'claude-opus-5-5-', base: 'Claude Opus 5.5' },
+            { prefix: 'claude-sonnet-5-5-', base: 'Claude Sonnet 5.5' }
+          ];
+
+          const effortLabels = {
+            low: 'Low',
+            medium: 'Medium',
+            high: 'High',
+            xhigh: 'XHigh'
+          };
+
+          for (const entry of basePrefixes) {
+            if (effectiveId.startsWith(entry.prefix)) {
+              const rawEffort = effectiveId.slice(entry.prefix.length).toLowerCase();
+              return {
+                base: entry.base,
+                effort: effortLabels[rawEffort] || null
+              };
+            }
+          }
+          return null;
+        };
+
+        window.__resolveModelIdFromNativeText = function(rawText) {
+          if (!rawText || typeof rawText !== 'string') return null;
+          const text = rawText.trim().toLowerCase();
+          if (!text) return null;
+
+          if (text.includes('orchestrator')) return 'gemini-pro-orchestrator-g1-pro';
+          if (text.includes('gpt-oss') || text.includes('120b')) return 'gpt-oss-120b-medium';
+
+          let basePrefix = null;
+          if (text.includes('argon')) basePrefix = 'gemini-4-argon-';
+          else if (text.includes('hydrogen')) basePrefix = 'gemini-4-hydrogen-';
+          else if (text.includes('3.8') && text.includes('flash')) basePrefix = 'gemini-3.8-flash-';
+          else if (text.includes('opus')) basePrefix = 'claude-opus-5-5-';
+          else if (text.includes('sonnet')) basePrefix = 'claude-sonnet-5-5-';
+
+          if (!basePrefix) return null;
+
+          let effort = null;
+          if (/(?:^|[^a-z])xhigh(?:$|[^a-z])/i.test(text)) effort = 'xhigh';
+          else if (/(?:^|[^a-z])high(?:$|[^a-z])/i.test(text)) effort = 'high';
+          else if (/(?:^|[^a-z])(?:medium|med)(?:$|[^a-z])/i.test(text)) effort = 'medium';
+          else if (/(?:^|[^a-z])low(?:$|[^a-z])/i.test(text)) effort = 'low';
+
+          if (!effort) {
+            const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+            if (saved && saved.planner && saved.planner.startsWith(basePrefix)) {
+              effort = saved.planner.slice(basePrefix.length);
+            } else {
+              effort = 'high';
+            }
+          }
+
+          const candidateId = basePrefix + effort;
+          const catalog = window.__MODEL_CATALOG || [];
+          const found = catalog.find(m => m.id === candidateId);
+          return found ? found.id : null;
+        };
+
+        window.__nativeModelSyncTimers = window.__nativeModelSyncTimers || [];
+        window.__nativeModelSyncInProgress = false;
+        window.__nativeModelSyncToken = window.__nativeModelSyncToken || 0;
+
+        window.__syncNativeModelSelector = function(modelId) {
+          if (!modelId) return false;
+          const resolved = (typeof window.__getModelById === 'function')
+            ? window.__getModelById(modelId)
+            : null;
+          const targetId = (resolved && resolved.id === modelId) ? resolved.id : modelId;
+          const target = window.__resolveNativeModelTarget ? window.__resolveNativeModelTarget(targetId) : null;
+          if (!target) return false;
+
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
+          if (!activeTrigger) return false;
+
+          const matchesEffortText = (text, effort) => {
+            if (!effort) return true;
+            const escaped = effort.replace(/[.*+?^$()|[\\]\\\\]/g, '\\\\$&').replace(/[{}]/g, '\\\\$&');
+            return new RegExp('(?:^|[^a-zA-Z])' + escaped + '(?:$|[^a-zA-Z])', 'i').test(text);
+          };
+
+          const currentText = (activeTrigger.textContent || '').trim();
+          const hasBase = currentText.toLowerCase().includes(target.base.toLowerCase());
+          const hasEffort = target.effort ? matchesEffortText(currentText, target.effort) : true;
+          if (hasBase && hasEffort) {
+            return true;
+          }
+
+          if (Array.isArray(window.__nativeModelSyncTimers)) {
+            while (window.__nativeModelSyncTimers.length > 0) {
+              clearTimeout(window.__nativeModelSyncTimers.pop());
+            }
+          }
+          const token = ++window.__nativeModelSyncToken;
+          window.__nativeModelSyncInProgress = true;
+
+          const finishSync = () => {
+            if (window.__nativeModelSyncToken === token) {
+              const settleTimer = setTimeout(() => {
+                if (window.__nativeModelSyncToken === token) {
+                  window.__nativeModelSyncInProgress = false;
+                }
+              }, 120);
+              window.__nativeModelSyncTimers.push(settleTimer);
+            }
+          };
+
+          if (typeof activeTrigger.click === 'function') {
+            activeTrigger.click();
+          }
+
+          const t1 = setTimeout(() => {
+            if (window.__nativeModelSyncToken !== token) return;
+            const menuItems = Array.from(document.querySelectorAll('[role="menuitem"], [data-testid="model-selector-item"]'));
+            const baseRow = menuItems.find(el => {
+              const text = (el.textContent || '').trim().toLowerCase();
+              const label = (el.getAttribute && (el.getAttribute('data-model-label') || '')).trim().toLowerCase();
+              const needle = target.base.toLowerCase();
+              return text.includes(needle) || label.includes(needle);
+            });
+
+            if (!baseRow) {
+              window.__nativeModelSyncInProgress = false;
+              return;
+            }
+
+            if (!target.effort) {
+              if (typeof baseRow.click === 'function') {
+                baseRow.click();
+              }
+              finishSync();
+              return;
+            }
+
+            try {
+              if (typeof baseRow.dispatchEvent === 'function' && typeof MouseEvent === 'function') {
+                baseRow.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+              }
+            } catch (e) {}
+            if (typeof baseRow.click === 'function') {
+              baseRow.click();
+            }
+
+            const t2 = setTimeout(() => {
+              if (window.__nativeModelSyncToken !== token) return;
+              const subItems = Array.from(document.querySelectorAll('[role="menuitem"], [data-testid="model-selector-item"]'));
+              const effortNeedle = target.effort.toLowerCase();
+              const candidates = subItems.filter(el => el !== baseRow);
+              const effortItem = candidates.find(el => (el.textContent || '').trim().toLowerCase() === effortNeedle)
+                || candidates.find(el => matchesEffortText((el.textContent || '').trim(), target.effort))
+                || subItems.find(el => (el.textContent || '').trim().toLowerCase() === effortNeedle)
+                || subItems.find(el => matchesEffortText((el.textContent || '').trim(), target.effort));
+
+              if (effortItem && typeof effortItem.click === 'function') {
+                effortItem.click();
+              }
+              finishSync();
+            }, 100);
+            window.__nativeModelSyncTimers.push(t2);
+          }, 80);
+          window.__nativeModelSyncTimers.push(t1);
+          return true;
+        };
+
+        window.__syncPlannerFromNativeSelector = function() {
+          if (window.__nativeModelSyncInProgress) return false;
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
+          if (!activeTrigger) return false;
+
+          const detectedId = window.__resolveModelIdFromNativeText
+            ? window.__resolveModelIdFromNativeText(activeTrigger.textContent || '')
+            : null;
+          if (!detectedId) return false;
+
+          const current = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+
+          const plannerBtns = Array.from(document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="planner"]'));
+          const btnAlreadySynced = plannerBtns.length > 0 && plannerBtns.every(btn => btn.getAttribute('data-model-id') === detectedId);
+          if (current.planner === detectedId && btnAlreadySynced) {
+            return false;
+          }
+
+          current.planner = detectedId;
+          current.updatedAt = Date.now();
+          try {
+            localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+          } catch (e) {}
+
+          if (typeof window.__updateMenubarSlotButtons === 'function') {
+            window.__updateMenubarSlotButtons(
+              typeof window.__getActiveMenubarSlotModels === 'function'
+                ? window.__getActiveMenubarSlotModels()
+                : current
+            );
+          }
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  planner: current.planner,
+                  builder: current.builder,
+                  enabled: current.enabled !== false
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+
+          return true;
+        };
+
+        window.__observedNativeTriggerSet = new WeakSet();
+        window.__observedNativeTriggersCount = 0;
+
+        window.__observeNativeModelSelector = function() {
+          if (typeof MutationObserver !== 'function') return;
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          if (!triggers.length) {
+            const single = document.querySelector('button[data-testid="model-selector-trigger"]');
+            if (single) triggers.push(single);
+          }
+          if (!triggers.length) return;
+
+          if (
+            window.__antigravityNativeModelObserver &&
+            window.__observedNativeTriggerSet &&
+            window.__observedNativeTriggersCount === triggers.length &&
+            triggers.every(trigger => window.__observedNativeTriggerSet.has(trigger))
+          ) {
+            return;
+          }
+
+          if (window.__antigravityNativeModelObserver) {
+            window.__antigravityNativeModelObserver.disconnect();
+          }
+          window.__antigravityNativeModelObserver = new MutationObserver(() => {
+            if (typeof window.__syncPlannerFromNativeSelector === 'function') {
+              window.__syncPlannerFromNativeSelector();
+            }
+          });
+          const nextSet = new WeakSet();
+          triggers.forEach(trigger => {
+            nextSet.add(trigger);
+            window.__antigravityNativeModelObserver.observe(trigger, {
+              childList: true,
+              subtree: true,
+              characterData: true
+            });
+          });
+          window.__observedNativeTriggerSet = nextSet;
+          window.__observedNativeTriggersCount = triggers.length;
+        };
+
+        window.__selectModelForSlot = function(role, modelId) {
+          if (!role || !modelId) return;
+          const current = window.__getSavedModelSlots();
+          current[role] = modelId;
+          current.updatedAt = Date.now();
+          try {
+            localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+          } catch (e) {}
+
+          const activeSubagent = (typeof window.__findActiveSubagentSession === 'function')
+            ? window.__findActiveSubagentSession()
+            : null;
+          if (activeSubagent && activeSubagent.sessionId && typeof window.__saveSubagentSessionSlots === 'function') {
+            window.__saveSubagentSessionSlots(activeSubagent.sessionId, { [role]: modelId });
+          }
+
+          if (typeof window.__updateMenubarSlotButtons === 'function') {
+            window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+          }
+          document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="' + role + '"]').forEach(btn => {
+            btn.classList.remove('open');
+          });
+
+          const portal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          if (portal) {
+            portal.classList.remove('open');
+            portal.__currentBtn = null;
+          }
+
+          if (typeof window.__syncSubagentModelBadges === 'function') {
+            window.__syncSubagentModelBadges();
+          }
+
+          if (role === 'planner' && typeof window.__syncNativeModelSelector === 'function') {
+            window.__syncNativeModelSelector(modelId);
+          }
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  planner: current.planner,
+                  builder: current.builder,
+                  enabled: current.enabled !== false
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+        };
+
+        window.__toggleModelSlotDropdown = function(e, btnEl, role) {
+          if (e) {
+            e.stopPropagation();
+            e.preventDefault();
+          }
+          const btn = btnEl || (e ? e.currentTarget : null);
+          if (!btn) return;
+          const slotRole = role || btn.getAttribute('data-slot-role') || 'planner';
+
+          // Close other popovers
+          const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
+          if (aPortal) {
+            aPortal.classList.remove('open');
+            aPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+
+          const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+          if (tachPortal) {
+            tachPortal.classList.remove('open');
+            tachPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+          const mPortal = document.getElementById('antigravity-mods-manager-portal');
+          if (mPortal) {
+            mPortal.classList.remove('open');
+            mPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+
+          let portal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          if (!portal) {
+            portal = document.createElement('div');
+            portal.id = 'antigravity-model-slot-dropdown-portal';
+            portal.className = 'antigravity-model-slot-dropdown-portal';
+            document.body.appendChild(portal);
+          }
+
+          const isCurrentOpen = portal.classList.contains('open') && portal.__currentBtn === btn;
+
+          document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+          portal.classList.remove('open');
+          portal.__currentBtn = null;
+
+          if (!isCurrentOpen) {
+            btn.classList.add('open');
+            portal.__currentBtn = btn;
+
+            const savedSlots = (typeof window.__getActiveMenubarSlotModels === 'function')
+              ? window.__getActiveMenubarSlotModels()
+              : window.__getSavedModelSlots();
+            const currentSelectedId = savedSlots[slotRole] || btn.getAttribute('data-model-id');
+
+            if (window.__renderModelSlotDropdownHtml) {
+              portal.innerHTML = window.__renderModelSlotDropdownHtml(slotRole, currentSelectedId, window.__BASE_MODELS || window.__MODEL_CATALOG);
+            }
+
+            portal.querySelectorAll('.model-effort-option, .model-slot-option').forEach(opt => {
+              opt.onclick = (ev) => {
+                ev.stopPropagation();
+                ev.preventDefault();
+                const mId = opt.getAttribute('data-model-id');
+                const sRole = opt.getAttribute('data-slot-role') || slotRole;
+                window.__selectModelForSlot(sRole, mId);
+              };
+            });
+
+            portal.querySelectorAll('.model-slot-row').forEach(row => {
+              row.onclick = (ev) => {
+                if (ev.target.closest('.model-effort-option, .model-slot-option')) return;
+                const singleEffortId = row.getAttribute('data-model-id');
+                if (singleEffortId) {
+                  ev.stopPropagation();
+                  ev.preventDefault();
+                  const sRole = row.getAttribute('data-slot-role') || slotRole;
+                  window.__selectModelForSlot(sRole, singleEffortId);
+                  return;
+                }
+                const isOpen = row.classList.contains('open');
+                portal.querySelectorAll('.model-slot-row.open').forEach(r => r.classList.remove('open'));
+                if (!isOpen) {
+                  row.classList.add('open');
+                }
+              };
+            });
+
+            const rect = btn.getBoundingClientRect();
+            portal.style.top = (rect.bottom + 6) + 'px';
+            const portalWidth = 250;
+            const clampedLeft = Math.max(10, Math.min(window.innerWidth - portalWidth - 10, rect.left));
+            portal.style.left = clampedLeft + 'px';
+            portal.classList.add('open');
+
+            if (rect.left + 380 > window.innerWidth) {
+              portal.querySelectorAll('.model-slot-submenu').forEach(sub => {
+                sub.classList.add('submenu-left');
+              });
+            }
           }
         };
 
@@ -1838,6 +2670,10 @@ class ModLoader {
           if (!gitGraphEnabled && typeof window.__closeGitGraphPanel === 'function') {
             window.__closeGitGraphPanel();
           }
+          const modelSlotsEnabled = localStorage.getItem('__antigravity_mod_enabled_model-slots') !== 'false';
+          document.querySelectorAll('.antigravity-model-slots-group').forEach(b => {
+            b.style.display = modelSlotsEnabled ? 'inline-flex' : 'none';
+          });
         };
 
         window.__toggleModsManagerPanel = function(e, btnEl) {
@@ -1936,6 +2772,16 @@ class ModLoader {
               gitGraphInput.checked = gitGraphEnabled;
               gitGraphInput.onchange = (ev) => {
                 localStorage.setItem('__antigravity_mod_enabled_git-graph', ev.target.checked);
+                window.__applyModsVisibility();
+              };
+            }
+
+            const modelSlotsEnabled = localStorage.getItem('__antigravity_mod_enabled_model-slots') !== 'false';
+            const modelSlotsInput = portal.querySelector('#mod-toggle-model-slots');
+            if (modelSlotsInput) {
+              modelSlotsInput.checked = modelSlotsEnabled;
+              modelSlotsInput.onchange = (ev) => {
+                localStorage.setItem('__antigravity_mod_enabled_model-slots', ev.target.checked);
                 window.__applyModsVisibility();
               };
             }
@@ -2651,15 +3497,6 @@ class ModLoader {
           }
         };
 
-        if (!window.__antigravityGitEscBound && typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
-          window.__antigravityGitEscBound = true;
-          document.addEventListener('keydown', function(ev) {
-            if (ev && ev.key === 'Escape' && window.__antigravityGitPanelOpen && typeof window.__closeGitGraphPanel === 'function') {
-              window.__closeGitGraphPanel();
-            }
-          });
-        }
-
         window.__toggleGitGraphPanel = function(e, btnEl) {
           if (e) {
             if (typeof e.stopPropagation === 'function') e.stopPropagation();
@@ -2890,6 +3727,7 @@ class ModLoader {
         // Store all per-conversation metrics, active agents, and current primary snapshot
         window.__antigravityAllMetrics = ${JSON.stringify(context.allMetrics || {})};
         window.__antigravityLatestMetric = ${JSON.stringify(context.telemetry || {})};
+        window.__antigravityLiveTelemetryReceived = false;
         window.__antigravityActiveAgents = Object.assign(
           window.__antigravityActiveAgents || {},
           ${JSON.stringify(context.activeAgents || {})}
@@ -2969,9 +3807,25 @@ class ModLoader {
           }
         };
 
-        window.__updateAntigravityTelemetry = function(fallbackMetric) {
+        window.__updateAntigravityTelemetry = function(fallbackMetric, isInitialSnapshot) {
+          if (isInitialSnapshot && window.__antigravityLiveTelemetryReceived) {
+            return;
+          }
           const all = window.__antigravityAllMetrics || {};
           const latest = fallbackMetric || window.__antigravityLatestMetric;
+
+          if (!isInitialSnapshot) {
+            const hasLiveMetrics = Boolean(
+              Object.keys(all).length > 0 ||
+              (latest && (Number(latest.estTokens) > 0 || Number(latest.steps) > 0 || parseFloat(latest.pct) > 0))
+            );
+            if (hasLiveMetrics) {
+              window.__antigravityLiveTelemetryReceived = true;
+              if (fallbackMetric) {
+                window.__antigravityLatestMetric = fallbackMetric;
+              }
+            }
+          }
 
           const nativeGroups = window.__antigravityNativeQuotaSummary || (() => {
             try {
@@ -3006,30 +3860,43 @@ class ModLoader {
             else if (pctNum >= 60) statusColor = '#f97316';
             else if (pctNum >= 25) statusColor = '#eab308';
 
-            badge.setAttribute('title', 'Context: ' + m.displayTokens + ' tokens (' + m.pct + '%)');
+            const nextTitle = 'Context: ' + m.displayTokens + ' tokens (' + m.pct + '%)';
+            if (badge.getAttribute('title') !== nextTitle) {
+              badge.setAttribute('title', nextTitle);
+            }
             const tokenSpan = badge.querySelector('.tachometer-tokens');
-            if (tokenSpan) tokenSpan.textContent = m.displayTokens;
+            if (tokenSpan && tokenSpan.textContent !== m.displayTokens) {
+              tokenSpan.textContent = m.displayTokens;
+            }
             const pctSpan = badge.querySelector('.tachometer-pct');
-            if (pctSpan) pctSpan.textContent = '(' + m.pct + '%)';
+            const nextPctText = '(' + m.pct + '%)';
+            if (pctSpan && pctSpan.textContent !== nextPctText) {
+              pctSpan.textContent = nextPctText;
+            }
             const needle = badge.querySelector('g[filter]');
             if (needle) {
               const angle = -120 + (Math.min(pctNum, 100) / 100) * 240;
-              needle.style.transform = 'rotate(' + angle.toFixed(1) + 'deg)';
+              const nextTransform = 'rotate(' + angle.toFixed(1) + 'deg)';
+              if (needle.style.transform !== nextTransform) {
+                needle.style.transform = nextTransform;
+              }
               const poly = needle.querySelector('polygon');
-              if (poly) poly.setAttribute('fill', statusColor);
+              if (poly && poly.getAttribute('fill') !== statusColor) {
+                poly.setAttribute('fill', statusColor);
+              }
             }
 
             if (window.__renderTachometerPopoverHtml) {
               const renderedPopover = window.__renderTachometerPopoverHtml(m);
               const tpl = badge.querySelector('.antigravity-popover-template') ||
                 badge.parentElement?.querySelector('.antigravity-popover-template');
-              if (tpl) {
+              if (tpl && tpl.innerHTML !== renderedPopover) {
                 tpl.innerHTML = renderedPopover;
               }
 
               // Update live popover content if currently open on screen, preserving expanded model disclosures
               const portal = document.getElementById('antigravity-tachometer-popover-portal');
-              if (portal && portal.classList.contains('open')) {
+              if (portal && portal.classList.contains('open') && portal.innerHTML !== renderedPopover) {
                 const openKeys = new Set();
                 const scrollByKey = new Map();
                 portal.querySelectorAll('details.tach-model-details[open]').forEach(det => {
@@ -3116,117 +3983,170 @@ class ModLoader {
           });
         };
 
-        if (!window.__antigravityGlobalEventsBound) {
-          window.__antigravityGlobalEventsBound = true;
-          document.addEventListener('click', (e) => {
-            const sendBtn = e.target.closest('button[data-testid="send-button"]');
-            if (sendBtn) {
-              const container = sendBtn.closest('[data-cascade-id]') || document;
-              const editor = container.querySelector('[contenteditable="true"], textarea');
-              const text = editor ? (editor.value || editor.textContent || '') : '';
-              if (text && window.__handleAutoPromptContextUpdate) {
-                window.__handleAutoPromptContextUpdate(text, sendBtn);
-              }
-            }
-
-            const reticleBtn = e.target.closest('.antigravity-caveman-reticle-trigger');
-            if (reticleBtn) {
-              e.preventDefault();
-              e.stopPropagation();
-              window.__toggleCavemanMode(undefined, reticleBtn);
-              return;
-            }
-
-            const isAgentBadge = e.target.closest('.antigravity-agent-badge');
-            const isAgentPortal = e.target.closest('#antigravity-agent-dropdown-portal');
-            if (!isAgentBadge && !isAgentPortal) {
-              const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
-              if (aPortal) aPortal.classList.remove('open');
-              document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
-            }
-
-            const isTachBadge = e.target.closest('.antigravity-tachometer-badge');
-            const isTachPortal = e.target.closest('#antigravity-tachometer-popover-portal');
-            if (!isTachBadge && !isTachPortal) {
-              const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
-              if (tachPortal) {
-                tachPortal.classList.remove('open');
-                tachPortal.__currentBadge = null;
-              }
-              document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
-            }
-
-            const isModsBtn = e.target.closest('.antigravity-mods-manager-btn');
-            const isModsPortal = e.target.closest('#antigravity-mods-manager-portal');
-            if (!isModsBtn && !isModsPortal) {
-              const mPortal = document.getElementById('antigravity-mods-manager-portal');
-              if (mPortal) {
-                mPortal.classList.remove('open');
-                mPortal.__currentBtn = null;
-              }
-              document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
-            }
-          }, true);
-
-          document.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-              const editor = e.target.closest('[contenteditable="true"], textarea');
-              if (editor) {
-                const text = editor.value || editor.textContent || '';
-                if (text && window.__handleAutoPromptContextUpdate) {
-                  window.__handleAutoPromptContextUpdate(text, editor);
-                }
-              }
-            }
-            if (e.key === 'Escape') {
-              const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
-              if (aPortal) {
-                aPortal.classList.remove('open');
-                aPortal.__currentBadge = null;
-              }
-              document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
-
-              const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
-              if (tachPortal) {
-                tachPortal.classList.remove('open');
-                tachPortal.__currentBadge = null;
-              }
-              document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
-
-              const mPortal = document.getElementById('antigravity-mods-manager-portal');
-              if (mPortal) {
-                mPortal.classList.remove('open');
-                mPortal.__currentBtn = null;
-              }
-              document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
-            }
-          }, true);
+        if (window.__antigravityDocClickHandler && typeof document.removeEventListener === 'function') {
+          document.removeEventListener('click', window.__antigravityDocClickHandler, true);
         }
+        if (window.__antigravityDocKeydownHandler && typeof document.removeEventListener === 'function') {
+          document.removeEventListener('keydown', window.__antigravityDocKeydownHandler, true);
+        }
+        if (window.__antigravityDocFocusinHandler && typeof document.removeEventListener === 'function') {
+          document.removeEventListener('focusin', window.__antigravityDocFocusinHandler, true);
+        }
+
+        window.__antigravityDocClickHandler = (e) => {
+          const clickTarget = (e && e.target && typeof e.target.closest === 'function')
+            ? e.target
+            : (e && e.target && e.target.parentElement && typeof e.target.parentElement.closest === 'function' ? e.target.parentElement : null);
+          if (!clickTarget) return;
+
+          const sendBtn = clickTarget.closest('button[data-testid="send-button"]');
+          if (sendBtn) {
+            const container = sendBtn.closest('[data-cascade-id]') || document;
+            const editor = container.querySelector('[contenteditable="true"], textarea');
+            const text = editor ? (editor.value || editor.textContent || '') : '';
+            if (text && window.__handleAutoPromptContextUpdate) {
+              window.__handleAutoPromptContextUpdate(text, sendBtn);
+            }
+          }
+
+          const reticleBtn = clickTarget.closest('.antigravity-caveman-reticle-trigger');
+          if (reticleBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.__toggleCavemanMode(undefined, reticleBtn);
+            return;
+          }
+
+          const isAgentBadge = clickTarget.closest('.antigravity-agent-badge');
+          const isAgentPortal = clickTarget.closest('#antigravity-agent-dropdown-portal');
+          if (!isAgentBadge && !isAgentPortal) {
+            const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
+            if (aPortal) aPortal.classList.remove('open');
+            document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+          }
+
+          const isTachBadge = clickTarget.closest('.antigravity-tachometer-badge');
+          const isTachPortal = clickTarget.closest('#antigravity-tachometer-popover-portal');
+          if (!isTachBadge && !isTachPortal) {
+            const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+            if (tachPortal) {
+              tachPortal.classList.remove('open');
+              tachPortal.__currentBadge = null;
+            }
+            document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+          }
+
+          const isModsBtn = clickTarget.closest('.antigravity-mods-manager-btn');
+          const isModsPortal = clickTarget.closest('#antigravity-mods-manager-portal');
+          if (!isModsBtn && !isModsPortal) {
+            const mPortal = document.getElementById('antigravity-mods-manager-portal');
+            if (mPortal) {
+              mPortal.classList.remove('open');
+              mPortal.__currentBtn = null;
+            }
+            document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+          }
+
+          const modelSlotBtn = clickTarget.closest('.antigravity-model-slot-btn');
+          if (modelSlotBtn) {
+            const role = modelSlotBtn.getAttribute('data-slot-role');
+            window.__toggleModelSlotDropdown(e, modelSlotBtn, role);
+            return;
+          }
+
+          const isModelSlotPortal = clickTarget.closest('#antigravity-model-slot-dropdown-portal');
+          if (!modelSlotBtn && !isModelSlotPortal) {
+            const msPortal = document.getElementById('antigravity-model-slot-dropdown-portal');
+            if (msPortal) {
+              msPortal.classList.remove('open');
+              msPortal.__currentBtn = null;
+            }
+            document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+          }
+        };
+
+        window.__antigravityDocKeydownHandler = (e) => {
+          if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.target && typeof e.target.closest === 'function') {
+            const editor = e.target.closest('[contenteditable="true"], textarea');
+            if (editor) {
+              const text = editor.value || editor.textContent || '';
+              if (text && window.__handleAutoPromptContextUpdate) {
+                window.__handleAutoPromptContextUpdate(text, editor);
+              }
+            }
+          }
+          if (e.key === 'Escape') {
+            if (window.__antigravityGitPanelOpen && typeof window.__closeGitGraphPanel === 'function') {
+              window.__closeGitGraphPanel();
+            }
+            const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
+            if (aPortal) {
+              aPortal.classList.remove('open');
+              aPortal.__currentBadge = null;
+            }
+            document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+
+            const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+            if (tachPortal) {
+              tachPortal.classList.remove('open');
+              tachPortal.__currentBadge = null;
+            }
+            document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+            const mPortal = document.getElementById('antigravity-mods-manager-portal');
+            if (mPortal) {
+              mPortal.classList.remove('open');
+              mPortal.__currentBtn = null;
+            }
+            document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+
+            const msPortal = document.getElementById('antigravity-model-slot-dropdown-portal');
+            if (msPortal) {
+              msPortal.classList.remove('open');
+              msPortal.__currentBtn = null;
+            }
+            document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+          }
+        };
+
+        window.__antigravityDocFocusinHandler = () => {
+          if (typeof window.__updateMenubarSlotButtons === 'function' && typeof window.__getActiveMenubarSlotModels === 'function') {
+            window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+          }
+        };
+
+        document.addEventListener('click', window.__antigravityDocClickHandler, true);
+        document.addEventListener('keydown', window.__antigravityDocKeydownHandler, true);
+        document.addEventListener('focusin', window.__antigravityDocFocusinHandler, true);
+        window.__antigravityGlobalEventsBound = true;
 
         // 3. Mount individual mods into target slots across all conversations
         function mountAllMods() {
           if (window.__antigravityIsMountingMods) return;
           window.__antigravityIsMountingMods = true;
+          if (window.__antigravityModObserver) {
+            try { window.__antigravityModObserver.disconnect(); } catch (e) {}
+          }
           try {
-          // Preserve last known compact state before slot innerHTML updates
-          document.querySelectorAll('.antigravity-slot-container').forEach(slot => {
-            const prevTach = slot.querySelector('.antigravity-tachometer-badge');
-            const prevAgent = slot.querySelector('.antigravity-agent-badge');
-            if (prevTach) slot.__lastTachCompact = prevTach.classList.contains('compact');
-            if (prevAgent) slot.__lastAgentCompact = prevAgent.classList.contains('compact');
-          });
+            // Preserve last known compact state before slot innerHTML updates
+            document.querySelectorAll('.antigravity-slot-container').forEach(slot => {
+              const prevTach = slot.querySelector('.antigravity-tachometer-badge');
+              const prevAgent = slot.querySelector('.antigravity-agent-badge');
+              if (prevTach) slot.__lastTachCompact = prevTach.classList.contains('compact');
+              if (prevAgent) slot.__lastAgentCompact = prevAgent.classList.contains('compact');
+            });
 
-          // Permanently remove legacy duplicate unmanaged badges, speaker icon wrappers & misplaced non-flex slot containers
-          document.querySelectorAll('.antigravity-context-badge').forEach(el => el.remove());
-          document.querySelectorAll('.min-w-0:not(.flex) > #antigravity-slot-header-actions, .no-focus-agent-input > #antigravity-slot-header-actions').forEach(el => el.remove());
-          document.querySelectorAll('#antigravity-voice-assistant-wrapper, .antigravity-voice-assistant-wrapper, #antigravity-voice-assistant-btn, #antigravity-mod-voice-assistant').forEach(el => el.remove());
-          document.querySelectorAll('#antigravity-slot-chat-input-actions, .antigravity-slot-chat-input-actions').forEach(slot => {
-            if (!slot.children || slot.children.length === 0) {
-              slot.remove();
-            }
-          });
+            // Permanently remove legacy duplicate unmanaged badges, speaker icon wrappers & misplaced non-flex slot containers
+            document.querySelectorAll('.antigravity-context-badge').forEach(el => el.remove());
+            document.querySelectorAll('.min-w-0:not(.flex) > #antigravity-slot-header-actions, .no-focus-agent-input > #antigravity-slot-header-actions').forEach(el => el.remove());
+            document.querySelectorAll('#antigravity-voice-assistant-wrapper, .antigravity-voice-assistant-wrapper, #antigravity-voice-assistant-btn, #antigravity-mod-voice-assistant').forEach(el => el.remove());
+            document.querySelectorAll('#antigravity-slot-chat-input-actions, .antigravity-slot-chat-input-actions').forEach(slot => {
+              if (!slot.children || slot.children.length === 0) {
+                slot.remove();
+              }
+            });
 
-          ${mountSnippets.join('\n')}
+            ${mountSnippets.join('\n')}
 
           // 3.1 Initialize Floating Portals in document.body
           let agentPortal = document.getElementById('antigravity-agent-dropdown-portal');
@@ -3327,7 +4247,11 @@ class ModLoader {
           });
 
           // Apply current telemetry
-          window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})});
+          if (window.__antigravityLiveTelemetryReceived) {
+            window.__updateAntigravityTelemetry();
+          } else {
+            window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})}, true);
+          }
 
           // Observe stable chatbox footer containers for responsive auto-collapse (guarded against RDP/minimize zero-dimension states & layout thrashing)
           document.querySelectorAll('.antigravity-slot-container').forEach(slot => {
@@ -3352,11 +4276,25 @@ class ModLoader {
             applyCompactToChatboxScope(slot, footerWidth);
           });
 
-          if (typeof window.__dockNativeVoiceToast === 'function') {
-            window.__dockNativeVoiceToast(document);
-          }
+            if (typeof window.__dockNativeVoiceToast === 'function') {
+              window.__dockNativeVoiceToast(document);
+            }
+            if (typeof window.__syncModelSlotsUI === 'function') {
+              window.__syncModelSlotsUI();
+            }
+            if (typeof window.__syncSubagentModelBadges === 'function') {
+              window.__syncSubagentModelBadges();
+            }
+            if (typeof window.__observeNativeModelSelector === 'function') {
+              window.__observeNativeModelSelector();
+            }
           } finally {
             window.__antigravityIsMountingMods = false;
+            if (window.__antigravityModObserver && document.body) {
+              try {
+                window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
+              } catch (e) {}
+            }
           }
         }
 
@@ -3446,9 +4384,13 @@ class ModLoader {
               applyResize();
             }
           };
-          document.addEventListener('visibilitychange', handleRdpAndVisibilityRecovery);
-          window.addEventListener('focus', handleRdpAndVisibilityRecovery);
-          window.addEventListener('resize', handleWindowResizeSync);
+          if (typeof document.addEventListener === 'function') {
+            document.addEventListener('visibilitychange', handleRdpAndVisibilityRecovery);
+          }
+          if (typeof window.addEventListener === 'function') {
+            window.addEventListener('focus', handleRdpAndVisibilityRecovery);
+            window.addEventListener('resize', handleWindowResizeSync);
+          }
         }
 
         // 4. Observe DOM mutations with smart slot check & self-mutation exclusion to avoid DOM thrashing
@@ -3506,6 +4448,7 @@ class ModLoader {
             for (const btn of triggers) {
               const parent = btn.parentElement;
               if (!parent) continue;
+              if (parent.closest && parent.closest('[role="dialog"], [role="menu"], .agy-overlay')) continue;
               const row = parent.closest('.flex.items-center') || parent;
               if (!row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')) {
                 missingSlot = true;
@@ -3528,8 +4471,16 @@ class ModLoader {
 
             if (missingSlot) {
               mountAllMods();
-            } else if (typeof window.__syncAgentBadges === 'function') {
-              window.__syncAgentBadges();
+            } else {
+              if (typeof window.__syncAgentBadges === 'function') {
+                window.__syncAgentBadges();
+              }
+              if (typeof window.__syncSubagentModelBadges === 'function') {
+                window.__syncSubagentModelBadges();
+              }
+              if (typeof window.__observeNativeModelSelector === 'function') {
+                window.__observeNativeModelSelector();
+              }
             }
           }, 150);
         });
@@ -3537,7 +4488,8 @@ class ModLoader {
         window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
         return {
           success: true,
-          selectedAgentsMap: localStorage.getItem('__antigravity_selected_agents_map')
+          selectedAgentsMap: localStorage.getItem('__antigravity_selected_agents_map'),
+          modelSlots: localStorage.getItem('__antigravity_model_slots')
         };
       })();
     `;
@@ -5748,6 +6700,7 @@ class AgentSyncServer {
    * @param {number} [options.port] Port to listen on (default 53912)
    * @param {string} [options.host] Host address (default 127.0.0.1)
    * @param {string} [options.configPath] Path to active_agents.json
+   * @param {string} [options.modelSlotsPath] Path to model_slots.json
    * @param {VcsOrchestrator} [options.vcsOrchestrator] Custom VCS orchestrator
    * @param {string} [options.repoPath] Path to git repository
    */
@@ -5757,6 +6710,7 @@ class AgentSyncServer {
     this.configPath = options.configPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'active_agents.json');
     this.brainDir = options.brainDir || path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
     this.sessionRepos = new Map();
+    this.modelSlotsPath = options.modelSlotsPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'model_slots.json');
     this.repoPath = options.repoPath || process.cwd();
     this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ repoPath: this.repoPath });
     this.server = null;
@@ -5902,6 +6856,32 @@ class AgentSyncServer {
   }
 
   /**
+   * Reads model slots from disk or returns default configuration.
+   * @returns {Object}
+   */
+  readModelSlots() {
+    const defaults = {
+      planner: 'gemini-4-argon-high',
+      builder: 'gemini-4-hydrogen-high',
+      enabled: true,
+      sessions: {}
+    };
+    try {
+      if (fs.existsSync(this.modelSlotsPath)) {
+        const raw = fs.readFileSync(this.modelSlotsPath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const sessions = (parsed.sessions && typeof parsed.sessions === 'object' && !Array.isArray(parsed.sessions))
+            ? parsed.sessions
+            : {};
+          return { ...defaults, ...parsed, sessions };
+        }
+      }
+    } catch {}
+    return defaults;
+  }
+
+  /**
    * Saves active agents map to disk atomically.
    * @param {Object} data
    */
@@ -5920,6 +6900,101 @@ class AgentSyncServer {
         fs.writeFileSync(this.configPath, JSON.stringify(data, null, 2), 'utf-8');
       } catch {}
     }
+  }
+
+  /**
+   * Saves model slots configuration to disk atomically.
+   * @param {Object} data
+   */
+  writeModelSlots(data) {
+    try {
+      const dir = path.dirname(this.modelSlotsPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const tmpPath = `${this.modelSlotsPath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+      fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+      fs.renameSync(tmpPath, this.modelSlotsPath);
+    } catch (err) {
+      // Fallback direct write
+      try {
+        fs.writeFileSync(this.modelSlotsPath, JSON.stringify(data, null, 2), 'utf-8');
+      } catch {}
+    }
+  }
+
+  /**
+   * Updates model slots config with partial patch.
+   * @param {Object} [patch]
+   * @returns {Object}
+   */
+  updateModelSlots(patch = {}) {
+    const current = this.readModelSlots();
+    const nextSessions = (patch.sessions && typeof patch.sessions === 'object' && !Array.isArray(patch.sessions))
+      ? { ...(current.sessions || {}), ...patch.sessions }
+      : (current.sessions || {});
+    const updated = {
+      ...current,
+      ...patch,
+      sessions: nextSessions,
+      updatedAt: Date.now()
+    };
+    this.writeModelSlots(updated);
+    return updated;
+  }
+
+  /**
+   * Reads saved model slots for a specific subagent sessionId, or all sessions map if omitted.
+   * @param {string} [sessionId]
+   * @returns {Object|null}
+   */
+  readSubagentSessionSlots(sessionId) {
+    const current = this.readModelSlots();
+    const sessions = (current.sessions && typeof current.sessions === 'object' && !Array.isArray(current.sessions))
+      ? current.sessions
+      : {};
+    if (!sessionId) {
+      return { ...sessions };
+    }
+    const entry = sessions[sessionId];
+    return (entry && typeof entry === 'object' && !Array.isArray(entry)) ? { ...entry } : null;
+  }
+
+  /**
+   * Updates and persists model slots for a specific subagent sessionId atomically.
+   * @param {string} sessionId
+   * @param {Object} [slots]
+   * @returns {Object|null}
+   */
+  updateSubagentSessionSlots(sessionId, slots = {}) {
+    if (!sessionId || typeof sessionId !== 'string') return null;
+    const cleanId = sessionId.trim();
+    if (!cleanId || !slots || typeof slots !== 'object' || Array.isArray(slots)) return null;
+
+    const current = this.readModelSlots();
+    const sessions = (current.sessions && typeof current.sessions === 'object' && !Array.isArray(current.sessions))
+      ? { ...current.sessions }
+      : {};
+    const existing = (sessions[cleanId] && typeof sessions[cleanId] === 'object' && !Array.isArray(sessions[cleanId]))
+      ? sessions[cleanId]
+      : {};
+
+    const nextSession = {
+      ...existing,
+      ...slots,
+      planner: slots.planner || existing.planner || current.planner,
+      builder: slots.builder || existing.builder || current.builder,
+      updatedAt: Date.now()
+    };
+
+    sessions[cleanId] = nextSession;
+    const updated = {
+      ...current,
+      sessions,
+      updatedAt: Date.now()
+    };
+    this.writeModelSlots(updated);
+    return nextSession;
   }
 
   /**
@@ -6059,6 +7134,103 @@ class AgentSyncServer {
           const data = this.readActiveAgents();
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(data));
+          return;
+        }
+
+        if (req.method === 'GET' && req.url === '/model-slots') {
+          const data = this.readModelSlots();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(data));
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/model-slots') {
+          let body = '';
+          let exceeded = false;
+          req.on('data', chunk => {
+            body += chunk;
+            if (body.length > 65536) {
+              exceeded = true;
+              res.writeHead(413, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Payload too large' }));
+              req.destroy();
+            }
+          });
+          req.on('end', () => {
+            if (exceeded || res.writableEnded) return;
+            try {
+              const payload = JSON.parse(body || '{}');
+              const slots = this.updateModelSlots(payload);
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: true, slots }));
+              return;
+            } catch {}
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid payload' }));
+          });
+          return;
+        }
+
+        if (req.method === 'GET' && (req.url === '/subagent-model-slots' || req.url.startsWith('/subagent-model-slots?'))) {
+          let sessionId = null;
+          try {
+            const urlObj = new URL(req.url, 'http://127.0.0.1');
+            sessionId = urlObj.searchParams.get('sessionId');
+          } catch {}
+
+          if (sessionId) {
+            const sessionSlots = this.readSubagentSessionSlots(sessionId);
+            const globalSlots = this.readModelSlots();
+            const payload = sessionSlots || {
+              planner: globalSlots.planner,
+              builder: globalSlots.builder,
+              isDefault: true
+            };
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(payload));
+            return;
+          }
+
+          const allSessions = this.readSubagentSessionSlots();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(allSessions));
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/subagent-model-slots') {
+          let body = '';
+          let exceeded = false;
+          req.on('data', chunk => {
+            body += chunk;
+            if (body.length > 65536) {
+              exceeded = true;
+              res.writeHead(413, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Payload too large' }));
+              req.destroy();
+            }
+          });
+          req.on('end', () => {
+            if (exceeded || res.writableEnded) return;
+            try {
+              const payload = JSON.parse(body || '{}');
+              if (
+                payload &&
+                typeof payload.sessionId === 'string' &&
+                payload.sessionId.trim() &&
+                payload.slots &&
+                typeof payload.slots === 'object' &&
+                !Array.isArray(payload.slots)
+              ) {
+                const cleanId = payload.sessionId.trim();
+                const slots = this.updateSubagentSessionSlots(cleanId, payload.slots);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, sessionId: cleanId, slots }));
+                return;
+              }
+            } catch {}
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid payload' }));
+          });
           return;
         }
 
@@ -6448,6 +7620,22 @@ class ModHost {
   }
 
   /**
+   * Returns registered mods from the mod loader.
+   * @returns {Array<import('../sdk/AntigravityMod.js').AntigravityMod>}
+   */
+  getMods() {
+    return this.modLoader.getRegisteredMods();
+  }
+
+  /**
+   * Returns registered mods from the mod loader.
+   * @returns {Array<import('../sdk/AntigravityMod.js').AntigravityMod>}
+   */
+  getRegisteredMods() {
+    return this.modLoader.getRegisteredMods();
+  }
+
+  /**
    * Compiles the combined DOM injection payload for all registered mods.
    * @param {Object} context
    * @returns {string}
@@ -6656,11 +7844,13 @@ class ModHost {
     };
 
     const activeAgents = this.syncServer.readActiveAgents();
+    const modelSlots = this.syncServer.readModelSlots();
 
     const hostContext = {
       telemetry: primaryMetric,
       allMetrics,
       activeAgents,
+      modelSlots,
       ...vcsOverview,
       timestamp: Date.now()
     };
@@ -6693,6 +7883,21 @@ class ModHost {
             }
           }
           this.syncServer.writeActiveAgents(merged);
+        }
+      }
+    } catch {}
+
+    // Sync model slots from renderer localStorage to disk
+    try {
+      let rawSlots = evalRes?.value?.modelSlots;
+      if (!rawSlots) {
+        const slotsRes = await cdpClient.evaluate("localStorage.getItem('__antigravity_model_slots')");
+        rawSlots = slotsRes?.value;
+      }
+      if (rawSlots) {
+        const parsedSlots = typeof rawSlots === 'string' ? JSON.parse(rawSlots) : rawSlots;
+        if (parsedSlots && typeof parsedSlots === 'object') {
+          this.syncServer.updateModelSlots(parsedSlots);
         }
       }
     } catch {}
@@ -8176,6 +9381,27 @@ function renderModsManagerPanelHtml() {
         </div>
         <label class="mod-switch">
           <input type="checkbox" id="mod-toggle-git-graph" data-mod="git-graph" checked>
+          <span class="mod-slider"></span>
+        </label>
+      </div>
+
+      <!-- Mod Card: Slots Planner & Builder -->
+      <div class="mod-card">
+        <div class="mod-info">
+          <div class="mod-icon-box slots-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+              <line x1="8" y1="21" x2="16" y2="21"></line>
+              <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+          </div>
+          <div class="mod-text">
+            <div class="mod-title">Slots Planner & Builder</div>
+            <div class="mod-desc">Selectores duales en menubar para asignar modelos a roles Plan y Build.</div>
+          </div>
+        </div>
+        <label class="mod-switch">
+          <input type="checkbox" id="mod-toggle-model-slots" data-mod="model-slots" checked>
           <span class="mod-slider"></span>
         </label>
       </div>
@@ -10419,6 +11645,454 @@ class VoiceAssistantMod extends AntigravityMod {
 }
 
 
+// ===================== Model Slots Mod =====================
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
+/**
+ * Base models grouped with their supported effort levels for hierarchical flyout selection.
+ */
+const BASE_MODELS = [
+  {
+    name: 'Gemini 4 Argon',
+    family: 'Argon',
+    color: '#38bdf8',
+    efforts: [
+      { id: 'gemini-4-argon-low', label: 'Low', shortName: 'Argon Low' },
+      { id: 'gemini-4-argon-medium', label: 'Medium', shortName: 'Argon Med' },
+      { id: 'gemini-4-argon-high', label: 'High', shortName: 'Argon High' }
+    ]
+  },
+  {
+    name: 'Gemini 4 Hydrogen',
+    family: 'Hydrogen',
+    color: '#34d399',
+    efforts: [
+      { id: 'gemini-4-hydrogen-low', label: 'Low', shortName: 'Hydrogen Low' },
+      { id: 'gemini-4-hydrogen-medium', label: 'Medium', shortName: 'Hydrogen Med' },
+      { id: 'gemini-4-hydrogen-high', label: 'High', shortName: 'Hydrogen High' },
+      { id: 'gemini-4-hydrogen-xhigh', label: 'XHigh', shortName: 'Hydrogen XHigh' }
+    ]
+  },
+  {
+    name: 'Gemini 3.8 Flash',
+    family: 'Gemini 3.8',
+    color: '#fbbf24',
+    efforts: [
+      { id: 'gemini-3.8-flash-low', label: 'Low', shortName: 'Flash 3.8 Low' },
+      { id: 'gemini-3.8-flash-medium', label: 'Medium', shortName: 'Flash 3.8 Med' },
+      { id: 'gemini-3.8-flash-high', label: 'High', shortName: 'Flash 3.8 High' }
+    ]
+  },
+  {
+    name: 'Claude Opus 5.5',
+    family: 'Claude',
+    color: '#c084fc',
+    efforts: [
+      { id: 'claude-opus-5-5-low', label: 'Low', shortName: 'Opus 5.5 Low' },
+      { id: 'claude-opus-5-5-medium', label: 'Medium', shortName: 'Opus 5.5 Med' },
+      { id: 'claude-opus-5-5-high', label: 'High', shortName: 'Opus 5.5 High' }
+    ]
+  },
+  {
+    name: 'Claude Sonnet 5.5',
+    family: 'Claude',
+    color: '#a78bfa',
+    efforts: [
+      { id: 'claude-sonnet-5-5-low', label: 'Low', shortName: 'Sonnet 5.5 Low' },
+      { id: 'claude-sonnet-5-5-medium', label: 'Medium', shortName: 'Sonnet 5.5 Med' },
+      { id: 'claude-sonnet-5-5-high', label: 'High', shortName: 'Sonnet 5.5 High' }
+    ]
+  },
+  {
+    name: 'GPT-OSS 120B',
+    family: 'OpenAI OSS',
+    color: '#f472b6',
+    efforts: [
+      { id: 'gpt-oss-120b-medium', label: 'Medium', shortName: 'GPT-OSS 120B' }
+    ]
+  },
+  {
+    name: 'Orchestrator (Argon)',
+    family: 'Argon',
+    color: '#38bdf8',
+    efforts: [
+      { id: 'gemini-pro-orchestrator-g1-pro', label: 'Standard', shortName: 'Orchestrator' }
+    ]
+  }
+];
+
+/**
+ * Full symmetrical catalog of supported models for Planner and Builder slots.
+ */
+const MODEL_CATALOG = [
+  {
+    id: 'gemini-4-argon-high',
+    name: 'Gemini 4 Argon (High)',
+    shortName: 'Argon High',
+    family: 'Argon',
+    color: '#38bdf8'
+  },
+  {
+    id: 'gemini-4-argon-medium',
+    name: 'Gemini 4 Argon (Medium)',
+    shortName: 'Argon Med',
+    family: 'Argon',
+    color: '#38bdf8'
+  },
+  {
+    id: 'gemini-4-argon-low',
+    name: 'Gemini 4 Argon (Low)',
+    shortName: 'Argon Low',
+    family: 'Argon',
+    color: '#38bdf8'
+  },
+  {
+    id: 'gemini-4-hydrogen-xhigh',
+    name: 'Gemini 4 Hydrogen (XHigh)',
+    shortName: 'Hydrogen XHigh',
+    family: 'Hydrogen',
+    color: '#34d399'
+  },
+  {
+    id: 'gemini-4-hydrogen-high',
+    name: 'Gemini 4 Hydrogen (High)',
+    shortName: 'Hydrogen High',
+    family: 'Hydrogen',
+    color: '#34d399'
+  },
+  {
+    id: 'gemini-4-hydrogen-medium',
+    name: 'Gemini 4 Hydrogen (Medium)',
+    shortName: 'Hydrogen Med',
+    family: 'Hydrogen',
+    color: '#34d399'
+  },
+  {
+    id: 'gemini-4-hydrogen-low',
+    name: 'Gemini 4 Hydrogen (Low)',
+    shortName: 'Hydrogen Low',
+    family: 'Hydrogen',
+    color: '#34d399'
+  },
+  {
+    id: 'gemini-3.8-flash-high',
+    name: 'Gemini 3.8 Flash (High)',
+    shortName: 'Flash 3.8 High',
+    family: 'Gemini 3.8',
+    color: '#fbbf24'
+  },
+  {
+    id: 'gemini-3.8-flash-medium',
+    name: 'Gemini 3.8 Flash (Medium)',
+    shortName: 'Flash 3.8 Med',
+    family: 'Gemini 3.8',
+    color: '#fbbf24'
+  },
+  {
+    id: 'gemini-3.8-flash-low',
+    name: 'Gemini 3.8 Flash (Low)',
+    shortName: 'Flash 3.8 Low',
+    family: 'Gemini 3.8',
+    color: '#fbbf24'
+  },
+  {
+    id: 'claude-opus-5-5-high',
+    name: 'Claude Opus 5.5 (High)',
+    shortName: 'Opus 5.5 High',
+    family: 'Claude',
+    color: '#c084fc'
+  },
+  {
+    id: 'claude-opus-5-5-medium',
+    name: 'Claude Opus 5.5 (Medium)',
+    shortName: 'Opus 5.5 Med',
+    family: 'Claude',
+    color: '#c084fc'
+  },
+  {
+    id: 'claude-opus-5-5-low',
+    name: 'Claude Opus 5.5 (Low)',
+    shortName: 'Opus 5.5 Low',
+    family: 'Claude',
+    color: '#c084fc'
+  },
+  {
+    id: 'claude-sonnet-5-5-high',
+    name: 'Claude Sonnet 5.5 (High)',
+    shortName: 'Sonnet 5.5 High',
+    family: 'Claude',
+    color: '#a78bfa'
+  },
+  {
+    id: 'claude-sonnet-5-5-medium',
+    name: 'Claude Sonnet 5.5 (Medium)',
+    shortName: 'Sonnet 5.5 Med',
+    family: 'Claude',
+    color: '#a78bfa'
+  },
+  {
+    id: 'claude-sonnet-5-5-low',
+    name: 'Claude Sonnet 5.5 (Low)',
+    shortName: 'Sonnet 5.5 Low',
+    family: 'Claude',
+    color: '#a78bfa'
+  },
+  {
+    id: 'gpt-oss-120b-medium',
+    name: 'GPT-OSS 120B (Medium)',
+    shortName: 'GPT-OSS 120B',
+    family: 'OpenAI OSS',
+    color: '#f472b6'
+  },
+  {
+    id: 'gemini-pro-orchestrator-g1-pro',
+    name: 'Orchestrator (Argon)',
+    shortName: 'Orchestrator',
+    family: 'Argon',
+    color: '#38bdf8'
+  }
+];
+
+/**
+ * Default assignments for Planner and Builder slots.
+ */
+const DEFAULT_MODEL_SLOTS = {
+  planner: 'gemini-4-argon-high',
+  builder: 'gemini-4-hydrogen-high'
+};
+
+/**
+ * Finds a model in the catalog by its id, or falls back to the first catalog entry.
+ * @param {string} modelId
+ * @param {Array<Object>} [catalog=MODEL_CATALOG]
+ * @returns {Object}
+ */
+function getModelById(modelId, catalog) {
+  if (catalog && Array.isArray(catalog)) {
+    if (catalog[0] && catalog[0].efforts) {
+      for (const bm of catalog) {
+        const found = bm.efforts.find(e => e.id === modelId);
+        if (found) {
+          return {
+            id: found.id,
+            name: `${bm.name} (${found.label})`,
+            shortName: found.shortName,
+            family: bm.family,
+            color: bm.color
+          };
+        }
+      }
+    } else {
+      const match = catalog.find(m => m.id === modelId);
+      if (match) return match;
+    }
+  }
+
+  const list = (typeof window !== 'undefined' && window.__MODEL_CATALOG) || (typeof MODEL_CATALOG !== 'undefined' ? MODEL_CATALOG : []);
+  const fromCatalog = list.find(m => m.id === modelId);
+  if (fromCatalog) return fromCatalog;
+
+  for (const bm of BASE_MODELS) {
+    const found = bm.efforts.find(e => e.id === modelId);
+    if (found) {
+      return {
+        id: found.id,
+        name: `${bm.name} (${found.label})`,
+        shortName: found.shortName,
+        family: bm.family,
+        color: bm.color
+      };
+    }
+  }
+
+  return list[0];
+}
+
+/**
+ * Renders the dual menubar buttons for Planner and Builder slots.
+ * @param {Object} [slots=DEFAULT_MODEL_SLOTS]
+ * @returns {string}
+ */
+function renderModelSlotsMenubarHtml(slots = DEFAULT_MODEL_SLOTS) {
+  const currentSlots = slots || DEFAULT_MODEL_SLOTS;
+  const plannerId = currentSlots.planner || DEFAULT_MODEL_SLOTS.planner;
+  const builderId = currentSlots.builder || DEFAULT_MODEL_SLOTS.builder;
+  const planner = getModelById(plannerId);
+  const builder = getModelById(builderId);
+
+  return `
+    <div class="antigravity-model-slots-group" id="antigravity-model-slots-group">
+      <button 
+        id="antigravity-model-slot-planner" 
+        class="antigravity-model-slot-btn" 
+        data-slot-role="planner" 
+        data-model-id="${planner.id}" 
+        title="Planner Model: ${planner.name}"
+      >
+        <span class="model-slot-dot" style="background-color: ${planner.color}; box-shadow: 0 0 6px ${planner.color}88;"></span>
+        <span class="model-slot-role">Plan:</span>
+        <span class="model-slot-value">${planner.shortName}</span>
+        <span class="model-slot-caret">▼</span>
+      </button>
+      <button 
+        id="antigravity-model-slot-builder" 
+        class="antigravity-model-slot-btn" 
+        data-slot-role="builder" 
+        data-model-id="${builder.id}" 
+        title="Builder Model: ${builder.name}"
+      >
+        <span class="model-slot-dot" style="background-color: ${builder.color}; box-shadow: 0 0 6px ${builder.color}88;"></span>
+        <span class="model-slot-role">Build:</span>
+        <span class="model-slot-value">${builder.shortName}</span>
+        <span class="model-slot-caret">▼</span>
+      </button>
+    </div>
+  `.trim();
+}
+
+/**
+ * Renders hierarchical dropdown markup with base models and flyout effort submenus.
+ * @param {'planner'|'builder'} role
+ * @param {string} selectedModelId
+ * @param {Array<Object>} [catalog=BASE_MODELS]
+ * @returns {string} Clean HTML without any emojis
+ */
+function renderModelSlotDropdownHtml(role, selectedModelId, catalog) {
+  const baseModels = (catalog && Array.isArray(catalog) && catalog[0] && catalog[0].efforts)
+    ? catalog
+    : ((typeof window !== 'undefined' && window.__BASE_MODELS) || BASE_MODELS);
+  const isPlanner = role === 'planner';
+  const headerTitle = isPlanner ? 'Select Planner Model' : 'Select Builder Model';
+  const roleLabel = isPlanner ? 'PLANNER' : 'BUILDER';
+  const roleDesc = isPlanner ? 'Deep reasoning, architecture & plan creation' : 'Fast code generation, edits & execution';
+
+  const rowsHtml = baseModels.map(bm => {
+    const activeEffort = bm.efforts.find(e => e.id === selectedModelId);
+    const isModelActive = Boolean(activeEffort);
+    const singleEffortId = bm.efforts.length === 1 ? bm.efforts[0].id : '';
+
+    const effortOptionsHtml = bm.efforts.map(eff => {
+      const isEffortActive = eff.id === selectedModelId;
+      return `
+        <button 
+          type="button" 
+          class="model-effort-option${isEffortActive ? ' active' : ''}" 
+          data-slot-role="${role}" 
+          data-model-id="${eff.id}" 
+          title="${bm.name} - ${eff.label}"
+        >
+          <span class="model-effort-name">${eff.label}</span>
+          <span class="model-effort-check">${isEffortActive ? '✓' : ''}</span>
+        </button>
+      `.trim();
+    }).join('\n');
+
+    return `
+      <div 
+        class="model-slot-row${isModelActive ? ' active' : ''}" 
+        data-slot-role="${role}"
+        ${singleEffortId ? `data-model-id="${singleEffortId}"` : ''}
+        data-base-model="${bm.name}"
+      >
+        <div class="model-slot-row-left">
+          <span class="model-slot-row-dot" style="background-color: ${bm.color}; box-shadow: 0 0 6px ${bm.color}66;"></span>
+          <span class="model-slot-row-name">${bm.name}</span>
+        </div>
+        <div class="model-slot-row-right">
+          ${activeEffort ? `<span class="model-slot-active-badge">${activeEffort.label}</span>` : ''}
+          <span class="model-slot-chevron">&#8250;</span>
+        </div>
+        <div class="model-slot-submenu">
+          ${effortOptionsHtml}
+        </div>
+      </div>
+    `.trim();
+  }).join('\n');
+
+  return `
+    <div class="model-slot-dropdown-header">
+      <div class="model-slot-dropdown-title-row">
+        <span class="model-slot-dropdown-title">${headerTitle}</span>
+        <span class="model-slot-dropdown-role-badge ${role}">${roleLabel}</span>
+      </div>
+      <div class="model-slot-dropdown-sub">${roleDesc}</div>
+    </div>
+    <div class="model-slot-options-list">
+      ${rowsHtml}
+    </div>
+  `.trim();
+}
+
+/**
+ * Renders the model badge pill for subagent footers.
+ * @param {string} modelId
+ * @param {Array<Object>} [catalog=MODEL_CATALOG]
+ * @returns {string} Clean HTML without any emojis
+ */
+function renderSubagentModelPill(modelId, catalog) {
+  const getFn = typeof getModelById === 'function'
+    ? getModelById
+    : (typeof window !== 'undefined' && typeof window.__getModelById === 'function' ? window.__getModelById : null);
+  const model = (getFn ? getFn(modelId, catalog) : null) || { id: modelId, name: modelId, shortName: modelId, color: '#34d399' };
+  return `
+    <span 
+      id="antigravity-subagent-model-pill" 
+      class="antigravity-subagent-model-pill" 
+      data-model-id="${model.id}" 
+      title="Subagent Builder Model: ${model.name}" 
+      style="border-color: ${model.color}55; background: ${model.color}18; color: ${model.color};"
+    >
+      <span class="subagent-model-dot" style="background: ${model.color}; box-shadow: 0 0 5px ${model.color};"></span>
+      <span class="subagent-model-label">${model.shortName}</span>
+    </span>
+  `.trim();
+}
+
+
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
+
+
+
+
+
+
+
+
+/**
+ * Mod providing dual menubar selectors for Planner and Builder model slots.
+ */
+class ModelSlotsMod extends AntigravityMod {
+  constructor() {
+    super({
+      id: 'model-slots',
+      name: 'Planner & Builder Model Slots',
+      version: '1.0.0',
+      slot: 'menubar-actions',
+      priority: 90
+    });
+
+    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY PLANNER & BUILDER MODEL SLOTS MOD - STYLES\r\n   ========================================================================= */\r\n\r\n/* Menubar Buttons Container */\r\n#antigravity-model-slots-group,\r\n.antigravity-model-slots-group {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  flex-shrink: 0 !important;\r\n  white-space: nowrap !important;\r\n  transform: none !important;\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n  user-select: none !important;\r\n}\r\n\r\n/* Individual Slot Selector Button */\r\n.antigravity-model-slot-btn {\r\n  height: 26px !important;\r\n  padding: 0 8px !important;\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  color: rgba(255, 255, 255, 0.85) !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  flex-shrink: 0 !important;\r\n  white-space: nowrap !important;\r\n  transition: background-color 0.12s ease, border-color 0.12s ease !important;\r\n  transform: none !important;\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n  user-select: none !important;\r\n  line-height: 1 !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n#antigravity-model-slot-planner,\r\n#antigravity-model-slot-builder {\r\n  flex-shrink: 0 !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.antigravity-model-slot-btn.compact {\r\n  height: 22px !important;\r\n  padding: 2px 6px !important;\r\n  font-size: 11px !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n@media (max-width: 1100px) {\r\n  #antigravity-mod-model-slots .antigravity-model-slot-btn,\r\n  .antigravity-model-slot-btn {\r\n    height: 22px !important;\r\n    padding: 2px 6px !important;\r\n    font-size: 11px !important;\r\n    gap: 4px !important;\r\n  }\r\n\r\n  #antigravity-mod-model-slots .antigravity-model-slot-btn .model-slot-role,\r\n  .antigravity-model-slot-btn .model-slot-role {\r\n    font-size: 9.5px !important;\r\n  }\r\n}\r\n\r\n.antigravity-model-slot-btn:hover {\r\n  background: rgba(255, 255, 255, 0.09) !important;\r\n  border-color: rgba(255, 255, 255, 0.22) !important;\r\n  color: #ffffff !important;\r\n  transform: none !important;\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n}\r\n\r\n.antigravity-model-slot-btn.open {\r\n  background: rgba(255, 255, 255, 0.13) !important;\r\n  border-color: rgba(56, 189, 248, 0.45) !important;\r\n  color: #ffffff !important;\r\n  box-shadow: 0 0 10px rgba(56, 189, 248, 0.15) !important;\r\n}\r\n\r\n/* Menubar Button Elements */\r\n.antigravity-model-slot-btn .model-slot-dot {\r\n  width: 6px !important;\r\n  height: 6px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.antigravity-model-slot-btn .model-slot-role {\r\n  font-weight: 600 !important;\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  text-transform: uppercase !important;\r\n  letter-spacing: 0.3px !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.antigravity-model-slot-btn .model-slot-value {\r\n  font-weight: 500 !important;\r\n  color: #ffffff !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.antigravity-model-slot-btn .model-slot-caret {\r\n  font-size: 8px !important;\r\n  opacity: 0.5 !important;\r\n  pointer-events: none !important;\r\n  margin-left: 1px !important;\r\n}\r\n\r\n/* Floating Portal Dropdown */\r\n.antigravity-model-slot-dropdown-portal {\r\n  position: fixed !important;\r\n  z-index: 1000001 !important;\r\n  width: 250px !important;\r\n  max-height: none !important;\r\n  overflow: visible !important;\r\n  background: #161822 !important;\r\n  background-color: #161822 !important;\r\n  background-image: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  opacity: 1 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 12px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 10px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: none;\r\n  flex-direction: column !important;\r\n  box-sizing: border-box !important;\r\n  animation: modelSlotPopIn 0.15s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n}\r\n\r\n.antigravity-model-slot-dropdown-portal.open {\r\n  display: flex !important;\r\n}\r\n\r\n@keyframes modelSlotPopIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-5px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* Dropdown Header */\r\n.model-slot-dropdown-header {\r\n  padding-bottom: 8px !important;\r\n  margin-bottom: 8px !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.model-slot-dropdown-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.model-slot-dropdown-title {\r\n  font-size: 13px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n}\r\n\r\n.model-slot-dropdown-role-badge {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  letter-spacing: 0.4px !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  text-transform: uppercase !important;\r\n}\r\n\r\n.model-slot-dropdown-role-badge.planner {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.model-slot-dropdown-role-badge.builder {\r\n  background: rgba(52, 211, 153, 0.15) !important;\r\n  color: #34d399 !important;\r\n  border: 1px solid rgba(52, 211, 153, 0.3) !important;\r\n}\r\n\r\n.model-slot-dropdown-sub {\r\n  font-size: 10.5px !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n}\r\n\r\n/* Hierarchical Base Model Options List */\r\n.model-slot-options-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  overflow: visible !important;\r\n}\r\n\r\n/* Base Model Row */\r\n.model-slot-row {\r\n  position: relative !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 6px 8px !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.12s ease !important;\r\n  user-select: none !important;\r\n  font-family: inherit !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.model-slot-row:hover {\r\n  background: rgba(255, 255, 255, 0.07) !important;\r\n  border-color: rgba(255, 255, 255, 0.1) !important;\r\n}\r\n\r\n.model-slot-row.active {\r\n  background: rgba(56, 189, 248, 0.08) !important;\r\n  border-color: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.model-slot-row.open {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.model-slot-row-left {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  min-width: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-row-dot {\r\n  width: 7px !important;\r\n  height: 7px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-row-name {\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-row-right {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-active-badge {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n  letter-spacing: 0.2px !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-chevron {\r\n  font-size: 14px !important;\r\n  line-height: 1 !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n  pointer-events: none !important;\r\n  transition: color 0.12s ease !important;\r\n}\r\n\r\n.model-slot-row:hover .model-slot-chevron,\r\n.model-slot-row.open .model-slot-chevron {\r\n  color: #ffffff !important;\r\n}\r\n\r\n/* Effort Submenu Flyout */\r\n.model-slot-submenu {\r\n  position: absolute !important;\r\n  left: 100% !important;\r\n  top: -4px !important;\r\n  margin-left: 0 !important;\r\n  min-width: 120px !important;\r\n  display: none;\r\n  z-index: 1000002 !important;\r\n  background: #161822 !important;\r\n  background-color: #161822 !important;\r\n  background-image: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  opacity: 1 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.14) !important;\r\n  border-radius: 8px !important;\r\n  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 4px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.model-slot-submenu::before {\r\n  content: \"\";\r\n  position: absolute;\r\n  top: 0;\r\n  bottom: 0;\r\n  left: -8px;\r\n  width: 8px;\r\n}\r\n\r\n.model-slot-row:hover > .model-slot-submenu,\r\n.model-slot-row.open > .model-slot-submenu {\r\n  display: block !important;\r\n}\r\n\r\n.model-slot-submenu.submenu-left {\r\n  right: 100% !important;\r\n  left: auto !important;\r\n  margin-right: 0 !important;\r\n  margin-left: 0 !important;\r\n}\r\n\r\n.model-slot-submenu.submenu-left::before {\r\n  left: auto;\r\n  right: -8px;\r\n}\r\n\r\n/* Effort Level Option Button */\r\n.model-effort-option {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 5px 8px !important;\r\n  margin-bottom: 2px !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 5px !important;\r\n  cursor: pointer !important;\r\n  text-align: left !important;\r\n  font-family: inherit !important;\r\n  box-sizing: border-box !important;\r\n  transition: all 0.12s ease !important;\r\n}\r\n\r\n.model-effort-option:last-child {\r\n  margin-bottom: 0 !important;\r\n}\r\n\r\n.model-effort-option:hover {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: rgba(255, 255, 255, 0.12) !important;\r\n}\r\n\r\n.model-effort-option.active {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  border-color: rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.model-effort-name {\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  color: #ffffff !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-effort-option.active .model-effort-name {\r\n  color: #38bdf8 !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.model-effort-check {\r\n  font-size: 12px !important;\r\n  font-weight: 700 !important;\r\n  color: #38bdf8 !important;\r\n  width: 14px !important;\r\n  text-align: right !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n/* Legacy option styles retained for compatibility */\r\n.model-slot-option {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  width: 100% !important;\r\n  padding: 6px 8px !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  text-align: left !important;\r\n  transition: all 0.12s ease !important;\r\n  user-select: none !important;\r\n  font-family: inherit !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.model-slot-option:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(255, 255, 255, 0.1) !important;\r\n}\r\n\r\n.model-slot-option.active {\r\n  background: rgba(56, 189, 248, 0.1) !important;\r\n  border-color: rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.model-slot-option-dot {\r\n  width: 8px !important;\r\n  height: 8px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-option-info {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 1px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-option-name {\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.model-slot-option-family {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.42) !important;\r\n}\r\n\r\n.model-slot-option-badge {\r\n  font-size: 9.5px !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  color: rgba(255, 255, 255, 0.6) !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-option-check {\r\n  font-size: 12px !important;\r\n  font-weight: 700 !important;\r\n  color: #38bdf8 !important;\r\n  width: 14px !important;\r\n  text-align: center !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n/* Mods Manager Icon Box for Model Slots */\r\n.mod-icon-box.slots-icon {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n/* Subagent Model Pill Badge */\r\n.antigravity-subagent-model-pill {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  height: 18px !important;\r\n  padding: 0 6px !important;\r\n  margin-left: 6px !important;\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  line-height: 1 !important;\r\n  border-radius: 4px !important;\r\n  border: 1px solid !important;\r\n  user-select: none !important;\r\n  vertical-align: middle !important;\r\n  box-sizing: border-box !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.antigravity-subagent-model-pill .subagent-model-dot {\r\n  width: 5px !important;\r\n  height: 5px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.antigravity-subagent-model-pill .subagent-model-label {\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  letter-spacing: 0.2px !important;\r\n  pointer-events: none !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n";
+  }
+
+  /**
+   * Renders the top menubar buttons for Planner and Builder slots.
+   * @param {Object} [context]
+   * @returns {{ html: string, css: string }}
+   */
+  render(context = {}) {
+    const slots = context.slots || context.modelSlots;
+    return {
+      html: renderModelSlotsMenubarHtml(slots),
+      css: this.cachedCss
+    };
+  }
+}
+
+
 // ======================= Entrypoint Execution =======================
 async function main() {
   try {
@@ -10426,6 +12100,7 @@ async function main() {
     host.registerMod(new ContextTachometerMod());
     host.registerMod(new AgentSelectorMod());
     host.registerMod(new ModsManagerMod());
+    host.registerMod(new ModelSlotsMod());
 
     // Lazy VCS: Avoid running 20+ git/gh processes synchronously on every hook execution.
     // Full VCS overview will be fetched on demand by GitGraph via the local HTTP bridge.

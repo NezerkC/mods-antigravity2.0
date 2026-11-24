@@ -21,6 +21,7 @@ Antigravity 2.0 UI mods mount cleanly into Electron DOM slots via non-destructiv
 | `agent-selector` | **Agent Role Selector** | `2.0.0` | 45 | `header-actions` | `button[data-testid="model-selector-trigger"]` | `after` | 3 | 20.3 KB |
 | `context-tachometer` | **Context Window Tachometer** | `2.0.0` | 50 | `header-actions` | `button[data-testid="model-selector-trigger"]` | `after` | 2 | 4.2 KB |
 | `git-graph` | **Git & GitHub Topological Graph** | `2.0.0` | 60 | `aux-pane-tab` | `button[data-testid="aux-pane-new-tab-button"]` | `before` | 3 | 33.5 KB |
+| `model-slots` | **Planner & Builder Model Slots** | `1.0.0` | 90 | `menubar-actions` | `.shrink-0 > .bg-sidebar` | `append` | 1 | 14.5 KB |
 | `mods-manager` | **Mods Manager** | `2.0.0` | 100 | `menubar-actions` | `.shrink-0 > .bg-sidebar` | `append` | 1 | 10.4 KB |
 | `my-custom-mod` | **My Custom Mod** | `1.0.0` | 10 | `header-actions` | `button[data-testid="model-selector-trigger"]` | `after` | 0 | 0.5 KB |
 | `voice-assistant` | **Voice Assistant** | `1.0.0` | 40 | `chat-input-actions` | `button[aria-label="Record voice memo"]` | `before` | 1 | 12.4 KB |
@@ -46,6 +47,13 @@ Antigravity 2.0 UI mods mount cleanly into Electron DOM slots via non-destructiv
 - **Priority:** 60
 - **Components:** `mods/git-graph/components/GitGraphPanelHtml.js`, `mods/git-graph/components/GitGraphSvg.js`, `mods/git-graph/components/PrCiCardHtml.js`
 - **Styles:** `mods/git-graph/styles.css` (34330 bytes)
+
+#### Mod: `model-slots` (Planner & Builder Model Slots)
+- **Description:** Dual menubar selectors to assign any model as Planner or Builder across actions
+- **Primary Slot:** `menubar-actions` (injects `append` target `.shrink-0 > .bg-sidebar`)
+- **Priority:** 90
+- **Components:** `mods/model-slots/components/ModelSlotsHtml.js`
+- **Styles:** `mods/model-slots/styles.css` (14823 bytes)
 
 #### Mod: `mods-manager` (Mods Manager)
 - **Description:** Panel de control y switches para activar o desactivar mods y persistencia en Antigravity.
@@ -81,7 +89,7 @@ Registered in `framework/core/SlotManager.js`. Mods declare one of these slots t
 | `floating-dock` | `body` | `append` | *(none)* | Detached floating container anchored directly to DOM body. |
 | `header-actions` | `button[data-testid="model-selector-trigger"]` | `after` | `agent-selector`, `context-tachometer`, `my-custom-mod` | Header action row next to the model selection trigger. |
 | `header-right` | `header, [role="banner"]` | `append` | *(none)* | Top-right corner of the global application banner. |
-| `menubar-actions` | `.shrink-0 > .bg-sidebar` | `append` | `mods-manager` | Sidebar navigation action strip for persistent mod icons and menus. |
+| `menubar-actions` | `.shrink-0 > .bg-sidebar` | `append` | `model-slots`, `mods-manager` | Sidebar navigation action strip for persistent mod icons and menus. |
 | `status-bar` | `footer, [data-testid="status-bar"]` | `append` | *(none)* | Footer status bar container for telemetry summaries and background statuses. |
 
 ---
@@ -143,6 +151,8 @@ Central orchestrator host for Antigravity Mod Framework. Coordinates telemetry e
 |---|---|:---:|---|
 | `constructor()` | `constructor(options = {})` | `void` | Public class method. |
 | `registerMod()` | `registerMod(mod)` | `void` | Registers an active UI mod with the host. |
+| `getMods()` | `getMods()` | `{Array<import('../sdk/AntigravityMod.js').AntigravityMod>}` | Returns registered mods from the mod loader. |
+| `getRegisteredMods()` | `getRegisteredMods()` | `{Array<import('../sdk/AntigravityMod.js').AntigravityMod>}` | Returns registered mods from the mod loader. |
 | `compilePayload()` | `compilePayload(context = {})` | `{string}` | Compiles the combined DOM injection payload for all registered mods. |
 | `async` `resolveRepoPath()` | `resolveRepoPath(cdpClient, explicitTranscriptPath)` | `{Promise<string>}` | Resolves the active Git repository root directory. Checks CDP renderer tab URLs, transcript metadata, cwd, and known project paths. |
 | `async` `dispatch()` | `dispatch()` | `{Promise<any>}` | Executes the full host lifecycle: extracts telemetry, compiles registered mods, resolves CDP port, and dispatches the payload to the Electron renderer. |
@@ -169,7 +179,9 @@ Manages target UI slots in the Antigravity 2.0 DOM and generates collision-free 
 | `getSlot()` | `getSlot(slotId)` | `void` | Retrieves definition for a given slot. |
 | `getContainerId()` | `getContainerId(slotId)` | `{string}` | Gets deterministic DOM element ID for a slot container. |
 | `static` `computeHtmlSignature()` | `computeHtmlSignature(html)` | `{string}` | Computes a deterministic content signature to skip redundant innerHTML writes. |
-| `generateMountCode()` | `generateMountCode({ slotId, modId, htmlContent })` | `{string}` | Generates browser-executable JavaScript to mount a mod within a target slot across ALL conversation tabs and split panels matching the selector. |
+| `static` `generateMountSnippet()` | `generateMountSnippet(slotId, modId, htmlContent)` | `{string}` | Generates browser-executable JavaScript to mount a mod within a target slot using default SlotManager definitions. |
+| `generateMountSnippet()` | `generateMountSnippet(slotId, modId, htmlContent)` | `{string}` | Generates browser-executable JavaScript to mount a mod within a target slot across ALL conversation tabs and split panels matching the selector. |
+| `generateMountCode()` | `generateMountCode({ slotId, modId, htmlContent })` | `{string} Executable JavaScript.` | Generates browser-executable JavaScript to mount a mod within a target slot across ALL conversation tabs and split panels matching the selector. |
 
 ### `framework/sdk/AntigravityMod.js`
 #### Class: `AntigravityMod`
@@ -216,7 +228,12 @@ Lightweight local HTTP bridge server for synchronizing active agent selections f
 | `normalizeRepoCandidate()` | `normalizeRepoCandidate(candidate = '', requireGit = false)` | `{string|null}` | Normalizes a candidate file/directory path or file:// URI into a valid Git repository root. |
 | `resolveRepoForCascade()` | `resolveRepoForCascade(cascadeId, explicitRepoPath)` | `{string}` | Resolves the Git repository root for a specific conversation cascadeId or explicit path. |
 | `readActiveAgents()` | `readActiveAgents()` | `{Object}` | Reads active agents map from disk. |
+| `readModelSlots()` | `readModelSlots()` | `{Object}` | Reads model slots from disk or returns default configuration. |
 | `writeActiveAgents()` | `writeActiveAgents(data)` | `void` | Saves active agents map to disk atomically. |
+| `writeModelSlots()` | `writeModelSlots(data)` | `void` | Saves model slots configuration to disk atomically. |
+| `updateModelSlots()` | `updateModelSlots(patch = {})` | `{Object}` | Updates model slots config with partial patch. |
+| `readSubagentSessionSlots()` | `readSubagentSessionSlots(sessionId)` | `{Object|null}` | Reads saved model slots for a specific subagent sessionId, or all sessions map if omitted. |
+| `updateSubagentSessionSlots()` | `updateSubagentSessionSlots(sessionId, slots = {})` | `{Object|null}` | Updates and persists model slots for a specific subagent sessionId atomically. |
 | `updateAgentForCascade()` | `updateAgentForCascade(cascadeId, agent)` | `void` | Updates an agent entry for a specific conversation cascadeId. Preserves existing modifiers (like caveman and adhd) unless explicitly specified. |
 | `updateModifiersForCascade()` | `updateModifiersForCascade(cascadeId, modifiers = {})` | `void` | Updates modifier flags (such as caveman and adhd focus modes) for a specific cascadeId. |
 | `async` `start()` | `start()` | `{Promise<boolean>}` | Starts the HTTP bridge server if not already running. |
@@ -343,7 +360,7 @@ Service to manage Windows startup persistence and background lifecycle for Antig
 ---
 ## 5. Test Suite Mapping & Coverage
 
-Total verified tests: **228 tests** across **33 unit test files** and **1 functional integration test file**.
+Total verified tests: **273 tests** across **34 unit test files** and **1 functional integration test file**.
 
 | Test Suite File | Type | Tests | Target Under Test (SUT) | Sample / Primary Assertion |
 |---|:---:|:---:|---|---|
@@ -355,7 +372,7 @@ Total verified tests: **228 tests** across **33 unit test files** and **1 functi
 | `tests/unit/antigravity_mods_hook.test.mjs` | **Unit** | 6 | `plugins/antigravity-mods/scripts/context-hook.mjs` | hooks.json - configures PreInvocation, PostInvocation, and Stop with distin |
 | `tests/unit/antigravity_mods_sidecar.test.mjs` | **Unit** | 13 | `plugins/antigravity-mods/sidecars/dashboard/server.mjs` | plugin.json contains only allowed top-level Antigravity manifest keys |
 | `tests/unit/build_bundle.test.mjs` | **Unit** | 3 | Framework / System | build.js - reads and orders VoicePromptConditioner before VoiceAssistantMod |
-| `tests/unit/cdp_client.test.mjs` | **Unit** | 7 | `framework/core/CdpWebSocketClient.js` | CdpWebSocketClient - generates structured Runtime.evaluate command payload |
+| `tests/unit/cdp_client.test.mjs` | **Unit** | 8 | `framework/core/CdpWebSocketClient.js` | CdpWebSocketClient - generates structured Runtime.evaluate command payload |
 | `tests/unit/cdp_port_resolver.test.mjs` | **Unit** | 8 | `framework/core/CdpPortResolver.js` | CdpPortResolver - parses port from log string |
 | `tests/unit/context_tachometer_mod.test.mjs` | **Unit** | 4 | `mods/context-tachometer/index.js` | ContextTachometerMod - loads correct manifest metadata |
 | `tests/unit/framework_exports.test.mjs` | **Unit** | 2 | `framework/index.js`, `framework/host.js` | framework/index.js - exports GitService and AgentSyncServer alongside core  |
@@ -366,6 +383,7 @@ Total verified tests: **228 tests** across **33 unit test files** and **1 functi
 | `tests/unit/mod_daemon.test.mjs` | **Unit** | 8 | `framework/core/ModDaemon.js` | ModDaemon - constructor initializes with default configuration and status |
 | `tests/unit/mod_host.test.mjs` | **Unit** | 1 | `framework/core/ModHost.js`, `framework/sdk/AntigravityMod.js` | ModHost - initializes with mod loader and manages multiple mods |
 | `tests/unit/mod_loader.test.mjs` | **Unit** | 20 | `framework/core/ModLoader.js`, `framework/sdk/AntigravityMod.js` | ModLoader - registers mods and respects priority order |
+| `tests/unit/model_slots_mod.test.mjs` | **Unit** | 44 | `mods/model-slots/components/ModelSlotsHtml.js`, `mods/model-slots/index.js`, `framework/services/AgentSyncServer.js`, `framework/core/ModDaemon.js`, `framework/core/ModLoader.js`, `framework/core/SlotManager.js`, `framework/sdk/StyleIsolator.js` | BASE_MODELS defines 7 base models with grouped effort levels |
 | `tests/unit/mods_hover_stability.test.mjs` | **Unit** | 3 | `mods/context-tachometer/index.js`, `mods/agent-selector/index.js` | ContextTachometerMod - hover styles are stationary without translateY jitte |
 | `tests/unit/mods_manager_mod.test.mjs` | **Unit** | 3 | `mods/mods-manager/index.js`, `mods/mods-manager/components/ModsManagerHtml.js` | ModsManagerMod - loads correct manifest metadata |
 | `tests/unit/pr_ci_card.test.mjs` | **Unit** | 3 | `mods/git-graph/components/PrCiCardHtml.js` | renderPrCiCardHtml - renders active PR header with passing CI/CD badge and  |
@@ -428,6 +446,10 @@ A dense, token-saving lookup table mapping every file in the repository to its e
 - `mods/git-graph/index.js`: Main entrypoint and AntigravityMod class implementation for 'git-graph'.
 - `mods/git-graph/manifest.json`: Manifest metadata, target slot, and priority declaration for 'git-graph' mod.
 - `mods/git-graph/styles.css`: Scoped CSS stylesheet defining visual styling, layout, and animations for 'git-graph'.
+- `mods/model-slots/components/ModelSlotsHtml.js`: HTML template builder generating DOM markup and event containers for 'model-slots'.
+- `mods/model-slots/index.js`: Main entrypoint and AntigravityMod class implementation for 'model-slots'.
+- `mods/model-slots/manifest.json`: Manifest metadata, target slot, and priority declaration for 'model-slots' mod.
+- `mods/model-slots/styles.css`: Scoped CSS stylesheet defining visual styling, layout, and animations for 'model-slots'.
 - `mods/mods-manager/components/ModsManagerHtml.js`: HTML template builder generating DOM markup and event containers for 'mods-manager'.
 - `mods/mods-manager/index.js`: Main entrypoint and AntigravityMod class implementation for 'mods-manager'.
 - `mods/mods-manager/manifest.json`: Manifest metadata, target slot, and priority declaration for 'mods-manager' mod.
@@ -461,9 +483,12 @@ A dense, token-saving lookup table mapping every file in the repository to its e
 
 ### Developer Tools & CLI Scripts
 - `tools/generate_icon.ps1`: PowerShell script generating multi-resolution Windows ICO assets from vector shapes.
+- `tools/hooks/context-tracker.py`: Repository module file.
 - `tools/package_release.mjs`: Packages standalone release distribution zips for deployment and GitHub releases.
 - `tools/probe.js`: CLI diagnostic probe for verifying CDP ports, Electron DOM targets, and running processes.
 - `tools/remote-host-daemon.js`: Stand-alone daemon runner initializing RemoteHostServer for remote mesh transcript streaming.
+- `tools/verify_model_slots_cdp.mjs`: Repository module file.
+- `tools/verify_model_slots_styles_cdp.mjs`: Repository module file.
 
 ### Automation Scripts
 - `scripts/generate_mods_catalog.mjs`: Deterministic catalog generator compiling architecture, mods, services, and tests into MODS_CATALOG.md.
@@ -510,6 +535,7 @@ A dense, token-saving lookup table mapping every file in the repository to its e
 - `tests/unit/mod_daemon.test.mjs`: Unit test suite verifying behavior and edge cases for mod daemon.
 - `tests/unit/mod_host.test.mjs`: Unit test suite verifying behavior and edge cases for mod host.
 - `tests/unit/mod_loader.test.mjs`: Unit test suite verifying behavior and edge cases for mod loader.
+- `tests/unit/model_slots_mod.test.mjs`: Unit test suite verifying behavior and edge cases for model slots mod.
 - `tests/unit/mods_hover_stability.test.mjs`: Unit test suite verifying behavior and edge cases for mods hover stability.
 - `tests/unit/mods_manager_mod.test.mjs`: Unit test suite verifying behavior and edge cases for mods manager mod.
 - `tests/unit/pr_ci_card.test.mjs`: Unit test suite verifying behavior and edge cases for pr ci card.

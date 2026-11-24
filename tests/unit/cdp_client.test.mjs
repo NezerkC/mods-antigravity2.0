@@ -101,3 +101,14 @@ test('CdpWebSocketClient - returns undefined when only non-UI targets exist or t
     undefined
   );
 });
+
+test('CdpWebSocketClient - prioritizes Antigravity window target over secondary web pages', () => {
+  const targets = [
+    { type: 'page', title: 'GitHub Settings', url: 'https://github.com/settings', webSocketDebuggerUrl: 'ws://secondary' },
+    { type: 'page', title: 'Antigravity', url: 'http://127.0.0.1:3000', webSocketDebuggerUrl: 'ws://antigravity-main' }
+  ];
+
+  const page = CdpWebSocketClient.findPageTarget(targets);
+  assert.ok(page);
+  assert.equal(page.webSocketDebuggerUrl, 'ws://antigravity-main');
+});

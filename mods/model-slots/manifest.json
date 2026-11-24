@@ -1,0 +1,8 @@
+{
+  "id": "model-slots",
+  "name": "Planner & Builder Model Slots",
+  "version": "1.0.0",
+  "description": "Dual menubar selectors to assign any model as Planner or Builder across actions",
+  "slot": "menubar-actions",
+  "priority": 90
+}

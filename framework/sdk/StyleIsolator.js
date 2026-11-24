@@ -79,6 +79,9 @@ export class StyleIsolator {
             sel.startsWith('.mods-manager-') ||
             sel.startsWith('.agent-') ||
             sel.startsWith('.antigravity-agent-item') ||
+            sel.startsWith('.model-slot-') ||
+            sel.startsWith('.model-effort-') ||
+            sel.includes('antigravity-subagent-model') ||
             sel.startsWith('body') ||
             sel.startsWith(':root')
           ) {

@@ -10,6 +10,7 @@ import { renderPrCiCardHtml } from '../../mods/git-graph/components/PrCiCardHtml
 import { renderGitGraphPanelHtml, escapeGitHtml, getExtClass } from '../../mods/git-graph/components/GitGraphPanelHtml.js';
 import { renderReticleSvg } from '../../mods/agent-selector/components/AgentIcons.js';
 import { formatResetTime, resolveNativeQuotaForModel } from '../services/TelemetryService.js';
+import { BASE_MODELS, MODEL_CATALOG, DEFAULT_MODEL_SLOTS, getModelById, renderModelSlotDropdownHtml, renderSubagentModelPill } from '../../mods/model-slots/components/ModelSlotsHtml.js';
 
 /**
  * Discovers, registers, and compiles UI mods into coordinated injection scripts.
@@ -524,6 +525,7 @@ export class ModLoader {
               const box = triggerEl.querySelector('.caveman-reticle-box');
               if (box && reticleSvg) {
                 box.innerHTML = reticleSvg;
+                box.setAttribute('data-focus-state', String(nextVal));
               }
             }
           });
@@ -734,6 +736,809 @@ export class ModLoader {
           }
           if (agent && agent.classList.contains('compact') !== shouldCompact) {
             agent.classList.toggle('compact', shouldCompact);
+          }
+        };
+
+        window.__BASE_MODELS = ${JSON.stringify(BASE_MODELS)};
+        window.__MODEL_CATALOG = ${JSON.stringify(MODEL_CATALOG)};
+        window.__DEFAULT_MODEL_SLOTS = ${JSON.stringify(DEFAULT_MODEL_SLOTS)};
+        window.__antigravitySubagentSessionSlots = Object.assign(
+          window.__antigravitySubagentSessionSlots || {},
+          ${JSON.stringify((context.modelSlots && context.modelSlots.sessions) ? context.modelSlots.sessions : {})}
+        );
+        window.__getModelById = function(modelId, catalog) { const list = catalog || window.__MODEL_CATALOG || []; return list.find(m => m.id === modelId) || list[0]; };
+        window.getModelById = window.__getModelById;
+        window.__renderModelSlotDropdownHtml = ${renderModelSlotDropdownHtml.toString()};
+        window.__renderSubagentModelPill = ${renderSubagentModelPill.toString()};
+
+        window.__getSavedModelSlots = function() {
+          try {
+            const raw = localStorage.getItem('__antigravity_model_slots');
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (parsed && typeof parsed === 'object') {
+                return { ...window.__DEFAULT_MODEL_SLOTS, ...parsed };
+              }
+            }
+          } catch (e) {}
+          return { ...window.__DEFAULT_MODEL_SLOTS };
+        };
+
+        window.__resolveSubagentSessionId = function(el) {
+          if (el && typeof el.closest === 'function') {
+            const convEl = el.closest('[data-conversation-id]');
+            const convId = convEl ? convEl.getAttribute('data-conversation-id') : null;
+            if (convId) return convId;
+
+            const cascadeEl = el.closest('[data-cascade-id]');
+            const cascadeId = cascadeEl ? cascadeEl.getAttribute('data-cascade-id') : null;
+            if (cascadeId) return cascadeId;
+
+            const existingEl = el.closest('[data-subagent-session-id]');
+            const existingId = existingEl ? existingEl.getAttribute('data-subagent-session-id') : null;
+            if (existingId) return existingId;
+          } else if (el && typeof el.getAttribute === 'function') {
+            const directConv = el.getAttribute('data-conversation-id');
+            if (directConv) return directConv;
+            const directCascade = el.getAttribute('data-cascade-id');
+            if (directCascade) return directCascade;
+            const directSession = el.getAttribute('data-subagent-session-id');
+            if (directSession) return directSession;
+          }
+
+          const urlPath = (typeof window !== 'undefined' && window.location && window.location.pathname)
+            ? window.location.pathname
+            : '';
+          const pathParts = urlPath.split('/c/');
+          const urlPathId = (pathParts.length > 1 && pathParts[1]) ? pathParts[1].split('/')[0].split('?')[0] : null;
+          if (urlPathId) return urlPathId;
+
+          const urlSearch = (typeof window !== 'undefined' && window.location && window.location.search)
+            ? window.location.search
+            : '';
+          const searchMatch = urlSearch.match(/[?&](?:conversationId|focused)=([0-9a-zA-Z_-]+)/);
+          if (searchMatch && searchMatch[1]) return searchMatch[1];
+
+          if (!el) return null;
+
+          const generatedId = 'subagent-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+          if (typeof el.setAttribute === 'function') {
+            const target = (typeof el.closest === 'function' && el.closest('[data-subagent-container], .subagent-container')) || el;
+            target.setAttribute('data-subagent-session-id', generatedId);
+          }
+          return generatedId;
+        };
+
+        window.__hasSavedSubagentSessionSlots = function(sessionId) {
+          if (!sessionId) return false;
+          try {
+            const rawMap = localStorage.getItem('__antigravity_subagent_model_slots_map');
+            if (rawMap) {
+              const map = JSON.parse(rawMap);
+              if (map && typeof map === 'object' && map[sessionId] && typeof map[sessionId] === 'object') {
+                return true;
+              }
+            }
+          } catch (e) {}
+          const serverSessions = window.__antigravitySubagentSessionSlots;
+          return Boolean(
+            serverSessions &&
+            typeof serverSessions === 'object' &&
+            serverSessions[sessionId] &&
+            typeof serverSessions[sessionId] === 'object'
+          );
+        };
+
+        window.__getSavedSubagentSessionSlots = function(sessionId) {
+          const globalSlots = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+          if (!sessionId) {
+            return { ...globalSlots };
+          }
+          try {
+            const rawMap = localStorage.getItem('__antigravity_subagent_model_slots_map');
+            if (rawMap) {
+              const map = JSON.parse(rawMap);
+              if (map && typeof map === 'object' && map[sessionId] && typeof map[sessionId] === 'object') {
+                return { ...globalSlots, ...map[sessionId] };
+              }
+            }
+          } catch (e) {}
+          try {
+            const serverSessions = window.__antigravitySubagentSessionSlots;
+            if (serverSessions && typeof serverSessions === 'object' && serverSessions[sessionId] && typeof serverSessions[sessionId] === 'object') {
+              return { ...globalSlots, ...serverSessions[sessionId] };
+            }
+          } catch (e) {}
+          return { ...globalSlots };
+        };
+
+        window.__saveSubagentSessionSlots = function(sessionId, slots) {
+          if (!sessionId || !slots || typeof slots !== 'object') return null;
+          const globalSlots = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+
+          let map = {};
+          try {
+            const rawMap = localStorage.getItem('__antigravity_subagent_model_slots_map');
+            if (rawMap) {
+              const parsed = JSON.parse(rawMap);
+              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                map = parsed;
+              }
+            }
+          } catch (e) {}
+
+          const existing = (map[sessionId] && typeof map[sessionId] === 'object')
+            ? map[sessionId]
+            : ((window.__antigravitySubagentSessionSlots && window.__antigravitySubagentSessionSlots[sessionId]) || {});
+
+          const nextSession = {
+            ...existing,
+            ...slots,
+            planner: slots.planner || existing.planner || globalSlots.planner,
+            builder: slots.builder || existing.builder || globalSlots.builder,
+            updatedAt: Date.now()
+          };
+
+          map[sessionId] = nextSession;
+          window.__antigravitySubagentSessionSlots = window.__antigravitySubagentSessionSlots || {};
+          window.__antigravitySubagentSessionSlots[sessionId] = nextSession;
+
+          try {
+            localStorage.setItem('__antigravity_subagent_model_slots_map', JSON.stringify(map));
+          } catch (e) {}
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/subagent-model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  sessionId: sessionId,
+                  slots: nextSession
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+
+          return nextSession;
+        };
+
+        window.__isElementVisible = function(el) {
+          if (!el) return false;
+          let cur = el;
+          while (cur && cur.nodeType === 1) {
+            if (cur.hasAttribute && cur.hasAttribute('hidden')) return false;
+            if (cur.style && (cur.style.display === 'none' || cur.style.visibility === 'hidden')) return false;
+            if (typeof window !== 'undefined' && typeof window.getComputedStyle === 'function') {
+              try {
+                const cs = window.getComputedStyle(cur);
+                if (cs && (cs.display === 'none' || cs.visibility === 'hidden')) return false;
+              } catch (e) {}
+            }
+            cur = cur.parentElement;
+          }
+          return true;
+        };
+
+        window.__getSubagentBadges = function() {
+          let candidates = [];
+          try {
+            candidates = Array.from(document.querySelectorAll('div[title="Subagent"], .text-secondary-foreground:has(> span)'));
+          } catch (e) {
+            candidates = Array.from(document.querySelectorAll('div[title="Subagent"], .text-secondary-foreground'));
+          }
+          return candidates.filter(badge =>
+            Array.from(badge.querySelectorAll('span')).some(s => s.textContent.trim() === 'self')
+          );
+        };
+
+        window.__findActiveSubagentSession = function() {
+          const badges = window.__getSubagentBadges ? window.__getSubagentBadges() : [];
+          const visibleBadges = badges.filter(b => window.__isElementVisible(b));
+          const activeEl = (typeof document !== 'undefined') ? document.activeElement : null;
+
+          if (visibleBadges.length > 0) {
+            if (activeEl && activeEl !== document.body && activeEl !== document.documentElement) {
+              for (const badge of visibleBadges) {
+                const container = (badge.closest && badge.closest('[data-conversation-id], [data-cascade-id], [data-subagent-session-id], [data-subagent-container]')) || badge.parentElement;
+                if (container && (container === activeEl || (typeof container.contains === 'function' && container.contains(activeEl)))) {
+                  return { badge, sessionId: window.__resolveSubagentSessionId(badge) };
+                }
+              }
+            }
+            const selectedBadge = visibleBadges[visibleBadges.length - 1];
+            return { badge: selectedBadge, sessionId: window.__resolveSubagentSessionId(selectedBadge) };
+          }
+
+          if (activeEl && activeEl !== document.body && activeEl !== document.documentElement && typeof activeEl.closest === 'function') {
+            const focusedSub = activeEl.closest('[data-subagent-session-id], [data-subagent-container]');
+            if (focusedSub && window.__isElementVisible(focusedSub)) {
+              return { badge: focusedSub, sessionId: window.__resolveSubagentSessionId(focusedSub) };
+            }
+          }
+
+          return null;
+        };
+
+        window.__getActiveMenubarSlotModels = function() {
+          const globalSlots = window.__getSavedModelSlots();
+          const activeSubagent = (typeof window.__findActiveSubagentSession === 'function')
+            ? window.__findActiveSubagentSession()
+            : null;
+          if (activeSubagent && activeSubagent.sessionId && typeof window.__getSavedSubagentSessionSlots === 'function') {
+            const sessionSlots = window.__getSavedSubagentSessionSlots(activeSubagent.sessionId);
+            return {
+              ...globalSlots,
+              builder: sessionSlots.builder || globalSlots.builder,
+              activeSessionId: activeSubagent.sessionId
+            };
+          }
+          return { ...globalSlots, activeSessionId: null };
+        };
+
+        window.__updateMenubarSlotButtons = function(slots) {
+          const effectiveSlots = slots || window.__getActiveMenubarSlotModels();
+          ['planner', 'builder'].forEach(role => {
+            const modelId = effectiveSlots[role];
+            const model = window.__getModelById ? window.__getModelById(modelId) : null;
+            if (!model) return;
+            document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="' + role + '"]').forEach(btn => {
+              const expectedSessionId = (role === 'builder' && effectiveSlots.activeSessionId)
+                ? effectiveSlots.activeSessionId
+                : '';
+              const expectedTitle = (role === 'planner' ? 'Planner Model: ' : 'Builder Model: ') + model.name;
+              const expectedVal = model.shortName || model.name;
+              const valEl = btn.querySelector('.model-slot-value');
+              const dotEl = btn.querySelector('.model-slot-dot');
+
+              const isUnchanged = (
+                (btn.getAttribute('data-model-id') || '') === model.id &&
+                (btn.getAttribute('data-session-id') || '') === expectedSessionId &&
+                (btn.getAttribute('title') || '') === expectedTitle &&
+                (!valEl || valEl.textContent === expectedVal)
+              );
+              if (isUnchanged) return;
+
+              btn.setAttribute('data-model-id', model.id);
+              if (expectedSessionId) {
+                btn.setAttribute('data-session-id', expectedSessionId);
+              } else if (btn.hasAttribute('data-session-id')) {
+                btn.removeAttribute('data-session-id');
+              }
+              btn.setAttribute('title', expectedTitle);
+              if (valEl && valEl.textContent !== expectedVal) {
+                valEl.textContent = expectedVal;
+              }
+              if (dotEl) {
+                dotEl.style.background = model.color;
+                dotEl.style.boxShadow = '0 0 6px ' + model.color;
+              }
+            });
+          });
+        };
+
+        window.__syncSubagentModelBadges = function() {
+          const badges = window.__getSubagentBadges ? window.__getSubagentBadges() : [];
+
+          badges.forEach(badge => {
+            const selfSpan = Array.from(badge.querySelectorAll('span')).find(s => s.textContent.trim() === 'self');
+            if (!selfSpan) return;
+
+            const sessionId = window.__resolveSubagentSessionId(badge);
+            const hasSaved = window.__hasSavedSubagentSessionSlots ? window.__hasSavedSubagentSessionSlots(sessionId) : false;
+            const sessionSlots = window.__getSavedSubagentSessionSlots(sessionId);
+
+            if (sessionId && !hasSaved && typeof window.__saveSubagentSessionSlots === 'function') {
+              window.__saveSubagentSessionSlots(sessionId, {
+                planner: sessionSlots.planner,
+                builder: sessionSlots.builder
+              });
+            }
+
+            const builderModelId = sessionSlots.builder || 'gemini-4-hydrogen-high';
+            const model = (typeof window.__getModelById === 'function')
+              ? window.__getModelById(builderModelId)
+              : { id: builderModelId, name: builderModelId, shortName: builderModelId, color: '#34d399' };
+
+            let pill = badge.querySelector('#antigravity-subagent-model-pill');
+            if (!pill) {
+              pill = badge.querySelector('.antigravity-subagent-model-pill');
+            }
+
+            if (pill) {
+              const expectedSessionId = sessionId || '';
+              const currentModelId = pill.getAttribute('data-model-id') || '';
+              const currentSessionId = pill.getAttribute('data-session-id') || '';
+              const expectedTitle = 'Subagent Builder Model: ' + model.name;
+              const currentTitle = pill.getAttribute('title') || '';
+              const label = pill.querySelector('.subagent-model-label');
+              const isUnchanged = (
+                currentModelId === model.id &&
+                currentSessionId === expectedSessionId &&
+                currentTitle === expectedTitle &&
+                (!label || label.textContent === model.shortName)
+              );
+              if (!isUnchanged) {
+                pill.setAttribute('data-model-id', model.id);
+                if (sessionId) {
+                  pill.setAttribute('data-session-id', sessionId);
+                } else if (pill.hasAttribute('data-session-id')) {
+                  pill.removeAttribute('data-session-id');
+                }
+                pill.setAttribute('title', expectedTitle);
+                pill.style.borderColor = model.color + '55';
+                pill.style.background = model.color + '18';
+                pill.style.color = model.color;
+                const dot = pill.querySelector('.subagent-model-dot');
+                if (dot) {
+                  dot.style.background = model.color;
+                  dot.style.boxShadow = '0 0 5px ' + model.color;
+                }
+                if (label) {
+                  label.textContent = model.shortName;
+                }
+              }
+            } else if (typeof window.__renderSubagentModelPill === 'function') {
+              const temp = document.createElement('div');
+              temp.innerHTML = window.__renderSubagentModelPill(builderModelId, window.__MODEL_CATALOG);
+              const newPill = temp.firstElementChild;
+              if (newPill) {
+                if (sessionId) {
+                  newPill.setAttribute('data-session-id', sessionId);
+                }
+                selfSpan.after(newPill);
+              }
+            }
+          });
+
+          if (typeof window.__updateMenubarSlotButtons === 'function') {
+            window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+          }
+        };
+
+        window.__syncModelSlotsUI = function() {
+          if (typeof window.__updateMenubarSlotButtons === 'function') {
+            window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+          }
+          if (typeof window.__syncSubagentModelBadges === 'function') {
+            window.__syncSubagentModelBadges();
+          }
+        };
+
+        window.__resolveNativeModelTarget = function(modelId) {
+          if (!modelId || typeof modelId !== 'string') return null;
+          const resolved = (typeof window.__getModelById === 'function')
+            ? window.__getModelById(modelId)
+            : null;
+          const effectiveId = (resolved && resolved.id === modelId) ? resolved.id : modelId;
+
+          if (effectiveId === 'gemini-pro-orchestrator-g1-pro') {
+            return { base: 'Orchestrator', effort: null };
+          }
+          if (effectiveId.startsWith('gpt-oss-120b-')) {
+            return { base: 'GPT-OSS 120B', effort: null };
+          }
+
+          const basePrefixes = [
+            { prefix: 'gemini-4-argon-', base: 'Gemini 4 Argon' },
+            { prefix: 'gemini-4-hydrogen-', base: 'Gemini 4 Hydrogen' },
+            { prefix: 'gemini-3.8-flash-', base: 'Gemini 3.8 Flash' },
+            { prefix: 'claude-opus-5-5-', base: 'Claude Opus 5.5' },
+            { prefix: 'claude-sonnet-5-5-', base: 'Claude Sonnet 5.5' }
+          ];
+
+          const effortLabels = {
+            low: 'Low',
+            medium: 'Medium',
+            high: 'High',
+            xhigh: 'XHigh'
+          };
+
+          for (const entry of basePrefixes) {
+            if (effectiveId.startsWith(entry.prefix)) {
+              const rawEffort = effectiveId.slice(entry.prefix.length).toLowerCase();
+              return {
+                base: entry.base,
+                effort: effortLabels[rawEffort] || null
+              };
+            }
+          }
+          return null;
+        };
+
+        window.__resolveModelIdFromNativeText = function(rawText) {
+          if (!rawText || typeof rawText !== 'string') return null;
+          const text = rawText.trim().toLowerCase();
+          if (!text) return null;
+
+          if (text.includes('orchestrator')) return 'gemini-pro-orchestrator-g1-pro';
+          if (text.includes('gpt-oss') || text.includes('120b')) return 'gpt-oss-120b-medium';
+
+          let basePrefix = null;
+          if (text.includes('argon')) basePrefix = 'gemini-4-argon-';
+          else if (text.includes('hydrogen')) basePrefix = 'gemini-4-hydrogen-';
+          else if (text.includes('3.8') && text.includes('flash')) basePrefix = 'gemini-3.8-flash-';
+          else if (text.includes('opus')) basePrefix = 'claude-opus-5-5-';
+          else if (text.includes('sonnet')) basePrefix = 'claude-sonnet-5-5-';
+
+          if (!basePrefix) return null;
+
+          let effort = null;
+          if (/(?:^|[^a-z])xhigh(?:$|[^a-z])/i.test(text)) effort = 'xhigh';
+          else if (/(?:^|[^a-z])high(?:$|[^a-z])/i.test(text)) effort = 'high';
+          else if (/(?:^|[^a-z])(?:medium|med)(?:$|[^a-z])/i.test(text)) effort = 'medium';
+          else if (/(?:^|[^a-z])low(?:$|[^a-z])/i.test(text)) effort = 'low';
+
+          if (!effort) {
+            const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+            if (saved && saved.planner && saved.planner.startsWith(basePrefix)) {
+              effort = saved.planner.slice(basePrefix.length);
+            } else {
+              effort = 'high';
+            }
+          }
+
+          const candidateId = basePrefix + effort;
+          const catalog = window.__MODEL_CATALOG || [];
+          const found = catalog.find(m => m.id === candidateId);
+          return found ? found.id : null;
+        };
+
+        window.__nativeModelSyncTimers = window.__nativeModelSyncTimers || [];
+        window.__nativeModelSyncInProgress = false;
+        window.__nativeModelSyncToken = window.__nativeModelSyncToken || 0;
+
+        window.__syncNativeModelSelector = function(modelId) {
+          if (!modelId) return false;
+          const resolved = (typeof window.__getModelById === 'function')
+            ? window.__getModelById(modelId)
+            : null;
+          const targetId = (resolved && resolved.id === modelId) ? resolved.id : modelId;
+          const target = window.__resolveNativeModelTarget ? window.__resolveNativeModelTarget(targetId) : null;
+          if (!target) return false;
+
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
+          if (!activeTrigger) return false;
+
+          const matchesEffortText = (text, effort) => {
+            if (!effort) return true;
+            const escaped = effort.replace(/[.*+?^$()|[\\]\\\\]/g, '\\\\$&').replace(/[{}]/g, '\\\\$&');
+            return new RegExp('(?:^|[^a-zA-Z])' + escaped + '(?:$|[^a-zA-Z])', 'i').test(text);
+          };
+
+          const currentText = (activeTrigger.textContent || '').trim();
+          const hasBase = currentText.toLowerCase().includes(target.base.toLowerCase());
+          const hasEffort = target.effort ? matchesEffortText(currentText, target.effort) : true;
+          if (hasBase && hasEffort) {
+            return true;
+          }
+
+          if (Array.isArray(window.__nativeModelSyncTimers)) {
+            while (window.__nativeModelSyncTimers.length > 0) {
+              clearTimeout(window.__nativeModelSyncTimers.pop());
+            }
+          }
+          const token = ++window.__nativeModelSyncToken;
+          window.__nativeModelSyncInProgress = true;
+
+          const finishSync = () => {
+            if (window.__nativeModelSyncToken === token) {
+              const settleTimer = setTimeout(() => {
+                if (window.__nativeModelSyncToken === token) {
+                  window.__nativeModelSyncInProgress = false;
+                }
+              }, 120);
+              window.__nativeModelSyncTimers.push(settleTimer);
+            }
+          };
+
+          if (typeof activeTrigger.click === 'function') {
+            activeTrigger.click();
+          }
+
+          const t1 = setTimeout(() => {
+            if (window.__nativeModelSyncToken !== token) return;
+            const menuItems = Array.from(document.querySelectorAll('[role="menuitem"], [data-testid="model-selector-item"]'));
+            const baseRow = menuItems.find(el => {
+              const text = (el.textContent || '').trim().toLowerCase();
+              const label = (el.getAttribute && (el.getAttribute('data-model-label') || '')).trim().toLowerCase();
+              const needle = target.base.toLowerCase();
+              return text.includes(needle) || label.includes(needle);
+            });
+
+            if (!baseRow) {
+              window.__nativeModelSyncInProgress = false;
+              return;
+            }
+
+            if (!target.effort) {
+              if (typeof baseRow.click === 'function') {
+                baseRow.click();
+              }
+              finishSync();
+              return;
+            }
+
+            try {
+              if (typeof baseRow.dispatchEvent === 'function' && typeof MouseEvent === 'function') {
+                baseRow.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+              }
+            } catch (e) {}
+            if (typeof baseRow.click === 'function') {
+              baseRow.click();
+            }
+
+            const t2 = setTimeout(() => {
+              if (window.__nativeModelSyncToken !== token) return;
+              const subItems = Array.from(document.querySelectorAll('[role="menuitem"], [data-testid="model-selector-item"]'));
+              const effortNeedle = target.effort.toLowerCase();
+              const candidates = subItems.filter(el => el !== baseRow);
+              const effortItem = candidates.find(el => (el.textContent || '').trim().toLowerCase() === effortNeedle)
+                || candidates.find(el => matchesEffortText((el.textContent || '').trim(), target.effort))
+                || subItems.find(el => (el.textContent || '').trim().toLowerCase() === effortNeedle)
+                || subItems.find(el => matchesEffortText((el.textContent || '').trim(), target.effort));
+
+              if (effortItem && typeof effortItem.click === 'function') {
+                effortItem.click();
+              }
+              finishSync();
+            }, 100);
+            window.__nativeModelSyncTimers.push(t2);
+          }, 80);
+          window.__nativeModelSyncTimers.push(t1);
+          return true;
+        };
+
+        window.__syncPlannerFromNativeSelector = function() {
+          if (window.__nativeModelSyncInProgress) return false;
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
+          if (!activeTrigger) return false;
+
+          const detectedId = window.__resolveModelIdFromNativeText
+            ? window.__resolveModelIdFromNativeText(activeTrigger.textContent || '')
+            : null;
+          if (!detectedId) return false;
+
+          const current = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+
+          const plannerBtns = Array.from(document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="planner"]'));
+          const btnAlreadySynced = plannerBtns.length > 0 && plannerBtns.every(btn => btn.getAttribute('data-model-id') === detectedId);
+          if (current.planner === detectedId && btnAlreadySynced) {
+            return false;
+          }
+
+          current.planner = detectedId;
+          current.updatedAt = Date.now();
+          try {
+            localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+          } catch (e) {}
+
+          if (typeof window.__updateMenubarSlotButtons === 'function') {
+            window.__updateMenubarSlotButtons(
+              typeof window.__getActiveMenubarSlotModels === 'function'
+                ? window.__getActiveMenubarSlotModels()
+                : current
+            );
+          }
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  planner: current.planner,
+                  builder: current.builder,
+                  enabled: current.enabled !== false
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+
+          return true;
+        };
+
+        window.__observedNativeTriggerSet = new WeakSet();
+        window.__observedNativeTriggersCount = 0;
+
+        window.__observeNativeModelSelector = function() {
+          if (typeof MutationObserver !== 'function') return;
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          if (!triggers.length) {
+            const single = document.querySelector('button[data-testid="model-selector-trigger"]');
+            if (single) triggers.push(single);
+          }
+          if (!triggers.length) return;
+
+          if (
+            window.__antigravityNativeModelObserver &&
+            window.__observedNativeTriggerSet &&
+            window.__observedNativeTriggersCount === triggers.length &&
+            triggers.every(trigger => window.__observedNativeTriggerSet.has(trigger))
+          ) {
+            return;
+          }
+
+          if (window.__antigravityNativeModelObserver) {
+            window.__antigravityNativeModelObserver.disconnect();
+          }
+          window.__antigravityNativeModelObserver = new MutationObserver(() => {
+            if (typeof window.__syncPlannerFromNativeSelector === 'function') {
+              window.__syncPlannerFromNativeSelector();
+            }
+          });
+          const nextSet = new WeakSet();
+          triggers.forEach(trigger => {
+            nextSet.add(trigger);
+            window.__antigravityNativeModelObserver.observe(trigger, {
+              childList: true,
+              subtree: true,
+              characterData: true
+            });
+          });
+          window.__observedNativeTriggerSet = nextSet;
+          window.__observedNativeTriggersCount = triggers.length;
+        };
+
+        window.__selectModelForSlot = function(role, modelId) {
+          if (!role || !modelId) return;
+          const current = window.__getSavedModelSlots();
+          current[role] = modelId;
+          current.updatedAt = Date.now();
+          try {
+            localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+          } catch (e) {}
+
+          const activeSubagent = (typeof window.__findActiveSubagentSession === 'function')
+            ? window.__findActiveSubagentSession()
+            : null;
+          if (activeSubagent && activeSubagent.sessionId && typeof window.__saveSubagentSessionSlots === 'function') {
+            window.__saveSubagentSessionSlots(activeSubagent.sessionId, { [role]: modelId });
+          }
+
+          if (typeof window.__updateMenubarSlotButtons === 'function') {
+            window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+          }
+          document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="' + role + '"]').forEach(btn => {
+            btn.classList.remove('open');
+          });
+
+          const portal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          if (portal) {
+            portal.classList.remove('open');
+            portal.__currentBtn = null;
+          }
+
+          if (typeof window.__syncSubagentModelBadges === 'function') {
+            window.__syncSubagentModelBadges();
+          }
+
+          if (role === 'planner' && typeof window.__syncNativeModelSelector === 'function') {
+            window.__syncNativeModelSelector(modelId);
+          }
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  planner: current.planner,
+                  builder: current.builder,
+                  enabled: current.enabled !== false
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+        };
+
+        window.__toggleModelSlotDropdown = function(e, btnEl, role) {
+          if (e) {
+            e.stopPropagation();
+            e.preventDefault();
+          }
+          const btn = btnEl || (e ? e.currentTarget : null);
+          if (!btn) return;
+          const slotRole = role || btn.getAttribute('data-slot-role') || 'planner';
+
+          // Close other popovers
+          const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
+          if (aPortal) {
+            aPortal.classList.remove('open');
+            aPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+
+          const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+          if (tachPortal) {
+            tachPortal.classList.remove('open');
+            tachPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+          const mPortal = document.getElementById('antigravity-mods-manager-portal');
+          if (mPortal) {
+            mPortal.classList.remove('open');
+            mPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+
+          let portal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          if (!portal) {
+            portal = document.createElement('div');
+            portal.id = 'antigravity-model-slot-dropdown-portal';
+            portal.className = 'antigravity-model-slot-dropdown-portal';
+            document.body.appendChild(portal);
+          }
+
+          const isCurrentOpen = portal.classList.contains('open') && portal.__currentBtn === btn;
+
+          document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+          portal.classList.remove('open');
+          portal.__currentBtn = null;
+
+          if (!isCurrentOpen) {
+            btn.classList.add('open');
+            portal.__currentBtn = btn;
+
+            const savedSlots = (typeof window.__getActiveMenubarSlotModels === 'function')
+              ? window.__getActiveMenubarSlotModels()
+              : window.__getSavedModelSlots();
+            const currentSelectedId = savedSlots[slotRole] || btn.getAttribute('data-model-id');
+
+            if (window.__renderModelSlotDropdownHtml) {
+              portal.innerHTML = window.__renderModelSlotDropdownHtml(slotRole, currentSelectedId, window.__BASE_MODELS || window.__MODEL_CATALOG);
+            }
+
+            portal.querySelectorAll('.model-effort-option, .model-slot-option').forEach(opt => {
+              opt.onclick = (ev) => {
+                ev.stopPropagation();
+                ev.preventDefault();
+                const mId = opt.getAttribute('data-model-id');
+                const sRole = opt.getAttribute('data-slot-role') || slotRole;
+                window.__selectModelForSlot(sRole, mId);
+              };
+            });
+
+            portal.querySelectorAll('.model-slot-row').forEach(row => {
+              row.onclick = (ev) => {
+                if (ev.target.closest('.model-effort-option, .model-slot-option')) return;
+                const singleEffortId = row.getAttribute('data-model-id');
+                if (singleEffortId) {
+                  ev.stopPropagation();
+                  ev.preventDefault();
+                  const sRole = row.getAttribute('data-slot-role') || slotRole;
+                  window.__selectModelForSlot(sRole, singleEffortId);
+                  return;
+                }
+                const isOpen = row.classList.contains('open');
+                portal.querySelectorAll('.model-slot-row.open').forEach(r => r.classList.remove('open'));
+                if (!isOpen) {
+                  row.classList.add('open');
+                }
+              };
+            });
+
+            const rect = btn.getBoundingClientRect();
+            portal.style.top = (rect.bottom + 6) + 'px';
+            const portalWidth = 250;
+            const clampedLeft = Math.max(10, Math.min(window.innerWidth - portalWidth - 10, rect.left));
+            portal.style.left = clampedLeft + 'px';
+            portal.classList.add('open');
+
+            if (rect.left + 380 > window.innerWidth) {
+              portal.querySelectorAll('.model-slot-submenu').forEach(sub => {
+                sub.classList.add('submenu-left');
+              });
+            }
           }
         };
 
@@ -1000,6 +1805,10 @@ export class ModLoader {
           if (!gitGraphEnabled && typeof window.__closeGitGraphPanel === 'function') {
             window.__closeGitGraphPanel();
           }
+          const modelSlotsEnabled = localStorage.getItem('__antigravity_mod_enabled_model-slots') !== 'false';
+          document.querySelectorAll('.antigravity-model-slots-group').forEach(b => {
+            b.style.display = modelSlotsEnabled ? 'inline-flex' : 'none';
+          });
         };
 
         window.__toggleModsManagerPanel = function(e, btnEl) {
@@ -1098,6 +1907,16 @@ export class ModLoader {
               gitGraphInput.checked = gitGraphEnabled;
               gitGraphInput.onchange = (ev) => {
                 localStorage.setItem('__antigravity_mod_enabled_git-graph', ev.target.checked);
+                window.__applyModsVisibility();
+              };
+            }
+
+            const modelSlotsEnabled = localStorage.getItem('__antigravity_mod_enabled_model-slots') !== 'false';
+            const modelSlotsInput = portal.querySelector('#mod-toggle-model-slots');
+            if (modelSlotsInput) {
+              modelSlotsInput.checked = modelSlotsEnabled;
+              modelSlotsInput.onchange = (ev) => {
+                localStorage.setItem('__antigravity_mod_enabled_model-slots', ev.target.checked);
                 window.__applyModsVisibility();
               };
             }
@@ -1813,15 +2632,6 @@ export class ModLoader {
           }
         };
 
-        if (!window.__antigravityGitEscBound && typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
-          window.__antigravityGitEscBound = true;
-          document.addEventListener('keydown', function(ev) {
-            if (ev && ev.key === 'Escape' && window.__antigravityGitPanelOpen && typeof window.__closeGitGraphPanel === 'function') {
-              window.__closeGitGraphPanel();
-            }
-          });
-        }
-
         window.__toggleGitGraphPanel = function(e, btnEl) {
           if (e) {
             if (typeof e.stopPropagation === 'function') e.stopPropagation();
@@ -2052,6 +2862,7 @@ export class ModLoader {
         // Store all per-conversation metrics, active agents, and current primary snapshot
         window.__antigravityAllMetrics = ${JSON.stringify(context.allMetrics || {})};
         window.__antigravityLatestMetric = ${JSON.stringify(context.telemetry || {})};
+        window.__antigravityLiveTelemetryReceived = false;
         window.__antigravityActiveAgents = Object.assign(
           window.__antigravityActiveAgents || {},
           ${JSON.stringify(context.activeAgents || {})}
@@ -2131,9 +2942,25 @@ export class ModLoader {
           }
         };
 
-        window.__updateAntigravityTelemetry = function(fallbackMetric) {
+        window.__updateAntigravityTelemetry = function(fallbackMetric, isInitialSnapshot) {
+          if (isInitialSnapshot && window.__antigravityLiveTelemetryReceived) {
+            return;
+          }
           const all = window.__antigravityAllMetrics || {};
           const latest = fallbackMetric || window.__antigravityLatestMetric;
+
+          if (!isInitialSnapshot) {
+            const hasLiveMetrics = Boolean(
+              Object.keys(all).length > 0 ||
+              (latest && (Number(latest.estTokens) > 0 || Number(latest.steps) > 0 || parseFloat(latest.pct) > 0))
+            );
+            if (hasLiveMetrics) {
+              window.__antigravityLiveTelemetryReceived = true;
+              if (fallbackMetric) {
+                window.__antigravityLatestMetric = fallbackMetric;
+              }
+            }
+          }
 
           const nativeGroups = window.__antigravityNativeQuotaSummary || (() => {
             try {
@@ -2168,30 +2995,43 @@ export class ModLoader {
             else if (pctNum >= 60) statusColor = '#f97316';
             else if (pctNum >= 25) statusColor = '#eab308';
 
-            badge.setAttribute('title', 'Context: ' + m.displayTokens + ' tokens (' + m.pct + '%)');
+            const nextTitle = 'Context: ' + m.displayTokens + ' tokens (' + m.pct + '%)';
+            if (badge.getAttribute('title') !== nextTitle) {
+              badge.setAttribute('title', nextTitle);
+            }
             const tokenSpan = badge.querySelector('.tachometer-tokens');
-            if (tokenSpan) tokenSpan.textContent = m.displayTokens;
+            if (tokenSpan && tokenSpan.textContent !== m.displayTokens) {
+              tokenSpan.textContent = m.displayTokens;
+            }
             const pctSpan = badge.querySelector('.tachometer-pct');
-            if (pctSpan) pctSpan.textContent = '(' + m.pct + '%)';
+            const nextPctText = '(' + m.pct + '%)';
+            if (pctSpan && pctSpan.textContent !== nextPctText) {
+              pctSpan.textContent = nextPctText;
+            }
             const needle = badge.querySelector('g[filter]');
             if (needle) {
               const angle = -120 + (Math.min(pctNum, 100) / 100) * 240;
-              needle.style.transform = 'rotate(' + angle.toFixed(1) + 'deg)';
+              const nextTransform = 'rotate(' + angle.toFixed(1) + 'deg)';
+              if (needle.style.transform !== nextTransform) {
+                needle.style.transform = nextTransform;
+              }
               const poly = needle.querySelector('polygon');
-              if (poly) poly.setAttribute('fill', statusColor);
+              if (poly && poly.getAttribute('fill') !== statusColor) {
+                poly.setAttribute('fill', statusColor);
+              }
             }
 
             if (window.__renderTachometerPopoverHtml) {
               const renderedPopover = window.__renderTachometerPopoverHtml(m);
               const tpl = badge.querySelector('.antigravity-popover-template') ||
                 badge.parentElement?.querySelector('.antigravity-popover-template');
-              if (tpl) {
+              if (tpl && tpl.innerHTML !== renderedPopover) {
                 tpl.innerHTML = renderedPopover;
               }
 
               // Update live popover content if currently open on screen, preserving expanded model disclosures
               const portal = document.getElementById('antigravity-tachometer-popover-portal');
-              if (portal && portal.classList.contains('open')) {
+              if (portal && portal.classList.contains('open') && portal.innerHTML !== renderedPopover) {
                 const openKeys = new Set();
                 const scrollByKey = new Map();
                 portal.querySelectorAll('details.tach-model-details[open]').forEach(det => {
@@ -2278,117 +3118,170 @@ export class ModLoader {
           });
         };
 
-        if (!window.__antigravityGlobalEventsBound) {
-          window.__antigravityGlobalEventsBound = true;
-          document.addEventListener('click', (e) => {
-            const sendBtn = e.target.closest('button[data-testid="send-button"]');
-            if (sendBtn) {
-              const container = sendBtn.closest('[data-cascade-id]') || document;
-              const editor = container.querySelector('[contenteditable="true"], textarea');
-              const text = editor ? (editor.value || editor.textContent || '') : '';
-              if (text && window.__handleAutoPromptContextUpdate) {
-                window.__handleAutoPromptContextUpdate(text, sendBtn);
-              }
-            }
-
-            const reticleBtn = e.target.closest('.antigravity-caveman-reticle-trigger');
-            if (reticleBtn) {
-              e.preventDefault();
-              e.stopPropagation();
-              window.__toggleCavemanMode(undefined, reticleBtn);
-              return;
-            }
-
-            const isAgentBadge = e.target.closest('.antigravity-agent-badge');
-            const isAgentPortal = e.target.closest('#antigravity-agent-dropdown-portal');
-            if (!isAgentBadge && !isAgentPortal) {
-              const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
-              if (aPortal) aPortal.classList.remove('open');
-              document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
-            }
-
-            const isTachBadge = e.target.closest('.antigravity-tachometer-badge');
-            const isTachPortal = e.target.closest('#antigravity-tachometer-popover-portal');
-            if (!isTachBadge && !isTachPortal) {
-              const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
-              if (tachPortal) {
-                tachPortal.classList.remove('open');
-                tachPortal.__currentBadge = null;
-              }
-              document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
-            }
-
-            const isModsBtn = e.target.closest('.antigravity-mods-manager-btn');
-            const isModsPortal = e.target.closest('#antigravity-mods-manager-portal');
-            if (!isModsBtn && !isModsPortal) {
-              const mPortal = document.getElementById('antigravity-mods-manager-portal');
-              if (mPortal) {
-                mPortal.classList.remove('open');
-                mPortal.__currentBtn = null;
-              }
-              document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
-            }
-          }, true);
-
-          document.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-              const editor = e.target.closest('[contenteditable="true"], textarea');
-              if (editor) {
-                const text = editor.value || editor.textContent || '';
-                if (text && window.__handleAutoPromptContextUpdate) {
-                  window.__handleAutoPromptContextUpdate(text, editor);
-                }
-              }
-            }
-            if (e.key === 'Escape') {
-              const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
-              if (aPortal) {
-                aPortal.classList.remove('open');
-                aPortal.__currentBadge = null;
-              }
-              document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
-
-              const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
-              if (tachPortal) {
-                tachPortal.classList.remove('open');
-                tachPortal.__currentBadge = null;
-              }
-              document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
-
-              const mPortal = document.getElementById('antigravity-mods-manager-portal');
-              if (mPortal) {
-                mPortal.classList.remove('open');
-                mPortal.__currentBtn = null;
-              }
-              document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
-            }
-          }, true);
+        if (window.__antigravityDocClickHandler && typeof document.removeEventListener === 'function') {
+          document.removeEventListener('click', window.__antigravityDocClickHandler, true);
         }
+        if (window.__antigravityDocKeydownHandler && typeof document.removeEventListener === 'function') {
+          document.removeEventListener('keydown', window.__antigravityDocKeydownHandler, true);
+        }
+        if (window.__antigravityDocFocusinHandler && typeof document.removeEventListener === 'function') {
+          document.removeEventListener('focusin', window.__antigravityDocFocusinHandler, true);
+        }
+
+        window.__antigravityDocClickHandler = (e) => {
+          const clickTarget = (e && e.target && typeof e.target.closest === 'function')
+            ? e.target
+            : (e && e.target && e.target.parentElement && typeof e.target.parentElement.closest === 'function' ? e.target.parentElement : null);
+          if (!clickTarget) return;
+
+          const sendBtn = clickTarget.closest('button[data-testid="send-button"]');
+          if (sendBtn) {
+            const container = sendBtn.closest('[data-cascade-id]') || document;
+            const editor = container.querySelector('[contenteditable="true"], textarea');
+            const text = editor ? (editor.value || editor.textContent || '') : '';
+            if (text && window.__handleAutoPromptContextUpdate) {
+              window.__handleAutoPromptContextUpdate(text, sendBtn);
+            }
+          }
+
+          const reticleBtn = clickTarget.closest('.antigravity-caveman-reticle-trigger');
+          if (reticleBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.__toggleCavemanMode(undefined, reticleBtn);
+            return;
+          }
+
+          const isAgentBadge = clickTarget.closest('.antigravity-agent-badge');
+          const isAgentPortal = clickTarget.closest('#antigravity-agent-dropdown-portal');
+          if (!isAgentBadge && !isAgentPortal) {
+            const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
+            if (aPortal) aPortal.classList.remove('open');
+            document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+          }
+
+          const isTachBadge = clickTarget.closest('.antigravity-tachometer-badge');
+          const isTachPortal = clickTarget.closest('#antigravity-tachometer-popover-portal');
+          if (!isTachBadge && !isTachPortal) {
+            const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+            if (tachPortal) {
+              tachPortal.classList.remove('open');
+              tachPortal.__currentBadge = null;
+            }
+            document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+          }
+
+          const isModsBtn = clickTarget.closest('.antigravity-mods-manager-btn');
+          const isModsPortal = clickTarget.closest('#antigravity-mods-manager-portal');
+          if (!isModsBtn && !isModsPortal) {
+            const mPortal = document.getElementById('antigravity-mods-manager-portal');
+            if (mPortal) {
+              mPortal.classList.remove('open');
+              mPortal.__currentBtn = null;
+            }
+            document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+          }
+
+          const modelSlotBtn = clickTarget.closest('.antigravity-model-slot-btn');
+          if (modelSlotBtn) {
+            const role = modelSlotBtn.getAttribute('data-slot-role');
+            window.__toggleModelSlotDropdown(e, modelSlotBtn, role);
+            return;
+          }
+
+          const isModelSlotPortal = clickTarget.closest('#antigravity-model-slot-dropdown-portal');
+          if (!modelSlotBtn && !isModelSlotPortal) {
+            const msPortal = document.getElementById('antigravity-model-slot-dropdown-portal');
+            if (msPortal) {
+              msPortal.classList.remove('open');
+              msPortal.__currentBtn = null;
+            }
+            document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+          }
+        };
+
+        window.__antigravityDocKeydownHandler = (e) => {
+          if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.target && typeof e.target.closest === 'function') {
+            const editor = e.target.closest('[contenteditable="true"], textarea');
+            if (editor) {
+              const text = editor.value || editor.textContent || '';
+              if (text && window.__handleAutoPromptContextUpdate) {
+                window.__handleAutoPromptContextUpdate(text, editor);
+              }
+            }
+          }
+          if (e.key === 'Escape') {
+            if (window.__antigravityGitPanelOpen && typeof window.__closeGitGraphPanel === 'function') {
+              window.__closeGitGraphPanel();
+            }
+            const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
+            if (aPortal) {
+              aPortal.classList.remove('open');
+              aPortal.__currentBadge = null;
+            }
+            document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+
+            const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+            if (tachPortal) {
+              tachPortal.classList.remove('open');
+              tachPortal.__currentBadge = null;
+            }
+            document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+            const mPortal = document.getElementById('antigravity-mods-manager-portal');
+            if (mPortal) {
+              mPortal.classList.remove('open');
+              mPortal.__currentBtn = null;
+            }
+            document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+
+            const msPortal = document.getElementById('antigravity-model-slot-dropdown-portal');
+            if (msPortal) {
+              msPortal.classList.remove('open');
+              msPortal.__currentBtn = null;
+            }
+            document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+          }
+        };
+
+        window.__antigravityDocFocusinHandler = () => {
+          if (typeof window.__updateMenubarSlotButtons === 'function' && typeof window.__getActiveMenubarSlotModels === 'function') {
+            window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+          }
+        };
+
+        document.addEventListener('click', window.__antigravityDocClickHandler, true);
+        document.addEventListener('keydown', window.__antigravityDocKeydownHandler, true);
+        document.addEventListener('focusin', window.__antigravityDocFocusinHandler, true);
+        window.__antigravityGlobalEventsBound = true;
 
         // 3. Mount individual mods into target slots across all conversations
         function mountAllMods() {
           if (window.__antigravityIsMountingMods) return;
           window.__antigravityIsMountingMods = true;
+          if (window.__antigravityModObserver) {
+            try { window.__antigravityModObserver.disconnect(); } catch (e) {}
+          }
           try {
-          // Preserve last known compact state before slot innerHTML updates
-          document.querySelectorAll('.antigravity-slot-container').forEach(slot => {
-            const prevTach = slot.querySelector('.antigravity-tachometer-badge');
-            const prevAgent = slot.querySelector('.antigravity-agent-badge');
-            if (prevTach) slot.__lastTachCompact = prevTach.classList.contains('compact');
-            if (prevAgent) slot.__lastAgentCompact = prevAgent.classList.contains('compact');
-          });
+            // Preserve last known compact state before slot innerHTML updates
+            document.querySelectorAll('.antigravity-slot-container').forEach(slot => {
+              const prevTach = slot.querySelector('.antigravity-tachometer-badge');
+              const prevAgent = slot.querySelector('.antigravity-agent-badge');
+              if (prevTach) slot.__lastTachCompact = prevTach.classList.contains('compact');
+              if (prevAgent) slot.__lastAgentCompact = prevAgent.classList.contains('compact');
+            });
 
-          // Permanently remove legacy duplicate unmanaged badges, speaker icon wrappers & misplaced non-flex slot containers
-          document.querySelectorAll('.antigravity-context-badge').forEach(el => el.remove());
-          document.querySelectorAll('.min-w-0:not(.flex) > #antigravity-slot-header-actions, .no-focus-agent-input > #antigravity-slot-header-actions').forEach(el => el.remove());
-          document.querySelectorAll('#antigravity-voice-assistant-wrapper, .antigravity-voice-assistant-wrapper, #antigravity-voice-assistant-btn, #antigravity-mod-voice-assistant').forEach(el => el.remove());
-          document.querySelectorAll('#antigravity-slot-chat-input-actions, .antigravity-slot-chat-input-actions').forEach(slot => {
-            if (!slot.children || slot.children.length === 0) {
-              slot.remove();
-            }
-          });
+            // Permanently remove legacy duplicate unmanaged badges, speaker icon wrappers & misplaced non-flex slot containers
+            document.querySelectorAll('.antigravity-context-badge').forEach(el => el.remove());
+            document.querySelectorAll('.min-w-0:not(.flex) > #antigravity-slot-header-actions, .no-focus-agent-input > #antigravity-slot-header-actions').forEach(el => el.remove());
+            document.querySelectorAll('#antigravity-voice-assistant-wrapper, .antigravity-voice-assistant-wrapper, #antigravity-voice-assistant-btn, #antigravity-mod-voice-assistant').forEach(el => el.remove());
+            document.querySelectorAll('#antigravity-slot-chat-input-actions, .antigravity-slot-chat-input-actions').forEach(slot => {
+              if (!slot.children || slot.children.length === 0) {
+                slot.remove();
+              }
+            });
 
-          ${mountSnippets.join('\n')}
+            ${mountSnippets.join('\n')}
 
           // 3.1 Initialize Floating Portals in document.body
           let agentPortal = document.getElementById('antigravity-agent-dropdown-portal');
@@ -2489,7 +3382,11 @@ export class ModLoader {
           });
 
           // Apply current telemetry
-          window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})});
+          if (window.__antigravityLiveTelemetryReceived) {
+            window.__updateAntigravityTelemetry();
+          } else {
+            window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})}, true);
+          }
 
           // Observe stable chatbox footer containers for responsive auto-collapse (guarded against RDP/minimize zero-dimension states & layout thrashing)
           document.querySelectorAll('.antigravity-slot-container').forEach(slot => {
@@ -2514,11 +3411,25 @@ export class ModLoader {
             applyCompactToChatboxScope(slot, footerWidth);
           });
 
-          if (typeof window.__dockNativeVoiceToast === 'function') {
-            window.__dockNativeVoiceToast(document);
-          }
+            if (typeof window.__dockNativeVoiceToast === 'function') {
+              window.__dockNativeVoiceToast(document);
+            }
+            if (typeof window.__syncModelSlotsUI === 'function') {
+              window.__syncModelSlotsUI();
+            }
+            if (typeof window.__syncSubagentModelBadges === 'function') {
+              window.__syncSubagentModelBadges();
+            }
+            if (typeof window.__observeNativeModelSelector === 'function') {
+              window.__observeNativeModelSelector();
+            }
           } finally {
             window.__antigravityIsMountingMods = false;
+            if (window.__antigravityModObserver && document.body) {
+              try {
+                window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
+              } catch (e) {}
+            }
           }
         }
 
@@ -2608,9 +3519,13 @@ export class ModLoader {
               applyResize();
             }
           };
-          document.addEventListener('visibilitychange', handleRdpAndVisibilityRecovery);
-          window.addEventListener('focus', handleRdpAndVisibilityRecovery);
-          window.addEventListener('resize', handleWindowResizeSync);
+          if (typeof document.addEventListener === 'function') {
+            document.addEventListener('visibilitychange', handleRdpAndVisibilityRecovery);
+          }
+          if (typeof window.addEventListener === 'function') {
+            window.addEventListener('focus', handleRdpAndVisibilityRecovery);
+            window.addEventListener('resize', handleWindowResizeSync);
+          }
         }
 
         // 4. Observe DOM mutations with smart slot check & self-mutation exclusion to avoid DOM thrashing
@@ -2668,6 +3583,7 @@ export class ModLoader {
             for (const btn of triggers) {
               const parent = btn.parentElement;
               if (!parent) continue;
+              if (parent.closest && parent.closest('[role="dialog"], [role="menu"], .agy-overlay')) continue;
               const row = parent.closest('.flex.items-center') || parent;
               if (!row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')) {
                 missingSlot = true;
@@ -2690,8 +3606,16 @@ export class ModLoader {
 
             if (missingSlot) {
               mountAllMods();
-            } else if (typeof window.__syncAgentBadges === 'function') {
-              window.__syncAgentBadges();
+            } else {
+              if (typeof window.__syncAgentBadges === 'function') {
+                window.__syncAgentBadges();
+              }
+              if (typeof window.__syncSubagentModelBadges === 'function') {
+                window.__syncSubagentModelBadges();
+              }
+              if (typeof window.__observeNativeModelSelector === 'function') {
+                window.__observeNativeModelSelector();
+              }
             }
           }, 150);
         });
@@ -2699,7 +3623,8 @@ export class ModLoader {
         window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
         return {
           success: true,
-          selectedAgentsMap: localStorage.getItem('__antigravity_selected_agents_map')
+          selectedAgentsMap: localStorage.getItem('__antigravity_selected_agents_map'),
+          modelSlots: localStorage.getItem('__antigravity_model_slots')
         };
       })();
     `;
