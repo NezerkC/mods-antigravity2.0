@@ -20,7 +20,8 @@
     "probe": "node tools/probe.js",
     "probe:dom": "node tools/probe.js dom",
     "probe:proc": "node tools/probe.js processes",
-    "probe:cdp": "node tools/probe.js cdp"
+    "probe:cdp": "node tools/probe.js cdp",
+    "probe:models": "node tools/probe.js models --sync"
   },
   "author": "Victor Manuel Martinez Munoz",
   "license": "Apache-2.0",

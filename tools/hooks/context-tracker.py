@@ -264,6 +264,10 @@ def build_adhd_directive():
     )
 
 MODEL_DISPLAY_NAMES = {
+    "gemini-4-neon-xhigh": "Gemini 4 Neon (XHigh)",
+    "gemini-4-neon-high": "Gemini 4 Neon (High)",
+    "gemini-4-neon-medium": "Gemini 4 Neon (Medium)",
+    "gemini-4-neon-low": "Gemini 4 Neon (Low)",
     "gemini-4-argon-high": "Gemini 4 Argon (High)",
     "gemini-4-argon-medium": "Gemini 4 Argon (Medium)",
     "gemini-4-argon-low": "Gemini 4 Argon (Low)",
@@ -281,12 +285,108 @@ MODEL_DISPLAY_NAMES = {
     "claude-sonnet-5-5-medium": "Claude Sonnet 5.5 (Medium)",
     "claude-sonnet-5-5-low": "Claude Sonnet 5.5 (Low)",
     "gpt-oss-120b-medium": "GPT-OSS 120B (Medium)",
+    "gemini-pro-orchestrator-neon": "Orchestrator (Neon)",
     "gemini-pro-orchestrator-g1-pro": "Orchestrator (Argon)",
 }
+
+def resolve_catalog_path():
+    env_path = os.environ.get("ANTIGRAVITY_MODEL_CATALOG_PATH")
+    if env_path:
+        return os.path.expanduser(env_path)
+    return os.path.expanduser(r"~\.gemini\config\mods\model_catalog.json")
+
+def resolve_slots_path():
+    env_path = os.environ.get("ANTIGRAVITY_MODEL_SLOTS_PATH")
+    if env_path:
+        return os.path.expanduser(env_path)
+    return os.path.expanduser(r"~\.gemini\config\mods\model_slots.json")
+
+def load_dynamic_model_names():
+    catalog_path = resolve_catalog_path()
+    if not os.path.exists(catalog_path):
+        return {}
+    try:
+        with open(catalog_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        names = {}
+        for item in data.get("modelCatalog", []) or []:
+            if isinstance(item, dict) and item.get("id") and item.get("name"):
+                names[str(item["id"])] = str(item["name"])
+        for bm in data.get("baseModels", []) or []:
+            if not isinstance(bm, dict):
+                continue
+            base_name = bm.get("name", "")
+            for eff in bm.get("efforts", []) or []:
+                if isinstance(eff, dict) and eff.get("id") and eff["id"] not in names:
+                    label = eff.get("label", "")
+                    names[str(eff["id"])] = (
+                        base_name if label.lower() == "standard" else f"{base_name} ({label})"
+                    )
+        return names
+    except Exception:
+        return {}
+
+def resolve_valid_builder_model(builder_id):
+    fallback_id = "gemini-3.8-flash-medium"
+    candidate = str(builder_id or "").strip()
+    if not candidate:
+        return fallback_id
+
+    catalog_path = resolve_catalog_path()
+    if not os.path.exists(catalog_path):
+        return candidate
+    try:
+        with open(catalog_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            for d in data.get("disabledModels", []) or []:
+                if isinstance(d, dict) and str(d.get("id", "")).strip() == candidate:
+                    return fallback_id
+    except Exception:
+        pass
+    return candidate
+
+def is_child_worker_session(transcript_path):
+    if not transcript_path or not os.path.exists(transcript_path):
+        return False
+    try:
+        checked = 0
+        saw_user_explicit_request = False
+        with open(transcript_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                raw = line.strip()
+                if not raw:
+                    continue
+                checked += 1
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    data = None
+                if isinstance(data, dict):
+                    step_type = str(data.get("type", ""))
+                    source = str(data.get("source", ""))
+                    content = data.get("content", "")
+                    if step_type in ("SYSTEM_MESSAGE", "USER_INPUT") and isinstance(content, str):
+                        if "<swarm_worker>" in content or "[ROLE: BUILDER WORKER]" in content:
+                            return True
+                        if source == "USER_EXPLICIT" and step_type == "USER_INPUT" and "<USER_REQUEST>" in content:
+                            saw_user_explicit_request = True
+                        if "[Message]" in content and "sender=" in content and not saw_user_explicit_request:
+                            return True
+                if checked >= 15:
+                    break
+    except Exception:
+        pass
+    return False
 
 def get_model_display_name(model_id):
     if not model_id:
         return "Unknown"
+    dynamic_names = load_dynamic_model_names()
+    if model_id in dynamic_names:
+        return dynamic_names[model_id]
     return MODEL_DISPLAY_NAMES.get(model_id, model_id)
 
 def get_model_slots():
@@ -295,9 +395,12 @@ def get_model_slots():
         "builder": "gemini-4-hydrogen-high",
         "enabled": True,
     }
-    config_path = os.path.expanduser(r"~\.gemini\config\mods\model_slots.json")
+    config_path = resolve_slots_path()
     if not os.path.exists(config_path):
-        return default_slots
+        return {
+            **default_slots,
+            "builder": resolve_valid_builder_model(default_slots["builder"]),
+        }
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -305,14 +408,18 @@ def get_model_slots():
                 planner = data.get("planner")
                 builder = data.get("builder")
                 enabled = data.get("enabled")
+                resolved_builder = str(builder) if builder else default_slots["builder"]
                 return {
                     "planner": str(planner) if planner else default_slots["planner"],
-                    "builder": str(builder) if builder else default_slots["builder"],
+                    "builder": resolve_valid_builder_model(resolved_builder),
                     "enabled": bool(enabled) if enabled is not None else default_slots["enabled"],
                 }
     except Exception:
         pass
-    return default_slots
+    return {
+        **default_slots,
+        "builder": resolve_valid_builder_model(default_slots["builder"]),
+    }
 
 def build_model_slots_directive(slots, effective_mode="PLAN"):
     planner_id = slots.get("planner", "gemini-4-argon-high") if isinstance(slots, dict) else "gemini-4-argon-high"
@@ -327,8 +434,10 @@ def build_model_slots_directive(slots, effective_mode="PLAN"):
         f"- Current Detected Phase: {effective_mode}\n\n"
         "ORCHESTRATION RULES:\n"
         "1. The Planner model governs architectural reasoning, design decisions, and task decomposition in the main thread.\n"
-        f"2. When executing individual implementation, file mutation, refactoring, or test-fixing tasks, delegate the tactical work to a subagent (via invoke_subagent) acting as the Builder ({builder_name}), unless the user explicitly requested /swarm.\n"
-        "3. Keep subagent delegations atomic and well-scoped; review their output as Planner before concluding."
+        f"2. NEVER use `invoke_subagent` (blocked by PreToolUse guard because its schema cannot select `{builder_id}`). For ALL delegations (single tactical tasks or parallel swarms), ALWAYS use `swarm` pinned to the exact Builder model (`model=\"{builder_id}\"`):\n"
+        f"   - Single tactical task (Warm Builder): call `swarm(action=\"add\", name=\"builder\", model=\"{builder_id}\", workspace=\"inherit\", brief=\"...\")` once, then reuse the `waiting` `builder` worker on subsequent tasks via `post_message(text=\"@builder ...\")`. If the Builder slot changes, switch it in-place via `swarm(action=\"model\", name=\"builder\", model=\"{builder_id}\")`.\n"
+        f"   - Multi-agent parallel swarm: call `swarm(action=\"add\", name=\"builder\", model=\"{builder_id}\", tasks=[...], brief=\"...\")` (or distinct worker names all pinned to `model=\"{builder_id}\"`).\n"
+        "3. Keep Builder briefs self-contained (owned files, exact changes, test command, and instruction to report `@coordinator [done] <summary>`); review their output as Planner before concluding."
     )
 
 def main():
@@ -358,12 +467,23 @@ def main():
     # Model Slots Governance (Dual-Slot Planner & Builder)
     slots = get_model_slots()
     if slots.get("enabled", True):
-        phase = classify_plan_vs_build(transcript_path, last_prompt)
-        slots_directive = build_model_slots_directive(slots, effective_mode=phase)
-        combined_directives.append(slots_directive)
-        output["injectSteps"].append({
-            "ephemeralMessage": slots_directive
-        })
+        if is_child_worker_session(transcript_path):
+            worker_directive = (
+                "[ROLE: BUILDER WORKER]\n"
+                "Execute assigned implementation/analysis tasks directly in this session. "
+                "Do NOT delegate further unless explicitly instructed. Keep final completion reports concise."
+            )
+            combined_directives.append(worker_directive)
+            output["injectSteps"].append({
+                "ephemeralMessage": worker_directive
+            })
+        else:
+            phase = classify_plan_vs_build(transcript_path, last_prompt)
+            slots_directive = build_model_slots_directive(slots, effective_mode=phase)
+            combined_directives.append(slots_directive)
+            output["injectSteps"].append({
+                "ephemeralMessage": slots_directive
+            })
 
     # Inyección Inteligente y Gobernanza de Permisos
     agent = get_active_agent(conversation_id)
@@ -448,7 +568,8 @@ def main():
         })
 
     # Actualiza el badge visual en la barra de herramientas tras sincronizar effectiveMode
-    update_ui_badge(transcript_path)
+    if not os.environ.get("ANTIGRAVITY_MODEL_SLOTS_PATH"):
+        update_ui_badge(transcript_path)
 
     if info:
         notice = (

@@ -20,6 +20,7 @@ export class AgentSyncServer {
    * @param {string} [options.host] Host address (default 127.0.0.1)
    * @param {string} [options.configPath] Path to active_agents.json
    * @param {string} [options.modelSlotsPath] Path to model_slots.json
+   * @param {string} [options.modelCatalogPath] Path to model_catalog.json
    * @param {VcsOrchestrator} [options.vcsOrchestrator] Custom VCS orchestrator
    * @param {string} [options.repoPath] Path to git repository
    */
@@ -30,6 +31,8 @@ export class AgentSyncServer {
     this.brainDir = options.brainDir || path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
     this.sessionRepos = new Map();
     this.modelSlotsPath = options.modelSlotsPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'model_slots.json');
+    this.modelCatalogPath = options.modelCatalogPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'model_catalog.json');
+    this.telemetryService = options.telemetryService || null;
     this.repoPath = options.repoPath || process.cwd();
     this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ repoPath: this.repoPath });
     this.server = null;
@@ -263,6 +266,83 @@ export class AgentSyncServer {
   }
 
   /**
+   * Reads discovered live model catalog from disk or returns an empty snapshot.
+   * @returns {Object}
+   */
+  readModelCatalog() {
+    const empty = {
+      source: 'fallback',
+      baseModels: [],
+      modelCatalog: [],
+      disabledModels: [],
+      totalBaseModels: 0,
+      totalModels: 0,
+      updatedAt: 0
+    };
+    try {
+      if (fs.existsSync(this.modelCatalogPath)) {
+        const raw = fs.readFileSync(this.modelCatalogPath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return {
+            ...empty,
+            ...parsed,
+            baseModels: Array.isArray(parsed.baseModels) ? parsed.baseModels : [],
+            modelCatalog: Array.isArray(parsed.modelCatalog) ? parsed.modelCatalog : [],
+            disabledModels: Array.isArray(parsed.disabledModels) ? parsed.disabledModels : []
+          };
+        }
+      }
+    } catch {}
+    return empty;
+  }
+
+  /**
+   * Saves discovered model catalog to disk atomically.
+   * @param {Object} data
+   */
+  writeModelCatalog(data) {
+    try {
+      const dir = path.dirname(this.modelCatalogPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const tmpPath = `${this.modelCatalogPath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+      fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+      fs.renameSync(tmpPath, this.modelCatalogPath);
+    } catch {
+      try {
+        fs.writeFileSync(this.modelCatalogPath, JSON.stringify(data, null, 2), 'utf-8');
+      } catch {}
+    }
+  }
+
+  /**
+   * Updates and persists the live discovered model catalog.
+   * @param {Object} payload
+   * @returns {Object|null}
+   */
+  updateModelCatalog(payload = {}) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+    const baseModels = Array.isArray(payload.baseModels) ? payload.baseModels : [];
+    const modelCatalog = Array.isArray(payload.modelCatalog) ? payload.modelCatalog : [];
+    const disabledModels = Array.isArray(payload.disabledModels) ? payload.disabledModels : [];
+    if (baseModels.length === 0 && modelCatalog.length === 0) return null;
+
+    const updated = {
+      source: typeof payload.source === 'string' && payload.source ? payload.source : 'native-react-context',
+      baseModels,
+      modelCatalog,
+      disabledModels,
+      totalBaseModels: baseModels.length,
+      totalModels: modelCatalog.length,
+      updatedAt: Date.now()
+    };
+    this.writeModelCatalog(updated);
+    return updated;
+  }
+
+  /**
    * Reads saved model slots for a specific subagent sessionId, or all sessions map if omitted.
    * @param {string} [sessionId]
    * @returns {Object|null}
@@ -453,6 +533,51 @@ export class AgentSyncServer {
           const data = this.readActiveAgents();
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(data));
+          return;
+        }
+
+        if (req.method === 'GET' && req.url === '/model-catalog') {
+          const data = this.readModelCatalog();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(data));
+          return;
+        }
+
+        if (req.method === 'GET' && (req.url === '/pit-wall' || req.url.startsWith('/pit-wall?'))) {
+          const metrics = (this.telemetryService && typeof this.telemetryService.getPitWallMetrics === 'function')
+            ? this.telemetryService.getPitWallMetrics()
+            : null;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', pitWall: metrics }));
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/model-catalog') {
+          let body = '';
+          let exceeded = false;
+          req.on('data', chunk => {
+            body += chunk;
+            if (body.length > 131072) {
+              exceeded = true;
+              res.writeHead(413, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Payload too large' }));
+              req.destroy();
+            }
+          });
+          req.on('end', () => {
+            if (exceeded || res.writableEnded) return;
+            try {
+              const payload = JSON.parse(body || '{}');
+              const catalog = this.updateModelCatalog(payload);
+              if (catalog) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, catalog }));
+                return;
+              }
+            } catch {}
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid model catalog payload' }));
+          });
           return;
         }
 

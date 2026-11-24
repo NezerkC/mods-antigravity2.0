@@ -7,6 +7,7 @@ import { ModsManagerMod } from '../../mods/mods-manager/index.js';
 import { GitGraphMod } from '../../mods/git-graph/index.js';
 import { ModelSlotsMod } from '../../mods/model-slots/index.js';
 import { VoiceAssistantMod } from '../../mods/voice-assistant/index.js';
+import { PitWallMod } from '../../mods/pit-wall/index.js';
 
 /**
  * Creates a ModHost instance pre-configured with default first-party mods.
@@ -21,6 +22,7 @@ export function createDefaultHost(options = {}) {
   host.registerMod(new GitGraphMod());
   host.registerMod(new ModelSlotsMod());
   host.registerMod(new VoiceAssistantMod());
+  host.registerMod(new PitWallMod());
   return host;
 }
 
@@ -105,6 +107,9 @@ export class ModDaemon {
       const activeAgents = (this.modHost.syncServer && typeof this.modHost.syncServer.readActiveAgents === 'function')
         ? this.modHost.syncServer.readActiveAgents()
         : {};
+      const pitWall = (typeof this.modHost.telemetryService.getPitWallMetrics === 'function')
+        ? this.modHost.telemetryService.getPitWallMetrics()
+        : null;
 
       const refreshScript = `
         (() => {
@@ -112,6 +117,7 @@ export class ModDaemon {
             window.__antigravityAllMetrics = ${JSON.stringify(allMetrics)};
             window.__antigravityLatestMetric = ${JSON.stringify(primaryMetric)};
             window.__antigravityActiveAgents = ${JSON.stringify(activeAgents)};
+            window.__antigravityPitWall = ${JSON.stringify(pitWall)};
             window.__updateAntigravityTelemetry();
           }
         })()

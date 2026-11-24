@@ -70,6 +70,211 @@ function formatTokens(tokens) {
   return tokens.toLocaleString('en-US');
 }
 
+const USAGE_CACHE_TTL_MS = 10_000;
+const usageMatrixCache = new Map();
+const DEFAULT_MODEL_CATALOG_FILE = path.join(os.homedir(), '.gemini', 'config', 'mods', 'model_catalog.json');
+
+const STATIC_MODEL_FALLBACK = [
+  { id: 'gemini-4-neon-high', name: 'Gemini 4 Neon (High)', shortName: 'Neon High', family: 'Neon', color: '#a3e635' },
+  { id: 'gemini-4-neon-xhigh', name: 'Gemini 4 Neon (XHigh)', shortName: 'Neon XHigh', family: 'Neon', color: '#a3e635' },
+  { id: 'gemini-4-neon-medium', name: 'Gemini 4 Neon (Medium)', shortName: 'Neon Med', family: 'Neon', color: '#a3e635' },
+  { id: 'gemini-4-neon-low', name: 'Gemini 4 Neon (Low)', shortName: 'Neon Low', family: 'Neon', color: '#a3e635' },
+  { id: 'gemini-4-argon-high', name: 'Gemini 4 Argon (High)', shortName: 'Argon High', family: 'Argon', color: '#38bdf8' },
+  { id: 'gemini-4-argon-medium', name: 'Gemini 4 Argon (Medium)', shortName: 'Argon Med', family: 'Argon', color: '#38bdf8' },
+  { id: 'gemini-4-argon-low', name: 'Gemini 4 Argon (Low)', shortName: 'Argon Low', family: 'Argon', color: '#38bdf8' },
+  { id: 'gemini-4-hydrogen-xhigh', name: 'Gemini 4 Hydrogen (XHigh)', shortName: 'Hydrogen XHigh', family: 'Hydrogen', color: '#34d399' },
+  { id: 'gemini-4-hydrogen-high', name: 'Gemini 4 Hydrogen (High)', shortName: 'Hydrogen High', family: 'Hydrogen', color: '#34d399' },
+  { id: 'gemini-4-hydrogen-medium', name: 'Gemini 4 Hydrogen (Medium)', shortName: 'Hydrogen Med', family: 'Hydrogen', color: '#34d399' },
+  { id: 'gemini-4-hydrogen-low', name: 'Gemini 4 Hydrogen (Low)', shortName: 'Hydrogen Low', family: 'Hydrogen', color: '#34d399' },
+  { id: 'gemini-pro-orchestrator-neon', name: 'Orchestrator (Neon)', shortName: 'Orch. Neon', family: 'Neon', color: '#a3e635' },
+  { id: 'gemini-pro-orchestrator-g1-pro', name: 'Orchestrator (Argon)', shortName: 'Orchestrator', family: 'Argon', color: '#38bdf8' },
+  { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash (High)', shortName: 'Flash 3.8 High', family: 'Gemini 3.8', color: '#fbbf24' },
+  { id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash (Medium)', shortName: 'Flash 3.8 Med', family: 'Gemini 3.8', color: '#fbbf24' },
+  { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash (Low)', shortName: 'Flash 3.8 Low', family: 'Gemini 3.8', color: '#fbbf24' },
+  { id: 'claude-opus-5-5-high', name: 'Claude Opus 5.5 (High)', shortName: 'Opus 5.5 High', family: 'Claude', color: '#c084fc' },
+  { id: 'claude-opus-5-5-medium', name: 'Claude Opus 5.5 (Medium)', shortName: 'Opus 5.5 Med', family: 'Claude', color: '#c084fc' },
+  { id: 'claude-opus-5-5-low', name: 'Claude Opus 5.5 (Low)', shortName: 'Opus 5.5 Low', family: 'Claude', color: '#c084fc' },
+  { id: 'claude-sonnet-5-5-high', name: 'Claude Sonnet 5.5 (High)', shortName: 'Sonnet 5.5 High', family: 'Claude', color: '#a78bfa' },
+  { id: 'claude-sonnet-5-5-medium', name: 'Claude Sonnet 5.5 (Medium)', shortName: 'Sonnet 5.5 Med', family: 'Claude', color: '#a78bfa' },
+  { id: 'claude-sonnet-5-5-low', name: 'Claude Sonnet 5.5 (Low)', shortName: 'Sonnet 5.5 Low', family: 'Claude', color: '#a78bfa' },
+  { id: 'gpt-oss-120b-medium', name: 'GPT-OSS 120B (Medium)', shortName: 'GPT-OSS 120B', family: 'OpenAI OSS', color: '#f472b6' }
+];
+
+/**
+ * Strips trailing system prompt instructions, quotes, and punctuation from raw model names.
+ * @param {string} [rawName='']
+ * @returns {string}
+ */
+export function sanitizeModelName(rawName = '') {
+  return String(rawName || '')
+    .replace(/\\n/g, ' ')
+    .split(/\r?\n/)[0]
+    .replace(/\.\s*No need to comment[\s\S]*$/i, '')
+    .replace(/\.\s*If reporting what model[\s\S]*$/i, '')
+    .replace(/[`'"]/g, '')
+    .replace(/\.\s*$/, '')
+    .trim();
+}
+
+/**
+ * Loads model catalog colors, short names, and families from disk with static fallback.
+ * @param {string} [modelCatalogPath=DEFAULT_MODEL_CATALOG_FILE]
+ * @returns {{ byId: Map<string, Object>, byNameLower: Map<string, Object>, list: Array<Object> }}
+ */
+export function readModelCatalog(modelCatalogPath = DEFAULT_MODEL_CATALOG_FILE) {
+  const byId = new Map();
+  const byNameLower = new Map();
+  const list = [];
+
+  const registerEntry = (entry) => {
+    if (!entry || !entry.id || !entry.name) return;
+    const normalized = {
+      id: String(entry.id).trim(),
+      name: String(entry.name).trim(),
+      shortName: String(entry.shortName || entry.name).trim(),
+      family: String(entry.family || 'Gemini').trim(),
+      color: String(entry.color || '#38bdf8').trim()
+    };
+    const idKey = normalized.id.toLowerCase();
+    const nameKey = normalized.name.toLowerCase();
+    if (!byId.has(idKey)) {
+      byId.set(idKey, normalized);
+      list.push(normalized);
+    }
+    if (!byNameLower.has(nameKey)) {
+      byNameLower.set(nameKey, normalized);
+    }
+  };
+
+  try {
+    if (modelCatalogPath && fs.existsSync(modelCatalogPath)) {
+      const parsed = JSON.parse(fs.readFileSync(modelCatalogPath, 'utf-8'));
+      if (parsed && typeof parsed === 'object') {
+        if (Array.isArray(parsed.modelCatalog)) {
+          for (const item of parsed.modelCatalog) registerEntry(item);
+        }
+        if (Array.isArray(parsed.baseModels)) {
+          for (const bm of parsed.baseModels) {
+            if (!bm || !Array.isArray(bm.efforts)) continue;
+            for (const eff of bm.efforts) {
+              if (!eff || !eff.id) continue;
+              const label = String(eff.label || '').trim();
+              const fullName = label && label.toLowerCase() !== 'standard'
+                ? `${bm.name} (${label})`
+                : bm.name;
+              registerEntry({
+                id: eff.id,
+                name: fullName,
+                shortName: eff.shortName || fullName,
+                family: bm.family || 'Gemini',
+                color: bm.color || '#38bdf8'
+              });
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // Fallback to static catalog
+  }
+
+  for (const item of STATIC_MODEL_FALLBACK) {
+    registerEntry(item);
+  }
+
+  return { byId, byNameLower, list };
+}
+
+/**
+ * Classifies a model identifier or display name into its Antigravity quota pool.
+ * @param {string} [modelNameOrId='']
+ * @returns {{ id: 'gemini_unified'|'argon_weekly'|'third_party', label: string, windowLabel: string, accent: string }}
+ */
+export function classifyModelPool(modelNameOrId = '') {
+  const str = String(modelNameOrId || '').toLowerCase();
+  if (/argon|g1-pro/.test(str)) {
+    return {
+      id: 'argon_weekly',
+      label: 'Pool Argon Semanal',
+      windowLabel: '7d Weekly',
+      accent: '#38bdf8'
+    };
+  }
+  if (/claude|opus|sonnet|gpt-oss|openai/.test(str)) {
+    return {
+      id: 'third_party',
+      label: 'Pool Claude / GPT-OSS',
+      windowLabel: '5h + 7d Dual',
+      accent: '#c084fc'
+    };
+  }
+  return {
+    id: 'gemini_unified',
+    label: 'Pool Gemini Unificado',
+    windowLabel: '5h + 7d Unified',
+    accent: '#a3e635'
+  };
+}
+
+/**
+ * Resolves a raw model name/id from transcripts against the loaded model catalog and quota pool.
+ * @param {string} rawModel
+ * @param {ReturnType<typeof readModelCatalog>} [catalog]
+ * @returns {Object}
+ */
+export function resolveModelMeta(rawModel, catalog) {
+  const cat = catalog || readModelCatalog(DEFAULT_MODEL_CATALOG_FILE);
+  const cleaned = sanitizeModelName(rawModel) || 'Gemini 3.8 Flash';
+  const lower = cleaned.toLowerCase();
+
+  let matched = cat.byId.get(lower) || cat.byNameLower.get(lower);
+
+  if (!matched) {
+    const normalizedLower = lower.replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim();
+    matched = cat.list.find(entry => {
+      const eName = entry.name.toLowerCase().replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim();
+      return eName === normalizedLower;
+    });
+  }
+
+  if (!matched) {
+    // Match base model prefix when transcript only records e.g. "Gemini 3.8 Flash" without effort
+    matched = cat.list.find(entry => {
+      const base = entry.name.replace(/\s*\([^)]+\)\s*$/, '').toLowerCase();
+      return base === lower;
+    });
+  }
+
+  if (!matched) {
+    if (lower.includes('neon') && lower.includes('orchestrator')) matched = cat.byId.get('gemini-pro-orchestrator-neon');
+    else if (lower.includes('argon') && lower.includes('orchestrator')) matched = cat.byId.get('gemini-pro-orchestrator-g1-pro');
+    else if (lower.includes('neon')) matched = cat.byId.get('gemini-4-neon-high');
+    else if (lower.includes('argon')) matched = cat.byId.get('gemini-4-argon-high');
+    else if (lower.includes('hydrogen')) matched = cat.byId.get('gemini-4-hydrogen-high');
+    else if (lower.includes('flash')) matched = cat.byId.get('gemini-3.8-flash-high');
+    else if (lower.includes('opus')) matched = cat.byId.get('claude-opus-5-5-high');
+    else if (lower.includes('sonnet')) matched = cat.byId.get('claude-sonnet-5-5-high');
+    else if (lower.includes('gpt-oss') || lower.includes('120b')) matched = cat.byId.get('gpt-oss-120b-medium');
+  }
+
+  const baseInfo = matched || {
+    id: lower.replace(/[^a-z0-9._-]+/g, '-'),
+    name: cleaned,
+    shortName: cleaned,
+    family: 'Custom',
+    color: '#94a3b8'
+  };
+
+  return {
+    id: baseInfo.id,
+    name: matched ? baseInfo.name : cleaned,
+    shortName: baseInfo.shortName,
+    family: baseInfo.family,
+    color: baseInfo.color,
+    pool: classifyModelPool(`${baseInfo.id} ${baseInfo.name}`)
+  };
+}
+
 function getTranscriptFileInDir(convDir) {
   const logsDir = path.join(convDir, '.system_generated', 'logs');
   const compact = path.join(logsDir, 'transcript.jsonl');
@@ -128,11 +333,14 @@ export function resolveTranscript(brainDir, cascadeId = null) {
 }
 
 /**
- * Parses a JSONL transcript into context telemetry metrics.
+ * Parses a JSONL transcript into context telemetry metrics with per-model attribution.
  * @param {string|null} targetPath
+ * @param {Object} [options={}]
+ * @param {number} [options.cutoffMs=0]
  * @returns {Object}
  */
-export function parseTranscript(targetPath) {
+export function parseTranscript(targetPath, options = {}) {
+  const cutoffMs = Number.isFinite(options?.cutoffMs) ? options.cutoffMs : 0;
   const empty = {
     tokens: 0,
     estTokens: 0,
@@ -141,7 +349,9 @@ export function parseTranscript(targetPath) {
     percentage: '0.0',
     sizeKb: 0,
     model: 'Gemini 3.8 Flash',
-    breakdown: { user: 0, model: 0, thinking: 0, tools: 0 }
+    breakdown: { user: 0, model: 0, thinking: 0, tools: 0 },
+    byModel: {},
+    dailyByDate: {}
   };
 
   if (!targetPath || !fs.existsSync(targetPath)) {
@@ -160,34 +370,115 @@ export function parseTranscript(targetPath) {
     let thinkingChars = 0;
     let toolsChars = 0;
     let detectedModel = '';
+    const byModelChars = new Map();
+    const dailyChars = new Map();
 
     for (const rawLine of lines) {
       const line = rawLine.trim();
       if (!line) continue;
       steps++;
 
+      let obj;
       try {
-        const obj = JSON.parse(line);
-        if (obj.type === 'CHECKPOINT') {
-          totalChars = line.length;
-          userChars = 0;
-          modelChars = 0;
-          thinkingChars = 0;
-          toolsChars = 0;
-        } else {
-          totalChars += line.length;
-        }
-
-        if (typeof obj.model === 'string' && obj.model.trim()) {
-          detectedModel = obj.model.trim();
-        }
-        if (typeof obj.thinking === 'string') thinkingChars += obj.thinking.length;
-        if (obj.tool_calls) toolsChars += JSON.stringify(obj.tool_calls).length;
-        if (obj.type === 'USER_INPUT' && typeof obj.content === 'string') userChars += obj.content.length;
-        if (obj.type === 'PLANNER_RESPONSE' && typeof obj.content === 'string') modelChars += obj.content.length;
+        obj = JSON.parse(line);
       } catch {
         totalChars += line.length;
+        continue;
       }
+
+      if (obj.type === 'CHECKPOINT') {
+        totalChars = line.length;
+        userChars = 0;
+        modelChars = 0;
+        thinkingChars = 0;
+        toolsChars = 0;
+      } else {
+        totalChars += line.length;
+      }
+
+      if (
+        (obj.type === 'USER_INPUT' || obj.source === 'USER_EXPLICIT') &&
+        typeof obj.content === 'string' &&
+        obj.content.includes('Model Selection')
+      ) {
+        const sectionMatch = obj.content.match(/<USER_SETTINGS_CHANGE>([\s\S]*?)<\/USER_SETTINGS_CHANGE>/i);
+        const settingsBlock = sectionMatch ? sectionMatch[1] : obj.content;
+        const modelChangeMatch = settingsBlock.match(/Model Selection[`'"]?\s+from\s+.*?\s+to\s+([^\r\n<]+)/i);
+        if (modelChangeMatch && modelChangeMatch[1]) {
+          const cleanName = sanitizeModelName(modelChangeMatch[1]);
+          if (cleanName) detectedModel = cleanName;
+        }
+      }
+
+      if (typeof obj.model === 'string' && obj.model.trim()) {
+        const cleanObjModel = sanitizeModelName(obj.model);
+        if (cleanObjModel) detectedModel = cleanObjModel;
+      }
+
+      const activeModel = sanitizeModelName(detectedModel) || 'Gemini 3.8 Flash';
+      const uChars = (obj.type === 'USER_INPUT' && typeof obj.content === 'string') ? obj.content.length : 0;
+      const mChars = (obj.type === 'PLANNER_RESPONSE' && typeof obj.content === 'string') ? obj.content.length : 0;
+      const thChars = typeof obj.thinking === 'string' ? obj.thinking.length : 0;
+      const tlChars = obj.tool_calls ? JSON.stringify(obj.tool_calls).length : 0;
+
+      userChars += uChars;
+      modelChars += mChars;
+      thinkingChars += thChars;
+      toolsChars += tlChars;
+
+      const stepTimeMs = obj.created_at ? Date.parse(obj.created_at) : 0;
+      const passesWindow = !cutoffMs || !Number.isFinite(stepTimeMs) || stepTimeMs === 0 || stepTimeMs >= cutoffMs;
+
+      if (passesWindow) {
+        const stepTotalChars = Math.max(line.length, uChars + mChars + thChars + tlChars);
+        if (!byModelChars.has(activeModel)) {
+          byModelChars.set(activeModel, {
+            steps: 0,
+            totalChars: 0,
+            userChars: 0,
+            modelChars: 0,
+            thinkingChars: 0,
+            toolsChars: 0
+          });
+        }
+        const entry = byModelChars.get(activeModel);
+        entry.steps++;
+        entry.totalChars += stepTotalChars;
+        entry.userChars += uChars;
+        entry.modelChars += mChars;
+        entry.thinkingChars += thChars;
+        entry.toolsChars += tlChars;
+
+        if (Number.isFinite(stepTimeMs) && stepTimeMs > 0) {
+          const dayKey = new Date(stepTimeMs).toISOString().slice(0, 10);
+          if (!dailyChars.has(dayKey)) {
+            dailyChars.set(dayKey, { chars: 0, steps: 0 });
+          }
+          const dEntry = dailyChars.get(dayKey);
+          dEntry.chars += stepTotalChars;
+          dEntry.steps++;
+        }
+      }
+    }
+
+    const byModel = {};
+    for (const [mName, c] of byModelChars.entries()) {
+      byModel[mName] = {
+        steps: c.steps,
+        tokens: Math.round(c.totalChars / CHARS_PER_TOKEN),
+        user: Math.round(c.userChars / CHARS_PER_TOKEN),
+        model: Math.round(c.modelChars / CHARS_PER_TOKEN),
+        thinking: Math.round(c.thinkingChars / CHARS_PER_TOKEN),
+        tools: Math.round(c.toolsChars / CHARS_PER_TOKEN)
+      };
+    }
+
+    const dailyByDate = {};
+    for (const [dayKey, d] of dailyChars.entries()) {
+      dailyByDate[dayKey] = {
+        tokens: Math.round(d.chars / CHARS_PER_TOKEN),
+        steps: d.steps
+      };
     }
 
     const tokens = Math.round(totalChars / CHARS_PER_TOKEN);
@@ -206,11 +497,384 @@ export function parseTranscript(targetPath) {
         model: Math.round(modelChars / CHARS_PER_TOKEN),
         thinking: Math.round(thinkingChars / CHARS_PER_TOKEN),
         tools: Math.round(toolsChars / CHARS_PER_TOKEN)
-      }
+      },
+      byModel,
+      dailyByDate
     };
   } catch {
     return empty;
   }
+}
+
+function buildSessionGridCells(telemetry) {
+  const cellTokens = DEFAULT_TOKEN_LIMIT / 100; // 10,000 tokens per 1% cell
+  const bd = telemetry?.breakdown || { user: 0, model: 0, thinking: 0, tools: 0 };
+  const totalSessionTokens = telemetry?.tokens || 0;
+  const knownTokens = (bd.user || 0) + (bd.model || 0) + (bd.thinking || 0) + (bd.tools || 0);
+  const overheadTokens = Math.max(0, totalSessionTokens - knownTokens);
+
+  const categories = [
+    { key: 'user', label: 'User', fullName: 'User Prompts', color: '#38bdf8', tokens: bd.user || 0 },
+    { key: 'model', label: 'Model', fullName: 'Model Output', color: '#a855f7', tokens: bd.model || 0 },
+    { key: 'thinking', label: 'Thinking', fullName: 'Thinking Tokens', color: '#f59e0b', tokens: bd.thinking || 0 },
+    { key: 'tools', label: 'Tools', fullName: 'Tool Calls & Args', color: '#34d399', tokens: bd.tools || 0 },
+    { key: 'overhead', label: 'Context', fullName: 'Tool Outputs & System Context', color: '#64748b', tokens: overheadTokens }
+  ];
+
+  const counts = categories.map(cat => ({
+    ...cat,
+    exact: cat.tokens / cellTokens,
+    cells: Math.floor(cat.tokens / cellTokens)
+  }));
+
+  let totalUsedCells = Math.min(100, Math.round(totalSessionTokens / cellTokens));
+  if (totalSessionTokens > 0 && totalUsedCells === 0) {
+    totalUsedCells = 1;
+  }
+
+  let currentSum = counts.reduce((acc, c) => acc + c.cells, 0);
+  if (currentSum > totalUsedCells) {
+    // Scale down proportionally if raw sum exceeds totalUsedCells
+    let scaledSum = 0;
+    for (const c of counts) {
+      c.cells = Math.floor((c.tokens / Math.max(1, totalSessionTokens)) * totalUsedCells);
+      scaledSum += c.cells;
+    }
+    currentSum = scaledSum;
+  }
+
+  const remainderSort = [...counts]
+    .filter(c => c.tokens > 0)
+    .sort((a, b) => (b.exact - Math.floor(b.exact)) - (a.exact - Math.floor(a.exact)));
+
+  let idx = 0;
+  while (currentSum < totalUsedCells && remainderSort.length > 0) {
+    remainderSort[idx % remainderSort.length].cells++;
+    currentSum++;
+    idx++;
+  }
+
+  const gridCells = [];
+  for (const cat of counts) {
+    const pct = totalSessionTokens > 0 ? Number(((cat.tokens / DEFAULT_TOKEN_LIMIT) * 100).toFixed(1)) : 0;
+    const displayTokens = formatTokens(cat.tokens);
+    for (let i = 0; i < cat.cells && gridCells.length < 100; i++) {
+      gridCells.push({
+        index: gridCells.length,
+        key: cat.key,
+        label: cat.label,
+        fullName: cat.fullName,
+        color: cat.color,
+        tokens: cat.tokens,
+        displayTokens,
+        pct,
+        poolLabel: 'Session 1M'
+      });
+    }
+  }
+
+  const freeTokens = Math.max(0, DEFAULT_TOKEN_LIMIT - totalSessionTokens);
+  const freePct = Number(((freeTokens / DEFAULT_TOKEN_LIMIT) * 100).toFixed(1));
+  const freeDisplay = formatTokens(freeTokens);
+  while (gridCells.length < 100) {
+    gridCells.push({
+      index: gridCells.length,
+      key: 'free',
+      label: 'Libre',
+      fullName: 'Contexto Libre Disponible',
+      color: 'rgba(148, 163, 184, 0.12)',
+      tokens: freeTokens,
+      displayTokens: freeDisplay,
+      pct: freePct,
+      poolLabel: 'Session 1M'
+    });
+  }
+
+  return gridCells;
+}
+
+function buildWindowGridCells(models, totalTokens) {
+  if (!totalTokens || !Array.isArray(models) || models.length === 0) {
+    return Array.from({ length: 100 }, (_, index) => ({
+      index,
+      key: 'empty',
+      label: 'Sin uso',
+      fullName: 'Sin actividad registrada en esta ventana',
+      color: 'rgba(148, 163, 184, 0.12)',
+      tokens: 0,
+      displayTokens: '0',
+      pct: 0,
+      poolLabel: 'N/A'
+    }));
+  }
+
+  const activeModels = models.filter(m => m.tokens > 0);
+  const allocations = activeModels.map(m => {
+    const exact = (m.tokens / totalTokens) * 100;
+    return {
+      model: m,
+      cells: Math.floor(exact),
+      remainder: exact - Math.floor(exact)
+    };
+  });
+
+  if (activeModels.length <= 100) {
+    for (const item of allocations) {
+      if (item.cells === 0) item.cells = 1;
+    }
+  }
+
+  let allocated = allocations.reduce((acc, a) => acc + a.cells, 0);
+  while (allocated > 100) {
+    const candidate = [...allocations]
+      .filter(a => a.cells > 1)
+      .sort((a, b) => a.remainder - b.remainder)[0];
+    if (!candidate) break;
+    candidate.cells--;
+    allocated--;
+  }
+
+  const byRemainder = [...allocations].sort((a, b) => b.remainder - a.remainder);
+  let rIdx = 0;
+  while (allocated < 100 && byRemainder.length > 0) {
+    byRemainder[rIdx % byRemainder.length].cells++;
+    allocated++;
+    rIdx++;
+  }
+
+  const gridCells = [];
+  for (const item of allocations) {
+    const m = item.model;
+    for (let i = 0; i < item.cells && gridCells.length < 100; i++) {
+      gridCells.push({
+        index: gridCells.length,
+        key: m.id,
+        label: m.shortName,
+        fullName: m.name,
+        color: m.color,
+        tokens: m.tokens,
+        displayTokens: m.displayTokens,
+        pct: m.pct,
+        poolLabel: m.poolLabel
+      });
+    }
+  }
+
+  return gridCells;
+}
+
+/**
+ * Aggregates model usage across transcripts and groups into quota pools & 10x10 Claude waffle grid cells.
+ * @param {string} brainDir
+ * @param {string} [modelCatalogPath=DEFAULT_MODEL_CATALOG_FILE]
+ * @param {'session'|'5h'|'7d'} [windowMode='7d']
+ * @param {string|null} [cascadeId=null]
+ * @param {Object} [options={}]
+ * @returns {Object}
+ */
+export function aggregateUsageMatrix(
+  brainDir,
+  modelCatalogPath = DEFAULT_MODEL_CATALOG_FILE,
+  windowMode = '7d',
+  cascadeId = null,
+  options = {}
+) {
+  const normalizedWindow = ['session', '5h', '7d'].includes(String(windowMode))
+    ? String(windowMode)
+    : '7d';
+  const catalogPath = modelCatalogPath || DEFAULT_MODEL_CATALOG_FILE;
+  const cacheKey = `${brainDir || ''}|${catalogPath}|${normalizedWindow}|${cascadeId || ''}`;
+  const now = Date.now();
+
+  if (!options?.bypassCache) {
+    const cached = usageMatrixCache.get(cacheKey);
+    if (cached && (now - cached.ts) < USAGE_CACHE_TTL_MS) {
+      return cached.value;
+    }
+  }
+
+  const catalog = readModelCatalog(catalogPath);
+  const cutoffMs = normalizedWindow === '5h'
+    ? (now - 5 * 3600 * 1000)
+    : (normalizedWindow === '7d' ? (now - 7 * 24 * 3600 * 1000) : 0);
+
+  const modelAgg = new Map();
+  const dailyAgg = new Map();
+  let activeConvs = 0;
+  let resolvedCascadeId = cascadeId || null;
+  let sessionTelemetry = null;
+
+  const mergeTranscriptStats = (parsed) => {
+    if (!parsed || !parsed.byModel) return false;
+    let hadSteps = false;
+    for (const [rawModelName, stats] of Object.entries(parsed.byModel)) {
+      if (!stats || !stats.steps) continue;
+      hadSteps = true;
+      const meta = resolveModelMeta(rawModelName, catalog);
+      const key = meta.id;
+      if (!modelAgg.has(key)) {
+        modelAgg.set(key, {
+          id: meta.id,
+          name: meta.name,
+          shortName: meta.shortName,
+          family: meta.family,
+          color: meta.color,
+          poolId: meta.pool.id,
+          poolLabel: meta.pool.label,
+          steps: 0,
+          tokens: 0,
+          user: 0,
+          model: 0,
+          thinking: 0,
+          tools: 0
+        });
+      }
+      const target = modelAgg.get(key);
+      target.steps += stats.steps || 0;
+      target.tokens += stats.tokens || 0;
+      target.user += stats.user || 0;
+      target.model += stats.model || 0;
+      target.thinking += stats.thinking || 0;
+      target.tools += stats.tools || 0;
+    }
+
+    if (parsed.dailyByDate) {
+      for (const [dayKey, dStats] of Object.entries(parsed.dailyByDate)) {
+        if (!dailyAgg.has(dayKey)) {
+          dailyAgg.set(dayKey, { date: dayKey, tokens: 0, steps: 0 });
+        }
+        const dTarget = dailyAgg.get(dayKey);
+        dTarget.tokens += dStats.tokens || 0;
+        dTarget.steps += dStats.steps || 0;
+      }
+    }
+    return hadSteps;
+  };
+
+  if (normalizedWindow === 'session') {
+    const resolved = resolveTranscript(brainDir, cascadeId);
+    if (resolved) {
+      resolvedCascadeId = resolved.id;
+      sessionTelemetry = parseTranscript(resolved.chosen, { cutoffMs: 0 });
+      if (mergeTranscriptStats(sessionTelemetry)) {
+        activeConvs = 1;
+      }
+    }
+  } else if (brainDir && fs.existsSync(brainDir)) {
+    try {
+      const entries = fs.readdirSync(brainDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (!/^[0-9a-fA-F-]{8,}$/.test(entry.name)) continue;
+        const hit = getTranscriptFileInDir(path.join(brainDir, entry.name));
+        if (!hit || hit.mtime < cutoffMs) continue;
+        const parsed = parseTranscript(hit.chosen, { cutoffMs });
+        if (mergeTranscriptStats(parsed)) {
+          activeConvs++;
+        }
+      }
+    } catch {
+      // Ignore directory read failure
+    }
+  }
+
+  const rawModels = Array.from(modelAgg.values());
+  const totalTokens = rawModels.reduce((acc, m) => acc + m.tokens, 0);
+  const totalSteps = rawModels.reduce((acc, m) => acc + m.steps, 0);
+
+  const models = rawModels
+    .map(m => ({
+      ...m,
+      displayTokens: formatTokens(m.tokens),
+      pct: totalTokens > 0 ? Number(((m.tokens / totalTokens) * 100).toFixed(1)) : 0
+    }))
+    .sort((a, b) => b.tokens - a.tokens);
+
+  const poolsMap = {
+    gemini_unified: {
+      id: 'gemini_unified',
+      label: 'Pool Gemini Unificado',
+      windowLabel: '5h + 7d Unified',
+      accent: '#a3e635',
+      tokens: 0,
+      displayTokens: '0',
+      steps: 0,
+      pct: 0,
+      models: []
+    },
+    argon_weekly: {
+      id: 'argon_weekly',
+      label: 'Pool Argon Semanal',
+      windowLabel: '7d Weekly',
+      accent: '#38bdf8',
+      tokens: 0,
+      displayTokens: '0',
+      steps: 0,
+      pct: 0,
+      models: []
+    },
+    third_party: {
+      id: 'third_party',
+      label: 'Pool Claude / GPT-OSS',
+      windowLabel: '5h + 7d Dual',
+      accent: '#c084fc',
+      tokens: 0,
+      displayTokens: '0',
+      steps: 0,
+      pct: 0,
+      models: []
+    }
+  };
+
+  for (const m of models) {
+    const pool = poolsMap[m.poolId] || poolsMap.gemini_unified;
+    pool.tokens += m.tokens;
+    pool.steps += m.steps;
+    pool.models.push({
+      id: m.id,
+      name: m.name,
+      shortName: m.shortName,
+      color: m.color,
+      tokens: m.tokens,
+      displayTokens: m.displayTokens,
+      steps: m.steps,
+      pct: m.pct
+    });
+  }
+
+  for (const pool of Object.values(poolsMap)) {
+    pool.displayTokens = formatTokens(pool.tokens);
+    pool.pct = totalTokens > 0 ? Number(((pool.tokens / totalTokens) * 100).toFixed(1)) : 0;
+    for (const pm of pool.models) {
+      pm.shareInPool = pool.tokens > 0 ? Number(((pm.tokens / pool.tokens) * 100).toFixed(1)) : 0;
+    }
+  }
+
+  const daily = Array.from(dailyAgg.values())
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(d => ({ ...d, displayTokens: formatTokens(d.tokens) }));
+
+  const gridCells = normalizedWindow === 'session'
+    ? buildSessionGridCells(sessionTelemetry || parseTranscript(null))
+    : buildWindowGridCells(models, totalTokens);
+
+  const result = {
+    status: 'ok',
+    window: normalizedWindow,
+    cascadeId: resolvedCascadeId,
+    totalTokens,
+    displayTotalTokens: formatTokens(totalTokens),
+    totalSteps,
+    activeConvs,
+    pools: Object.values(poolsMap),
+    models,
+    daily,
+    gridCells,
+    updatedAt: now
+  };
+
+  usageMatrixCache.set(cacheKey, { ts: now, value: result });
+  return result;
 }
 
 /**
@@ -479,6 +1143,93 @@ function renderGitGraphRows(vcs) {
     .join('');
 }
 
+function renderUsageWaffleCellsHtml(gridCells = []) {
+  const cells = Array.isArray(gridCells) && gridCells.length > 0
+    ? gridCells
+    : Array.from({ length: 100 }, (_, i) => ({
+        index: i,
+        label: 'Libre',
+        fullName: 'Contexto Libre Disponible',
+        color: 'rgba(148, 163, 184, 0.12)',
+        displayTokens: '0',
+        pct: 0
+      }));
+  return cells
+    .slice(0, 100)
+    .map(c => `<div class="waffle-cell" style="background-color: ${escapeHtml(c.color || 'rgba(148, 163, 184, 0.12)')}" title="${escapeHtml(`${c.fullName || c.label || ''} · ${c.displayTokens || '0'} (${c.pct ?? 0}%)`)}"></div>`)
+    .join('');
+}
+
+function renderUsageLegendHtml(matrix) {
+  if (!matrix) return '';
+  if (matrix.window === 'session') {
+    const seen = new Map();
+    for (const c of matrix.gridCells || []) {
+      if (!seen.has(c.key)) {
+        seen.set(c.key, { label: c.label, color: c.color, displayTokens: c.displayTokens, pct: c.pct });
+      }
+    }
+    return Array.from(seen.values())
+      .map(item => `<span class="inline-flex items-center gap-1 text-[10px] font-mono text-[var(--muted-foreground)]"><span class="w-2 h-2 rounded-sm inline-block shrink-0" style="background:${escapeHtml(item.color)}"></span><span>${escapeHtml(item.label)} ${escapeHtml(item.pct)}%</span></span>`)
+      .join('');
+  }
+  const models = Array.isArray(matrix.models) ? matrix.models : [];
+  if (models.length === 0) {
+    return '<span class="text-[10px] text-[var(--muted-foreground)]">Sin actividad registrada en esta ventana.</span>';
+  }
+  return models
+    .slice(0, 6)
+    .map(m => `<span class="inline-flex items-center gap-1 text-[10px] font-mono text-[var(--muted-foreground)]"><span class="w-2 h-2 rounded-sm inline-block shrink-0" style="background:${escapeHtml(m.color)}"></span><span>${escapeHtml(m.shortName)} ${escapeHtml(m.pct)}%</span></span>`)
+    .join('');
+}
+
+function renderQuotaPoolsBentoHtml(pools = [], totalTokens = 0) {
+  const list = Array.isArray(pools) ? pools : [];
+  return list.map(pool => {
+    const poolPct = totalTokens > 0 ? Math.min(100, Number(pool.pct || 0)) : 0;
+    const barSegments = Array.isArray(pool.models) && pool.tokens > 0
+      ? pool.models.map(pm => {
+          const w = Math.max(2, Number(pm.shareInPool || 0));
+          return `<div style="width:${w.toFixed(1)}%;background:${escapeHtml(pm.color)}" title="${escapeHtml(`${pm.shortName} · ${pm.displayTokens} (${pm.shareInPool}%)`)}"></div>`;
+        }).join('')
+      : `<div style="width:100%;background:rgba(148,163,184,0.12)"></div>`;
+
+    return `<div class="p-2 rounded border border-[var(--border)] bg-black/20 space-y-1.5">
+      <div class="flex items-center justify-between gap-1">
+        <span class="text-[10.5px] font-semibold truncate" style="color:${escapeHtml(pool.accent || '#38bdf8')}">${escapeHtml(pool.label)}</span>
+        <span class="px-1.5 py-0.5 rounded text-[9px] font-mono border border-[var(--border)] text-[var(--muted-foreground)] shrink-0">${escapeHtml(pool.windowLabel)}</span>
+      </div>
+      <div class="flex items-baseline justify-between font-mono text-[11px]">
+        <span class="font-bold">${escapeHtml(pool.displayTokens || '0')}</span>
+        <span class="text-[10px] text-[var(--muted-foreground)]">${escapeHtml(pool.steps || 0)} pasos · ${escapeHtml(poolPct)}%</span>
+      </div>
+      <div class="flex h-1.5 rounded-full overflow-hidden bg-black/30 border border-[var(--border)]">${barSegments}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderModelBreakdownRowsHtml(models = []) {
+  const list = Array.isArray(models) ? models : [];
+  if (list.length === 0) {
+    return '<tr><td colspan="8" class="py-2 text-center text-[10px] text-[var(--muted-foreground)]">Sin datos de modelos para esta ventana.</td></tr>';
+  }
+  return list.map(m => `<tr class="border-t border-[var(--border)] hover:bg-white/[0.02]">
+    <td class="py-1 pr-2 font-medium whitespace-nowrap">
+      <span class="inline-flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full shrink-0" style="background:${escapeHtml(m.color)}"></span>
+        <span title="${escapeHtml(m.name)}">${escapeHtml(m.shortName)}</span>
+      </span>
+    </td>
+    <td class="py-1 pr-2 text-[10px] text-[var(--muted-foreground)] whitespace-nowrap">${escapeHtml(m.poolLabel)}</td>
+    <td class="py-1 pr-2 font-mono text-right">${escapeHtml(m.steps)}</td>
+    <td class="py-1 pr-2 font-mono font-bold text-right">${escapeHtml(m.displayTokens)}</td>
+    <td class="py-1 pr-2 font-mono text-amber-400 text-right">${escapeHtml(formatTokens(m.thinking || 0))}</td>
+    <td class="py-1 pr-2 font-mono text-emerald-400 text-right">${escapeHtml(formatTokens(m.tools || 0))}</td>
+    <td class="py-1 pr-2 font-mono text-purple-400 text-right">${escapeHtml(formatTokens(m.model || 0))}</td>
+    <td class="py-1 font-mono text-right">${escapeHtml(m.pct)}%</td>
+  </tr>`).join('');
+}
+
 /**
  * Renders the unified Antigravity Mods & Telemetry Dashboard HTML.
  * Uses Antigravity's CSP-allowed Tailwind build and host CSS variables with standalone fallbacks.
@@ -498,6 +1249,16 @@ export function renderDashboardHtml(state = {}) {
   };
   const vcs = state.vcs || { isRepo: false, branch: '', dirtyCount: 0, commits: [] };
   const voice = state.voice || { online: false, voiceHubUrl: 'http://127.0.0.1:8765' };
+  const usageMatrix = state.usageMatrix || {
+    window: 'session',
+    totalTokens: telemetry.tokens || 0,
+    displayTotalTokens: telemetry.displayTokens || '0',
+    totalSteps: telemetry.steps || 0,
+    activeConvs: telemetry.steps > 0 ? 1 : 0,
+    pools: [],
+    models: [],
+    gridCells: buildSessionGridCells(telemetry)
+  };
 
   const currentMode = (agentInfo.mode || agentInfo.effectiveMode || 'PLAN').toUpperCase();
   const cavemanEnabled = Boolean(agentInfo.caveman ?? agentInfo.modifiers?.caveman);
@@ -561,6 +1322,21 @@ export function renderDashboardHtml(state = {}) {
       border-color: #38bdf8;
       color: #38bdf8;
     }
+    .waffle-grid {
+      display: grid;
+      grid-template-columns: repeat(10, minmax(0, 1fr));
+      gap: 3px;
+    }
+    .waffle-cell {
+      aspect-ratio: 1 / 1;
+      border-radius: 3px;
+      transition: transform 0.12s ease, filter 0.12s ease;
+      cursor: crosshair;
+    }
+    .waffle-cell:hover {
+      filter: brightness(1.22);
+      outline: 1px solid rgba(255, 255, 255, 0.45);
+    }
   </style>
 </head>
 <body class="space-y-3">
@@ -581,11 +1357,18 @@ export function renderDashboardHtml(state = {}) {
   </header>
 
   <main class="grid grid-cols-1 gap-3">
-    <!-- 1. Context Tachometer Card -->
-    <section class="mods-card space-y-2.5" aria-label="Tacómetro de Contexto">
-      <div class="flex items-center justify-between">
-        <span class="font-semibold">Tacómetro de Contexto</span>
-        <span id="telemetry-pct-badge" class="font-mono text-emerald-400 font-bold">${escapeHtml(telemetry.percentage)}% de 1M</span>
+    <!-- 1. Context Tachometer & Claude Waffle Grid Card -->
+    <section class="mods-card space-y-3" aria-label="Tacómetro de Contexto">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="flex items-center gap-2">
+          <span class="font-semibold">Tacómetro &amp; Consumo por Modelo</span>
+          <span id="telemetry-pct-badge" class="font-mono text-emerald-400 font-bold text-[11px]">${escapeHtml(telemetry.percentage)}% de 1M</span>
+        </div>
+        <div class="flex items-center gap-1" role="group" aria-label="Ventana de consumo">
+          <button type="button" data-window="session" class="mods-btn usage-window-btn mods-btn-active">Session 1M</button>
+          <button type="button" data-window="5h" class="mods-btn usage-window-btn">Rolling 5h</button>
+          <button type="button" data-window="7d" class="mods-btn usage-window-btn">Weekly 7d</button>
+        </div>
       </div>
 
       <div class="flex flex-col sm:flex-row items-center gap-3">
@@ -613,6 +1396,50 @@ export function renderDashboardHtml(state = {}) {
               <div id="bar-tools" style="width: ${toolsPct.toFixed(1)}%" class="bg-emerald-400" title="Tools"></div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- Claude-style 10x10 Waffle Grid -->
+      <div id="claude-waffle-section" class="pt-2 border-t border-[var(--border)] space-y-2">
+        <div class="flex items-center justify-between gap-2 text-[10.5px]">
+          <span class="font-semibold text-[var(--foreground)]">Matriz Estilo Claude (/context) · 100 Bloques</span>
+          <span id="waffle-summary" class="font-mono text-[var(--muted-foreground)]">
+            ${escapeHtml(usageMatrix.displayTotalTokens)} · ${escapeHtml(usageMatrix.totalSteps)} pasos · ${escapeHtml(usageMatrix.activeConvs)} convs
+          </span>
+        </div>
+        <div class="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+          <div id="claude-waffle-grid" class="waffle-grid w-36 shrink-0" aria-label="Cuadrícula de uso por bloques">${renderUsageWaffleCellsHtml(usageMatrix.gridCells)}</div>
+          <div id="waffle-legend" class="flex flex-wrap gap-x-3 gap-y-1.5 flex-1">${renderUsageLegendHtml(usageMatrix)}</div>
+        </div>
+      </div>
+
+      <!-- Bento Grid of 3 Quota Pools -->
+      <div id="quota-pools-bento" class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        ${renderQuotaPoolsBentoHtml(usageMatrix.pools, usageMatrix.totalTokens)}
+      </div>
+
+      <!-- Specific Per-Model Breakdown Table -->
+      <div class="pt-2 border-t border-[var(--border)]">
+        <div class="flex items-center justify-between mb-1.5">
+          <span class="text-[10.5px] font-semibold">Desglose Específico por Modelo</span>
+          <span id="model-breakdown-count" class="text-[10px] font-mono text-[var(--muted-foreground)]">${escapeHtml((usageMatrix.models || []).length)} modelos</span>
+        </div>
+        <div class="max-h-48 overflow-y-auto pr-1">
+          <table id="model-breakdown-table" class="w-full text-left border-collapse text-[10.5px]">
+            <thead class="text-[9.5px] uppercase text-[var(--muted-foreground)] border-b border-[var(--border)]">
+              <tr>
+                <th class="py-1 pr-2 font-semibold">Modelo</th>
+                <th class="py-1 pr-2 font-semibold">Pool</th>
+                <th class="py-1 pr-2 font-semibold text-right">Pasos</th>
+                <th class="py-1 pr-2 font-semibold text-right">Tokens</th>
+                <th class="py-1 pr-2 font-semibold text-right">Think</th>
+                <th class="py-1 pr-2 font-semibold text-right">Tools</th>
+                <th class="py-1 pr-2 font-semibold text-right">Out</th>
+                <th class="py-1 font-semibold text-right">%</th>
+              </tr>
+            </thead>
+            <tbody id="model-breakdown-tbody">${renderModelBreakdownRowsHtml(usageMatrix.models)}</tbody>
+          </table>
         </div>
       </div>
     </section>
@@ -689,6 +1516,7 @@ export function renderDashboardHtml(state = {}) {
       let activeCascadeId = params.get('conversationId') || params.get('cascadeId') || ${safeJsonForScript(cascadeId)};
       let activeRepoPath = '';
       let cavemanState = ${safeJsonForScript(cavemanEnabled)};
+      let activeUsageWindow = 'session';
 
       function esc(val) {
         return String(val ?? '')
@@ -697,6 +1525,13 @@ export function renderDashboardHtml(state = {}) {
           .replace(/>/g, '&gt;')
           .replace(/"/g, '&quot;')
           .replace(/'/g, '&#39;');
+      }
+
+      function fmtTokensClient(n) {
+        const num = Number(n) || 0;
+        if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+        if (num >= 10000) return (num / 1000).toFixed(1) + 'k';
+        return num.toLocaleString('en-US');
       }
 
       function apiFetch(path, options) {
@@ -774,6 +1609,102 @@ export function renderDashboardHtml(state = {}) {
             if (sub) sub.textContent = 'Cascade: ' + activeCascadeId;
           }
           updateTachometer(data.telemetry);
+        } catch {}
+      }
+
+      function renderUsageMatrix(matrix) {
+        if (!matrix) return;
+        const summary = document.getElementById('waffle-summary');
+        if (summary) {
+          summary.textContent = (matrix.displayTotalTokens || '0') + ' · ' + (matrix.totalSteps || 0) + ' pasos · ' + (matrix.activeConvs || 0) + ' convs';
+        }
+        const gridEl = document.getElementById('claude-waffle-grid');
+        if (gridEl && Array.isArray(matrix.gridCells)) {
+          gridEl.innerHTML = matrix.gridCells.slice(0, 100).map(c => {
+            const titleText = (c.fullName || c.label || '') + ' · ' + (c.displayTokens || '0') + ' (' + (c.pct ?? 0) + '%)';
+            return '<div class="waffle-cell" style="background-color:' + esc(c.color || 'rgba(148,163,184,0.12)') + '" title="' + esc(titleText) + '"></div>';
+          }).join('');
+        }
+        const legendEl = document.getElementById('waffle-legend');
+        if (legendEl) {
+          if (matrix.window === 'session') {
+            const seen = new Map();
+            for (const c of (matrix.gridCells || [])) {
+              if (!seen.has(c.key)) seen.set(c.key, { label: c.label, color: c.color, pct: c.pct });
+            }
+            legendEl.innerHTML = Array.from(seen.values()).map(item =>
+              '<span class="inline-flex items-center gap-1 text-[10px] font-mono text-[var(--muted-foreground)]">' +
+              '<span class="w-2 h-2 rounded-sm inline-block shrink-0" style="background:' + esc(item.color) + '"></span>' +
+              '<span>' + esc(item.label) + ' ' + esc(item.pct) + '%</span></span>'
+            ).join('');
+          } else {
+            const ms = Array.isArray(matrix.models) ? matrix.models : [];
+            legendEl.innerHTML = ms.length === 0
+              ? '<span class="text-[10px] text-[var(--muted-foreground)]">Sin actividad registrada en esta ventana.</span>'
+              : ms.slice(0, 6).map(m =>
+                  '<span class="inline-flex items-center gap-1 text-[10px] font-mono text-[var(--muted-foreground)]">' +
+                  '<span class="w-2 h-2 rounded-sm inline-block shrink-0" style="background:' + esc(m.color) + '"></span>' +
+                  '<span>' + esc(m.shortName) + ' ' + esc(m.pct) + '%</span></span>'
+                ).join('');
+          }
+        }
+        const bentoEl = document.getElementById('quota-pools-bento');
+        if (bentoEl && Array.isArray(matrix.pools)) {
+          const tot = matrix.totalTokens || 0;
+          bentoEl.innerHTML = matrix.pools.map(pool => {
+            const poolPct = tot > 0 ? Math.min(100, Number(pool.pct || 0)) : 0;
+            const bars = (Array.isArray(pool.models) && pool.tokens > 0)
+              ? pool.models.map(pm => {
+                  const w = Math.max(2, Number(pm.shareInPool || 0));
+                  return '<div style="width:' + w.toFixed(1) + '%;background:' + esc(pm.color) + '" title="' + esc(pm.shortName + ' · ' + pm.displayTokens + ' (' + pm.shareInPool + '%)') + '"></div>';
+                }).join('')
+              : '<div style="width:100%;background:rgba(148,163,184,0.12)"></div>';
+            return '<div class="p-2 rounded border border-[var(--border)] bg-black/20 space-y-1.5">' +
+              '<div class="flex items-center justify-between gap-1">' +
+              '<span class="text-[10.5px] font-semibold truncate" style="color:' + esc(pool.accent || '#38bdf8') + '">' + esc(pool.label) + '</span>' +
+              '<span class="px-1.5 py-0.5 rounded text-[9px] font-mono border border-[var(--border)] text-[var(--muted-foreground)] shrink-0">' + esc(pool.windowLabel) + '</span>' +
+              '</div>' +
+              '<div class="flex items-baseline justify-between font-mono text-[11px]">' +
+              '<span class="font-bold">' + esc(pool.displayTokens || '0') + '</span>' +
+              '<span class="text-[10px] text-[var(--muted-foreground)]">' + esc(pool.steps || 0) + ' pasos · ' + esc(poolPct) + '%</span>' +
+              '</div>' +
+              '<div class="flex h-1.5 rounded-full overflow-hidden bg-black/30 border border-[var(--border)]">' + bars + '</div>' +
+              '</div>';
+          }).join('');
+        }
+        const countEl = document.getElementById('model-breakdown-count');
+        const models = Array.isArray(matrix.models) ? matrix.models : [];
+        if (countEl) countEl.textContent = models.length + ' modelos';
+        const tbody = document.getElementById('model-breakdown-tbody');
+        if (tbody) {
+          tbody.innerHTML = models.length === 0
+            ? '<tr><td colspan="8" class="py-2 text-center text-[10px] text-[var(--muted-foreground)]">Sin datos de modelos para esta ventana.</td></tr>'
+            : models.map(m =>
+                '<tr class="border-t border-[var(--border)] hover:bg-white/[0.02]">' +
+                '<td class="py-1 pr-2 font-medium whitespace-nowrap"><span class="inline-flex items-center gap-1.5">' +
+                '<span class="w-2 h-2 rounded-full shrink-0" style="background:' + esc(m.color) + '"></span>' +
+                '<span title="' + esc(m.name) + '">' + esc(m.shortName) + '</span></span></td>' +
+                '<td class="py-1 pr-2 text-[10px] text-[var(--muted-foreground)] whitespace-nowrap">' + esc(m.poolLabel) + '</td>' +
+                '<td class="py-1 pr-2 font-mono text-right">' + esc(m.steps) + '</td>' +
+                '<td class="py-1 pr-2 font-mono font-bold text-right">' + esc(m.displayTokens) + '</td>' +
+                '<td class="py-1 pr-2 font-mono text-amber-400 text-right">' + esc(fmtTokensClient(m.thinking || 0)) + '</td>' +
+                '<td class="py-1 pr-2 font-mono text-emerald-400 text-right">' + esc(fmtTokensClient(m.tools || 0)) + '</td>' +
+                '<td class="py-1 pr-2 font-mono text-purple-400 text-right">' + esc(fmtTokensClient(m.model || 0)) + '</td>' +
+                '<td class="py-1 font-mono text-right">' + esc(m.pct) + '%</td></tr>'
+              ).join('');
+        }
+      }
+
+      async function refreshUsageMatrix(windowMode, force) {
+        try {
+          const targetWindow = windowMode || activeUsageWindow || 'session';
+          let qs = '?window=' + encodeURIComponent(targetWindow);
+          if (activeCascadeId) qs += '&cascadeId=' + encodeURIComponent(activeCascadeId);
+          if (force) qs += '&force=1';
+          const res = await apiFetch('/api/usage-matrix' + qs);
+          if (!res.ok) return;
+          const matrix = await res.json();
+          renderUsageMatrix(matrix);
         } catch {}
       }
 
@@ -872,10 +1803,21 @@ export function renderDashboardHtml(state = {}) {
       if (agentSel) {
         agentSel.addEventListener('change', () => postAgentUpdate({ agentId: agentSel.value }));
       }
+      document.querySelectorAll('.usage-window-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const win = btn.dataset.window || 'session';
+          activeUsageWindow = win;
+          document.querySelectorAll('.usage-window-btn').forEach(b => {
+            b.classList.toggle('mods-btn-active', b.dataset.window === win);
+          });
+          refreshUsageMatrix(win, false);
+        });
+      });
       const refreshBtn = document.getElementById('refresh-all-btn');
       if (refreshBtn) {
         refreshBtn.addEventListener('click', () => {
           refreshTelemetry();
+          refreshUsageMatrix(activeUsageWindow, true);
           refreshVcs();
           refreshVoice();
         });
@@ -906,6 +1848,7 @@ export function renderDashboardHtml(state = {}) {
 
       setInterval(() => {
         refreshTelemetry();
+        refreshUsageMatrix(activeUsageWindow, false);
         refreshVoice();
       }, 5000);
     })();
@@ -1014,6 +1957,7 @@ function buildUpdatedAgentEntry(existing = {}, payload = {}) {
 export function createDashboardApp(options = {}) {
   const brainDir = options.brainDir || path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
   const activeAgentsFile = options.activeAgentsFile || path.join(os.homedir(), '.gemini', 'config', 'mods', 'active_agents.json');
+  const modelCatalogFile = options.modelCatalogFile || DEFAULT_MODEL_CATALOG_FILE;
   const defaultRepoPath = options.repoPath || process.cwd();
   const voiceHubUrl = (options.voiceHubUrl || 'http://127.0.0.1:8765').replace(/\/+$/, '');
   const uiToken = options.uiToken ?? (process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN || '');
@@ -1078,6 +2022,15 @@ export function createDashboardApp(options = {}) {
           cascadeId: resolved?.id || requestedCascade || null,
           telemetry
         });
+        return;
+      }
+
+      if (method === 'GET' && url.pathname === '/api/usage-matrix') {
+        const windowParam = url.searchParams.get('window') || 'session';
+        const requestedCascade = url.searchParams.get('cascadeId') || url.searchParams.get('conversationId');
+        const force = url.searchParams.get('force') === '1';
+        const matrix = aggregateUsageMatrix(brainDir, modelCatalogFile, windowParam, requestedCascade, { bypassCache: force });
+        sendJson(res, 200, matrix);
         return;
       }
 
@@ -1181,13 +2134,14 @@ export function createDashboardApp(options = {}) {
         const telemetry = parseTranscript(resolved?.chosen || null);
         const activeAgents = readActiveAgents(activeAgentsFile);
         const cascadeId = requestedCascade || resolved?.id || Object.keys(activeAgents)[0] || 'default';
+        const usageMatrix = aggregateUsageMatrix(brainDir, modelCatalogFile, 'session', cascadeId);
         const requestedRepo = normalizeRepoPath(url.searchParams.get('repoPath'), defaultRepoPath);
         const [vcs, voice] = await Promise.all([
           vcsProvider(requestedRepo),
           probeVoiceHub()
         ]);
 
-        const html = renderDashboardHtml({ telemetry, activeAgents, cascadeId, vcs, voice });
+        const html = renderDashboardHtml({ telemetry, activeAgents, cascadeId, vcs, voice, usageMatrix });
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(html);
         return;

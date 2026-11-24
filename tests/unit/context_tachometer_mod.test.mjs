@@ -36,6 +36,11 @@ test('ContextTachometerMod - renders SVG gauge and popover markup with provided 
   assert.ok(rendered.html.includes('4.2%'));
   assert.ok(rendered.html.includes('42.0k'));
   assert.ok(rendered.html.includes('<svg'));
+  assert.ok(rendered.html.includes('antigravity-waffle-grid'));
+  assert.equal((rendered.html.match(/class="antigravity-waffle-cell"/g) || []).length, 100);
+  assert.ok(rendered.html.includes('Gemini Unificado'));
+  assert.ok(rendered.html.includes('Argon Semanal'));
+  assert.ok(rendered.html.includes('Claude / GPT-OSS'));
 });
 
 test('ContextTachometerMod - styles include responsive collapse and compact rules', () => {

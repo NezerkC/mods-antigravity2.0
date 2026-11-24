@@ -1,7 +1,10 @@
 import { execSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import os from 'node:os';
 import { CdpPortResolver } from '../framework/core/CdpPortResolver.js';
 import { CdpWebSocketClient } from '../framework/core/CdpWebSocketClient.js';
+import { normalizeNativeModelCatalog } from '../mods/model-slots/components/ModelSlotsHtml.js';
 
 /**
  * Diagnostic utility for live CDP probing, DOM hierarchy inspection,
@@ -144,6 +147,137 @@ export async function inspectCdp(options = {}) {
 }
 
 /**
+ * Discovers live models and effort levels directly from Antigravity's native React model selector context.
+ * Optionally persists the normalized catalog to ~/.gemini/config/mods/model_catalog.json.
+ * @param {Object} [options]
+ * @param {boolean} [options.sync=false] Persist discovered catalog to disk
+ * @param {string} [options.catalogPath] Custom output path for model_catalog.json
+ * @returns {Promise<Object>}
+ */
+export async function inspectModels(options = {}) {
+  const resolver = options.portResolver || new CdpPortResolver();
+  const port = await resolver.resolvePort();
+  const client = options.cdpClient || new CdpWebSocketClient({ port });
+
+  const expression = `
+    (() => {
+      const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+      const activeTrigger = triggers[triggers.length - 1] || triggers[0];
+      if (!activeTrigger) return { found: false, error: 'model-selector-trigger not found' };
+
+      const reactKey = Object.keys(activeTrigger).find(k => k.startsWith('__reactFiber'));
+      if (!reactKey) return { found: false, error: 'React fiber not found on trigger' };
+
+      let cur = activeTrigger[reactKey];
+      let depth = 0;
+      let ctxValue = null;
+      while (cur && depth < 35) {
+        const val = cur.memoizedProps && cur.memoizedProps.value;
+        if (val && Array.isArray(val.modelOptions) && val.modelOptions.length > 0) {
+          ctxValue = val;
+          break;
+        }
+        cur = cur.return;
+        depth++;
+      }
+
+      if (!ctxValue) return { found: false, error: 'Native modelOptions context not found' };
+
+      const modelOptions = ctxValue.modelOptions.map(m => ({
+        modelId: m.modelId || m.id || '',
+        label: m.label || m.name || '',
+        value: m.value,
+        disabled: Boolean(m.disabled),
+        tagTitle: m.tagTitle || '',
+        tagDescription: m.tagDescription || ''
+      }));
+
+      const groups = Array.isArray(ctxValue.groups)
+        ? ctxValue.groups.map(g => ({
+            groupName: g.groupName || '',
+            options: Array.isArray(g.options)
+              ? g.options.map(o => ({
+                  modelId: o.modelId || o.id || '',
+                  label: o.label || o.name || '',
+                  value: o.value,
+                  disabled: Boolean(o.disabled),
+                  tagTitle: o.tagTitle || '',
+                  tagDescription: o.tagDescription || ''
+                }))
+              : []
+          }))
+        : [];
+
+      const effortIndex = {};
+      const ei = ctxValue.effortIndex;
+      if (ei && typeof ei === 'object') {
+        const entries = (typeof Map === 'function' && ei instanceof Map)
+          ? Array.from(ei.entries())
+          : Object.entries(ei);
+        for (const [baseKey, effList] of entries) {
+          if (typeof Map === 'function' && effList instanceof Map) {
+            effortIndex[baseKey] = Array.from(effList.entries()).map(([effKey, ev]) => ({
+              effort: effKey,
+              modelId: ev?.modelId || ev?.id || '',
+              label: ev?.label || ev?.name || '',
+              value: ev?.value,
+              disabled: Boolean(ev?.disabled)
+            }));
+          } else if (Array.isArray(effList)) {
+            effortIndex[baseKey] = effList.map(ev => ({
+              effort: ev?.effort || ev?.effortLabel || '',
+              modelId: ev?.modelId || ev?.id || '',
+              label: ev?.label || ev?.name || '',
+              value: ev?.value,
+              disabled: Boolean(ev?.disabled)
+            }));
+          }
+        }
+      }
+
+      return {
+        found: true,
+        activeTriggerText: (activeTrigger.textContent || '').trim(),
+        modelOptions,
+        effortIndex,
+        groups
+      };
+    })()
+  `;
+
+  const res = await client.evaluate(expression);
+  const raw = res?.value || res;
+  if (!raw || !raw.found) {
+    return {
+      found: false,
+      error: raw?.error || 'Failed to read native model catalog'
+    };
+  }
+
+  const normalized = normalizeNativeModelCatalog(raw.modelOptions, raw.effortIndex, raw.groups);
+  const catalogPayload = {
+    source: 'native-react-context',
+    activeTriggerText: raw.activeTriggerText || '',
+    ...normalized,
+    updatedAt: Date.now()
+  };
+
+  if (options.sync) {
+    const targetPath = options.catalogPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'model_catalog.json');
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    const tmpPath = `${targetPath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+    fs.writeFileSync(tmpPath, JSON.stringify(catalogPayload, null, 2), 'utf-8');
+    fs.renameSync(tmpPath, targetPath);
+    catalogPayload.syncedTo = targetPath;
+  }
+
+  return {
+    found: true,
+    ...catalogPayload
+  };
+}
+
+/**
  * Evaluates arbitrary expression inside Antigravity Electron page.
  * @param {string} code
  * @param {Object} [options]
@@ -179,6 +313,12 @@ async function runCli() {
       console.log('🔍 Probing Antigravity CDP endpoint...');
       const status = await inspectCdp();
       console.log(JSON.stringify(status, null, 2));
+      break;
+    }
+    case 'models': {
+      const shouldSync = args.includes('--sync');
+      const result = await inspectModels({ sync: shouldSync });
+      console.log(JSON.stringify(result, null, 2));
       break;
     }
     case 'eval': {

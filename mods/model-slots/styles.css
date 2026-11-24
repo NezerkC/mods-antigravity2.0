@@ -48,6 +48,60 @@
   white-space: nowrap !important;
 }
 
+.antigravity-model-slot-btn.is-desynced {
+  border-color: rgba(245, 158, 11, 0.45) !important;
+}
+
+/* Planner-to-Chat Sync Button (Menubar) */
+.antigravity-planner-sync-btn {
+  height: 26px !important;
+  min-width: 26px !important;
+  padding: 0 6px !important;
+  border-radius: 6px !important;
+  border: 1px solid rgba(56, 189, 248, 0.28) !important;
+  background: rgba(56, 189, 248, 0.08) !important;
+  color: #38bdf8 !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0 !important;
+  box-sizing: border-box !important;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease !important;
+  -webkit-app-region: no-drag !important;
+  app-region: no-drag !important;
+  user-select: none !important;
+}
+
+.antigravity-planner-sync-btn:hover {
+  background: rgba(56, 189, 248, 0.16) !important;
+  border-color: rgba(56, 189, 248, 0.5) !important;
+  color: #7dd3fc !important;
+}
+
+.antigravity-planner-sync-btn:focus-visible {
+  outline: 2px solid #38bdf8 !important;
+  outline-offset: 2px !important;
+}
+
+.antigravity-planner-sync-btn.is-desynced {
+  background: rgba(245, 158, 11, 0.18) !important;
+  border-color: rgba(245, 158, 11, 0.55) !important;
+  color: #fbbf24 !important;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.25) !important;
+}
+
+.antigravity-planner-sync-btn.is-desynced:hover {
+  background: rgba(245, 158, 11, 0.28) !important;
+  border-color: rgba(245, 158, 11, 0.8) !important;
+  color: #fde68a !important;
+}
+
+.antigravity-planner-sync-btn .planner-sync-icon {
+  pointer-events: none !important;
+  display: block !important;
+}
+
 .antigravity-model-slot-btn.compact {
   height: 22px !important;
   padding: 2px 6px !important;
@@ -200,16 +254,265 @@
 }
 
 .model-slot-dropdown-sub {
-  font-size: 10.5px !important;
+  font-size: 10px !important;
   color: rgba(255, 255, 255, 0.45) !important;
 }
 
-/* Hierarchical Base Model Options List */
+.model-slot-dropdown-meta-row {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 6px !important;
+  margin-top: 2px !important;
+}
+
+.model-slot-lock-toggle {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  padding: 2px 6px !important;
+  border-radius: 4px !important;
+  font-size: 9.5px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: rgba(255, 255, 255, 0.65) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  font-family: inherit !important;
+  white-space: nowrap !important;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease !important;
+}
+
+.model-slot-lock-toggle:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+  color: #ffffff !important;
+}
+
+.model-slot-lock-toggle.locked {
+  background: rgba(56, 189, 248, 0.14) !important;
+  color: #38bdf8 !important;
+  border-color: rgba(56, 189, 248, 0.35) !important;
+}
+
+.model-slot-lock-toggle.desynced {
+  background: rgba(245, 158, 11, 0.16) !important;
+  color: #fbbf24 !important;
+  border-color: rgba(245, 158, 11, 0.45) !important;
+}
+
+.model-slot-lock-toggle.desynced:hover {
+  background: rgba(245, 158, 11, 0.26) !important;
+  border-color: rgba(245, 158, 11, 0.7) !important;
+  color: #fde68a !important;
+}
+
+.model-slot-lock-toggle .model-lock-dot {
+  width: 5px !important;
+  height: 5px !important;
+  border-radius: 50% !important;
+  background: rgba(255, 255, 255, 0.4) !important;
+  pointer-events: none !important;
+}
+
+.model-slot-lock-toggle.locked .model-lock-dot {
+  background: #38bdf8 !important;
+  box-shadow: 0 0 5px #38bdf8 !important;
+}
+
+.model-slot-lock-toggle.desynced .model-lock-dot {
+  background: #f59e0b !important;
+  box-shadow: 0 0 5px #f59e0b !important;
+}
+
+.model-slot-lock-toggle .model-lock-label {
+  pointer-events: none !important;
+}
+
+/* Packaged Collapsible Model Packs */
 .model-slot-options-list {
   display: flex !important;
   flex-direction: column !important;
-  gap: 2px !important;
+  gap: 4px !important;
   overflow: visible !important;
+}
+
+.model-pack {
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  border-radius: 8px !important;
+  background: rgba(255, 255, 255, 0.02) !important;
+  overflow: visible !important;
+}
+
+.model-pack.has-active {
+  border-color: rgba(56, 189, 248, 0.2) !important;
+}
+
+.model-pack-header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  width: 100% !important;
+  padding: 5px 8px !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 7px !important;
+  cursor: pointer !important;
+  color: rgba(255, 255, 255, 0.78) !important;
+  font-family: inherit !important;
+  box-sizing: border-box !important;
+  transition: background-color 0.12s ease !important;
+}
+
+.model-pack-header:hover {
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: #ffffff !important;
+}
+
+.model-pack-header-left {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  min-width: 0 !important;
+  pointer-events: none !important;
+}
+
+.model-pack-dot {
+  width: 6px !important;
+  height: 6px !important;
+  border-radius: 50% !important;
+  flex-shrink: 0 !important;
+}
+
+.model-pack-title {
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.2px !important;
+  color: #e2e8f0 !important;
+}
+
+.model-pack-count {
+  font-size: 9.5px !important;
+  font-weight: 600 !important;
+  padding: 0 5px !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: rgba(255, 255, 255, 0.55) !important;
+}
+
+.model-pack-header-right {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  flex-shrink: 0 !important;
+  pointer-events: none !important;
+}
+
+.model-pack-active-pill {
+  font-size: 9.5px !important;
+  font-weight: 600 !important;
+  padding: 1px 5px !important;
+  border-radius: 4px !important;
+  background: rgba(56, 189, 248, 0.15) !important;
+  color: #38bdf8 !important;
+  max-width: 90px !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.model-pack-caret {
+  font-size: 10px !important;
+  color: rgba(255, 255, 255, 0.45) !important;
+  transition: transform 0.12s ease !important;
+  display: inline-block !important;
+}
+
+.model-pack.expanded > .model-pack-header .model-pack-caret {
+  transform: rotate(90deg) !important;
+  color: #ffffff !important;
+}
+
+.model-pack-body {
+  display: none !important;
+  flex-direction: column !important;
+  gap: 1px !important;
+  padding: 2px 4px 4px 4px !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.05) !important;
+  overflow: visible !important;
+}
+
+.model-pack.expanded > .model-pack-body {
+  display: flex !important;
+}
+
+/* Native Chat Model Selector Soft-Locked (Synced) & Desynced States */
+button[data-testid="model-selector-trigger"].antigravity-native-model-locked {
+  cursor: pointer !important;
+  border: 1px solid rgba(56, 189, 248, 0.35) !important;
+  position: relative !important;
+}
+
+button[data-testid="model-selector-trigger"].antigravity-native-model-desynced {
+  cursor: pointer !important;
+  border: 1px solid rgba(245, 158, 11, 0.55) !important;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.16) !important;
+  position: relative !important;
+}
+
+/* Inline Chatbox Sync-to-Planner Action Button (visible when sync is broken) */
+.antigravity-chat-planner-sync-btn {
+  display: none !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 5px !important;
+  height: 26px !important;
+  min-width: 26px !important;
+  padding: 0 8px !important;
+  border-radius: 9999px !important;
+  background: rgba(245, 158, 11, 0.16) !important;
+  border: 1px solid rgba(245, 158, 11, 0.5) !important;
+  color: #fbbf24 !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  cursor: pointer !important;
+  flex-shrink: 0 !important;
+  white-space: nowrap !important;
+  box-sizing: border-box !important;
+  user-select: none !important;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease !important;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.2) !important;
+}
+
+.antigravity-chat-planner-sync-btn.is-desynced {
+  display: inline-flex !important;
+}
+
+.antigravity-chat-planner-sync-btn:hover {
+  background: rgba(245, 158, 11, 0.28) !important;
+  border-color: rgba(245, 158, 11, 0.8) !important;
+  color: #fde68a !important;
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.35) !important;
+}
+
+.antigravity-chat-planner-sync-btn:focus-visible {
+  outline: 2px solid #fbbf24 !important;
+  outline-offset: 2px !important;
+}
+
+.antigravity-chat-planner-sync-btn .chat-planner-sync-icon,
+.antigravity-chat-planner-sync-btn .chat-planner-sync-label {
+  pointer-events: none !important;
+}
+
+@media (max-width: 960px) {
+  .antigravity-chat-planner-sync-btn {
+    padding: 0 6px !important;
+  }
+  .antigravity-chat-planner-sync-btn .chat-planner-sync-label {
+    display: none !important;
+  }
 }
 
 /* Base Model Row */

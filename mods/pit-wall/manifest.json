@@ -1,0 +1,7 @@
+{
+  "id": "pit-wall",
+  "name": "Pit Wall Telemetry & Cost Analytics",
+  "version": "1.0.0",
+  "slot": "menubar-actions",
+  "priority": 85
+}

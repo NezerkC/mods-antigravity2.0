@@ -32,7 +32,7 @@ export class ModHost {
     this.slotManager = options.slotManager || new SlotManager();
     this.modLoader = options.modLoader || new ModLoader({ slotManager: this.slotManager });
     this.telemetryService = options.telemetryService || new TelemetryService();
-    this.syncServer = options.syncServer || new AgentSyncServer();
+    this.syncServer = options.syncServer || new AgentSyncServer({ telemetryService: this.telemetryService });
     this.gitService = options.gitService || new GitService();
     this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ gitService: this.gitService });
     this.portResolver = options.portResolver || new CdpPortResolver();
@@ -272,12 +272,18 @@ export class ModHost {
 
     const activeAgents = this.syncServer.readActiveAgents();
     const modelSlots = this.syncServer.readModelSlots();
+    const modelCatalog = this.syncServer.readModelCatalog();
+    const pitWall = (this.telemetryService && typeof this.telemetryService.getPitWallMetrics === 'function')
+      ? this.telemetryService.getPitWallMetrics()
+      : null;
 
     const hostContext = {
       telemetry: primaryMetric,
       allMetrics,
       activeAgents,
       modelSlots,
+      modelCatalog,
+      pitWall,
       ...vcsOverview,
       timestamp: Date.now()
     };
@@ -326,6 +332,14 @@ export class ModHost {
         if (parsedSlots && typeof parsedSlots === 'object') {
           this.syncServer.updateModelSlots(parsedSlots);
         }
+      }
+    } catch {}
+
+    // Sync discovered live model catalog from renderer React context to disk
+    try {
+      const discovered = evalRes?.value?.discoveredModelCatalog;
+      if (discovered && typeof discovered === 'object' && Array.isArray(discovered.baseModels) && discovered.baseModels.length > 0) {
+        this.syncServer.updateModelCatalog(discovered);
       }
     } catch {}
 

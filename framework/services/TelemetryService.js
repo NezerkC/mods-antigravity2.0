@@ -21,6 +21,8 @@ export class TelemetryService {
     this.tokenLimit = options.tokenLimit ?? 1_000_000;
     this.charsPerToken = options.charsPerToken ?? 3.8;
     this.parseCache = new Map();
+    this.pitWallCache = { ts: 0, data: null };
+    this.pitWallFileCache = new Map();
   }
 
   /**
@@ -53,6 +55,21 @@ export class TelemetryService {
       .replace(/[`'"]/g, '')
       .replace(/\.\s*$/, '')
       .trim();
+  }
+
+  /**
+   * Validates whether a candidate model string is a realistic model identifier or junk.
+   * @param {string} [rawName='']
+   * @returns {boolean}
+   */
+  isValidModelName(rawName = '') {
+    if (!rawName || typeof rawName !== 'string') return false;
+    const trimmed = rawName.trim();
+    if (!trimmed || trimmed.length > 48) return false;
+    const lower = trimmed.toLowerCase();
+    if (['none', 'null', 'undefined', 'unknown', 'default', 'fakemodel'].includes(lower)) return false;
+    if (/fakemodel|[\\{};=<>]/i.test(trimmed)) return false;
+    return true;
   }
 
   /**
@@ -200,9 +217,220 @@ export class TelemetryService {
   }
 
   /**
+   * Resolves display palette, short name, and quota pool classification for a model name.
+   * @param {string} [modelName='']
+   * @returns {{ color: string, shortName: string, poolId: 'gemini_unified'|'argon_weekly'|'third_party', poolLabel: string }}
+   */
+  resolveModelVisualMeta(modelName = '') {
+    const cleaned = this.sanitizeModelName(modelName) || 'Gemini 3.8 Flash';
+    const lower = cleaned.toLowerCase();
+
+    let color = '#94a3b8';
+    let poolId = 'gemini_unified';
+    let poolLabel = 'Gemini Unificado';
+
+    if (/argon|g1-pro/i.test(lower)) {
+      color = '#38bdf8';
+      poolId = 'argon_weekly';
+      poolLabel = 'Argon Semanal';
+    } else if (/opus/i.test(lower)) {
+      color = '#c084fc';
+      poolId = 'third_party';
+      poolLabel = 'Claude / GPT-OSS';
+    } else if (/sonnet|claude/i.test(lower)) {
+      color = '#a78bfa';
+      poolId = 'third_party';
+      poolLabel = 'Claude / GPT-OSS';
+    } else if (/gpt-oss|gpt|120b/i.test(lower)) {
+      color = '#f472b6';
+      poolId = 'third_party';
+      poolLabel = 'Claude / GPT-OSS';
+    } else if (/neon/i.test(lower)) {
+      color = '#a3e635';
+    } else if (/hydrogen/i.test(lower)) {
+      color = '#34d399';
+    } else if (/flash|gemini/i.test(lower)) {
+      color = '#fbbf24';
+    }
+
+    let shortName = cleaned;
+    if (/orchestrator/i.test(lower)) {
+      shortName = lower.includes('neon') ? 'Orch. Neon' : 'Orchestrator';
+    } else {
+      shortName = cleaned
+        .replace(/^Gemini\s+4\s+/i, '')
+        .replace(/^Gemini\s+([\d.]+)\s+Flash/i, 'Flash $1')
+        .replace(/^Claude\s+/i, '')
+        .replace(/\(([^)]+)\)/g, (_, eff) => {
+          const e = eff.trim();
+          return /^medium$/i.test(e) ? 'Med' : e;
+        })
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (/^GPT-OSS/i.test(shortName)) {
+        shortName = 'GPT-OSS 120B';
+      }
+    }
+
+    return { color, shortName, poolId, poolLabel };
+  }
+
+  /**
+   * Builds a 100-cell Claude-style waffle grid representing session context usage vs tokenLimit.
+   * @param {number} estTokens
+   * @param {Object} breakdown
+   * @returns {Array<{ index: number, key: string, label: string, color: string, tokens: number, pct: number }>}
+   */
+  buildWaffleCells(estTokens = 0, breakdown = {}) {
+    const limit = Math.max(1, this.tokenLimit || 1_000_000);
+    const cellSize = limit / 100;
+    const bd = breakdown || {};
+
+    const categories = [
+      { key: 'user', label: 'Prompts', color: '#38bdf8', tokens: bd.user?.tokens || 0 },
+      { key: 'model', label: 'Replies', color: '#a855f7', tokens: bd.model?.tokens || 0 },
+      { key: 'thinking', label: 'Thinking', color: '#ec4899', tokens: bd.thinking?.tokens || 0 },
+      { key: 'tools', label: 'Tools', color: '#f59e0b', tokens: bd.tools?.tokens || 0 },
+      { key: 'mcp', label: 'MCP', color: '#10b981', tokens: bd.mcp?.tokens || 0 },
+      { key: 'other', label: 'Context', color: '#64748b', tokens: bd.other?.tokens || 0 }
+    ];
+
+    const knownSum = categories.reduce((acc, c) => acc + c.tokens, 0);
+    if (estTokens > knownSum) {
+      categories[5].tokens += (estTokens - knownSum);
+    }
+
+    let usedCells = estTokens > 0 ? Math.min(100, Math.round(estTokens / cellSize)) : 0;
+    if (estTokens > 0 && usedCells === 0) usedCells = 1;
+
+    const counts = categories.map(c => {
+      const share = estTokens > 0 ? (c.tokens / estTokens) * usedCells : 0;
+      return { ...c, exact: share, cells: Math.floor(share) };
+    });
+
+    let allocated = counts.reduce((acc, c) => acc + c.cells, 0);
+    const remainders = [...counts]
+      .filter(c => c.tokens > 0)
+      .sort((a, b) => (b.exact - Math.floor(b.exact)) - (a.exact - Math.floor(a.exact)));
+
+    let idx = 0;
+    while (allocated < usedCells && remainders.length > 0) {
+      remainders[idx % remainders.length].cells++;
+      allocated++;
+      idx++;
+    }
+
+    const cells = [];
+    for (const c of counts) {
+      const pct = estTokens > 0 ? Number(((c.tokens / limit) * 100).toFixed(1)) : 0;
+      for (let i = 0; i < c.cells && cells.length < 100; i++) {
+        cells.push({
+          index: cells.length,
+          key: c.key,
+          label: c.label,
+          color: c.color,
+          tokens: c.tokens,
+          pct
+        });
+      }
+    }
+
+    const freeTokens = Math.max(0, limit - estTokens);
+    const freePct = Number(((freeTokens / limit) * 100).toFixed(1));
+    while (cells.length < 100) {
+      cells.push({
+        index: cells.length,
+        key: 'free',
+        label: 'Libre',
+        color: 'rgba(255, 255, 255, 0.08)',
+        tokens: freeTokens,
+        pct: freePct
+      });
+    }
+
+    return cells;
+  }
+
+  /**
+   * Aggregates chatModels entries into the 3 Antigravity quota pools.
+   * @param {Array<Object>} chatModels
+   * @returns {Array<Object>}
+   */
+  buildPoolsSummary(chatModels = []) {
+    const pools = {
+      gemini_unified: { id: 'gemini_unified', label: 'Gemini Unificado', accent: '#a3e635', tokens: 0, displayTokens: '0', pct: 0, models: [] },
+      argon_weekly: { id: 'argon_weekly', label: 'Argon Semanal', accent: '#38bdf8', tokens: 0, displayTokens: '0', pct: 0, models: [] },
+      third_party: { id: 'third_party', label: 'Claude / GPT-OSS', accent: '#c084fc', tokens: 0, displayTokens: '0', pct: 0, models: [] }
+    };
+
+    const list = Array.isArray(chatModels) ? chatModels : [];
+    const total = list.reduce((acc, m) => acc + (m.tokens || 0), 0);
+
+    for (const m of list) {
+      const meta = (m.poolId && m.color && m.shortName)
+        ? m
+        : this.resolveModelVisualMeta(m.modelName);
+      const pool = pools[meta.poolId] || pools.gemini_unified;
+      const t = m.tokens || 0;
+      pool.tokens += t;
+      pool.models.push({
+        modelName: m.modelName,
+        shortName: m.shortName || meta.shortName,
+        color: m.color || meta.color,
+        tokens: t,
+        displayTokens: m.displayTokens || this.formatTokens(t),
+        pct: total > 0 ? Math.round((t / total) * 100) : 0
+      });
+    }
+
+    return Object.values(pools).map(p => ({
+      ...p,
+      displayTokens: this.formatTokens(p.tokens),
+      pct: total > 0 ? Math.round((p.tokens / total) * 100) : 0
+    }));
+  }
+
+  /**
+   * Extracts { fromModel, toModel } from a <USER_SETTINGS_CHANGE> block when present.
+   * Supports both `<USER_SETTINGS_CHANGE>Model Selection from "A" to "B"</USER_SETTINGS_CHANGE>`
+   * and `The user changed setting \`Model Selection\` from A to B.` formats, including dotted versions.
+   * @param {string} content
+   * @returns {{ fromModel: string|null, toModel: string|null }}
+   */
+  extractModelSelectionChange(content) {
+    if (typeof content !== 'string' || !content.includes('<USER_SETTINGS_CHANGE>')) {
+      return { fromModel: null, toModel: null };
+    }
+    const sectionMatch = content.match(/<USER_SETTINGS_CHANGE>([\s\S]*?)<\/USER_SETTINGS_CHANGE>/i);
+    const settingsBlock = sectionMatch ? sectionMatch[1] : content;
+    const match = settingsBlock.match(
+      /(?:The user changed setting\s+)?[`'"]?Model Selection[`'"]?\s+from\s+(?:"([^"]+)"|'([^']+)'|`([^`]+)`|(.+?))\s+to\s+(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([^\n<]+?)(?:\.(?=\s|$)|\s*$))/i
+    );
+    if (!match) {
+      return { fromModel: null, toModel: null };
+    }
+    const rawFrom = (match[1] || match[2] || match[3] || match[4] || '').trim();
+    const rawTo = (match[5] || match[6] || match[7] || match[8] || '').trim();
+    const sanitizedFrom = rawFrom ? this.sanitizeModelName(rawFrom) : '';
+    const sanitizedTo = rawTo ? this.sanitizeModelName(rawTo) : '';
+    return {
+      fromModel: this.isValidModelName(sanitizedFrom) ? sanitizedFrom : null,
+      toModel: this.isValidModelName(sanitizedTo) ? sanitizedTo : null
+    };
+  }
+
+  /**
    * Default empty telemetry snapshot.
    */
   getEmptySnapshot() {
+    const emptyBreakdown = {
+      user: { tokens: 0, pct: 0 },
+      model: { tokens: 0, pct: 0 },
+      thinking: { tokens: 0, pct: 0 },
+      tools: { tokens: 0, pct: 0 },
+      mcp: { tokens: 0, pct: 0 },
+      other: { tokens: 0, pct: 0 }
+    };
     return {
       estTokens: 0,
       pct: '0.0',
@@ -212,6 +440,8 @@ export class TelemetryService {
       compactions: [],
       chatModels: [],
       subagents: [],
+      waffleCells: this.buildWaffleCells(0, emptyBreakdown),
+      poolsSummary: this.buildPoolsSummary([]),
       modelQuota: {
         hasDualLimit: true,
         modelName: 'Gemini 3.8 Flash',
@@ -226,14 +456,7 @@ export class TelemetryService {
         singleLabel: 'Cuota Disponible',
         usagePct: 100
       },
-      breakdown: {
-        user: { tokens: 0, pct: 0 },
-        model: { tokens: 0, pct: 0 },
-        thinking: { tokens: 0, pct: 0 },
-        tools: { tokens: 0, pct: 0 },
-        mcp: { tokens: 0, pct: 0 },
-        other: { tokens: 0, pct: 0 }
-      }
+      breakdown: emptyBreakdown
     };
   }
 
@@ -742,6 +965,7 @@ export class TelemetryService {
       const chatModels = [];
       for (const [modelName, data] of combinedLedger.entries()) {
         const { family, hasDualLimit, rollingCeiling, weeklyCeiling } = this.classifyModelFamily(modelName);
+        const visualMeta = this.resolveModelVisualMeta(modelName);
         const chatRollingPct = hasDualLimit && rollingCeiling > 0
           ? Math.min(100, Math.round((data.tokens / rollingCeiling) * 100))
           : 0;
@@ -751,6 +975,10 @@ export class TelemetryService {
 
         chatModels.push({
           modelName,
+          shortName: visualMeta.shortName,
+          color: visualMeta.color,
+          poolId: visualMeta.poolId,
+          poolLabel: visualMeta.poolLabel,
           family,
           hasDualLimit,
           directTokens: data.directTokens,
@@ -778,6 +1006,8 @@ export class TelemetryService {
         directStepEntries: rawParsed.stepEntries,
         stepEntries: combinedStepEntries,
         chatModels,
+        waffleCells: this.buildWaffleCells(rawParsed.estTokens, rawParsed.breakdown),
+        poolsSummary: this.buildPoolsSummary(chatModels),
         subagents,
         modelQuota,
         breakdown: rawParsed.breakdown
@@ -1029,6 +1259,808 @@ export class TelemetryService {
       // Gracefully prevent background hook crashes
     }
     return metrics;
+  }
+
+  /**
+   * Resolves list API pricing ($ per 1M input/output tokens) and canonical base name for Pit Wall analytics.
+   * @param {string} [modelName='']
+   * @returns {{ baseName: string, compactName: string, packId: string, packLabel: string, packColor: string, inputPerM: number, cacheReadPerM: number, outputPerM: number }}
+   */
+  resolveModelPricing(modelName = '') {
+    const cleaned = this.sanitizeModelName(modelName) || 'Gemini 3.8 Flash';
+    const lower = cleaned.toLowerCase();
+
+    let baseName = '';
+    let compactName = '';
+    let packId = 'other';
+    let packLabel = 'Otros';
+    let packColor = '#94a3b8';
+    let inputPerM = 1.25;
+    let outputPerM = 5;
+
+    if (/orchestrator/i.test(lower)) {
+      packId = 'orchestrators';
+      packLabel = 'Orquestadores';
+      packColor = '#38bdf8';
+      inputPerM = 10;
+      outputPerM = 40;
+      if (/neon/i.test(lower)) {
+        baseName = 'Orchestrator (Neon)';
+        compactName = 'Neon';
+      } else {
+        baseName = 'Orchestrator (Argon)';
+        compactName = 'Argon';
+      }
+    } else if (/opus/i.test(lower)) {
+      baseName = 'Claude Opus 5.5';
+      compactName = 'Opus 5.5';
+      packId = 'claude';
+      packLabel = 'Claude';
+      packColor = '#c084fc';
+      inputPerM = 15;
+      outputPerM = 75;
+    } else if (/sonnet/i.test(lower)) {
+      baseName = 'Claude Sonnet 5.5';
+      compactName = 'Sonnet 5.5';
+      packId = 'claude';
+      packLabel = 'Claude';
+      packColor = '#c084fc';
+      inputPerM = 3;
+      outputPerM = 15;
+    } else if (/argon/i.test(lower)) {
+      baseName = 'Gemini 4 Argon';
+      compactName = '4 Argon';
+      packId = 'gemini';
+      packLabel = 'Gemini';
+      packColor = '#a3e635';
+      inputPerM = 15;
+      outputPerM = 75;
+    } else if (/neon/i.test(lower)) {
+      baseName = 'Gemini 4 Neon';
+      compactName = '4 Neon';
+      packId = 'gemini';
+      packLabel = 'Gemini';
+      packColor = '#a3e635';
+      inputPerM = 10;
+      outputPerM = 40;
+    } else if (/hydrogen/i.test(lower)) {
+      baseName = 'Gemini 4 Hydrogen';
+      compactName = '4 Hydrogen';
+      packId = 'gemini';
+      packLabel = 'Gemini';
+      packColor = '#a3e635';
+      inputPerM = 3;
+      outputPerM = 15;
+    } else if (/gpt-oss|120b/i.test(lower)) {
+      baseName = 'GPT-OSS 120B';
+      compactName = 'GPT-OSS 120B';
+      packId = 'openai-oss';
+      packLabel = 'OpenAI OSS';
+      packColor = '#f472b6';
+      inputPerM = 2;
+      outputPerM = 8;
+    } else if (/flash/i.test(lower)) {
+      baseName = 'Gemini 3.8 Flash';
+      compactName = '3.8 Flash';
+      packId = 'gemini';
+      packLabel = 'Gemini';
+      packColor = '#a3e635';
+      inputPerM = 1.25;
+      outputPerM = 5;
+    } else {
+      baseName = cleaned
+        .replace(/\s*\((?:Low|Medium|Med|High|XHigh|Minimal|Max|Standard)\)\s*$/i, '')
+        .trim() || cleaned;
+      compactName = baseName;
+      packId = 'other';
+      packLabel = 'Otros';
+      packColor = '#94a3b8';
+      inputPerM = 1.25;
+      outputPerM = 5;
+    }
+
+    const cacheReadPerM = Number((inputPerM * 0.1).toFixed(4));
+    return { baseName, compactName, packId, packLabel, packColor, inputPerM, cacheReadPerM, outputPerM };
+  }
+
+  /**
+   * Aggregates all-time Pit Wall metrics (stretches, hours worked, day streaks, consistency heatmap,
+   * and API price cost estimates across every conversation in brainDir).
+   * @param {Object} [options={}]
+   * @param {boolean} [options.bypassCache=false]
+   * @param {number} [options.now=Date.now()]
+   * @returns {Object}
+   */
+  getPitWallMetrics(options = {}) {
+    const now = options.now ?? Date.now();
+    if (!options.bypassCache && this.pitWallCache.data && (now - this.pitWallCache.ts) < 15_000) {
+      return this.pitWallCache.data;
+    }
+
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const toLocalDateKey = (ms) => {
+      const d = new Date(ms);
+      return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    };
+    const monthsShort = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    const monthsLong = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    const daysShort = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+
+    const formatShortDate = (ms) => {
+      const d = new Date(ms);
+      return `${monthsShort[d.getMonth()]} ${d.getDate()}`;
+    };
+    const formatLongDate = (ms) => {
+      const d = new Date(ms);
+      return `${d.getDate()} de ${monthsLong[d.getMonth()]} de ${d.getFullYear()}`;
+    };
+    const formatFullDate = (ms) => {
+      const d = new Date(ms);
+      return `${daysShort[d.getDay()]}, ${d.getDate()} ${monthsShort[d.getMonth()]} ${d.getFullYear()}`;
+    };
+    const formatDuration = (hours) => {
+      const totalMins = Math.max(0, Math.round((Number(hours) || 0) * 60));
+      const h = Math.floor(totalMins / 60);
+      const m = totalMins % 60;
+      if (h > 0 && m > 0) return `${h}h ${m}m`;
+      if (h > 0) return `${h}h`;
+      return `${m}m`;
+    };
+    const formatStretchStart = (ms) => {
+      const d = new Date(ms);
+      return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    };
+    const formatBigTokens = (n) => {
+      const num = Number(n) || 0;
+      if (num >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(1).replace(/\.0$/, '')}B`;
+      if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+      if (num >= 1_000) return `${(num / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
+      return String(Math.round(num));
+    };
+    const formatUsd = (val) => `$${Math.round(val || 0).toLocaleString('en-US')}`;
+    const formatExactUsd = (val) => '$' + Number(val || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    const allTimestamps = [];
+    const dailyCostMap = new Map();
+    const dailyHoursMap = new Map();
+    const daySessionsMap = new Map();
+    const modelStatsMap = new Map();
+    let totalTokens = 0;
+    let writtenTokens = 0;
+    let totalUncachedInputTokens = 0;
+    let totalCacheReadTokens = 0;
+    let totalCostUsd = 0;
+    let totalSessions = 0;
+
+    try {
+      if (fs.existsSync(this.brainDir)) {
+        const dirs = fs.readdirSync(this.brainDir)
+          .filter(d => /^[0-9a-fA-F-]{8,}$/.test(d))
+          .map(d => {
+            const logsDir = path.join(this.brainDir, d, '.system_generated', 'logs');
+            const compactPath = path.join(logsDir, 'transcript.jsonl');
+            const fullPath = path.join(logsDir, 'transcript_full.jsonl');
+            let targetPath = '';
+            let mtimeMs = 0;
+            let size = 0;
+            try {
+              if (fs.existsSync(compactPath)) {
+                const st = fs.statSync(compactPath);
+                targetPath = compactPath;
+                mtimeMs = st.mtimeMs;
+                size = st.size;
+              } else if (fs.existsSync(fullPath)) {
+                const st = fs.statSync(fullPath);
+                targetPath = fullPath;
+                mtimeMs = st.mtimeMs;
+                size = st.size;
+              }
+            } catch {}
+            return { id: d, targetPath, mtimeMs, size };
+          })
+          .filter(item => item.targetPath && item.size > 0)
+          .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+        totalSessions = dirs.length;
+
+        for (const item of dirs) {
+          let summary;
+          const cached = this.pitWallFileCache.get(item.targetPath);
+          if (cached && cached.mtimeMs === item.mtimeMs && cached.size === item.size) {
+            summary = cached.summary;
+          } else {
+            summary = this._parseTranscriptForPitWall(item.targetPath, toLocalDateKey);
+            this.pitWallFileCache.set(item.targetPath, { mtimeMs: item.mtimeMs, size: item.size, summary });
+          }
+
+          if (!summary) continue;
+          totalTokens += summary.totalTokens || 0;
+          writtenTokens += summary.writtenTokens || 0;
+          totalUncachedInputTokens += summary.totalUncachedInputTokens || 0;
+          totalCacheReadTokens += summary.totalCacheReadTokens || 0;
+          totalCostUsd += summary.totalCostUsd || 0;
+
+          for (const ts of summary.timestamps) {
+            allTimestamps.push(ts);
+          }
+
+          const sessionDays = summary.sessionDays || Object.keys(summary.dailyStats || summary.dailyCosts || {});
+          for (const dayKey of sessionDays) {
+            daySessionsMap.set(dayKey, (daySessionsMap.get(dayKey) || 0) + 1);
+          }
+
+          const statsToIterate = summary.dailyStats || summary.dailyCosts || {};
+          for (const [dayKey, dStat] of Object.entries(statsToIterate)) {
+            if (!dailyCostMap.has(dayKey)) {
+              dailyCostMap.set(dayKey, {
+                mainCostUsd: 0,
+                bgCostUsd: 0,
+                totalCostUsd: 0,
+                tokens: 0,
+                uncachedInput: 0,
+                cacheRead: 0,
+                output: 0
+              });
+            }
+            const dc = dailyCostMap.get(dayKey);
+            dc.mainCostUsd += dStat.mainCostUsd || 0;
+            dc.bgCostUsd += dStat.bgCostUsd || 0;
+            dc.totalCostUsd += (dStat.mainCostUsd || 0) + (dStat.bgCostUsd || 0);
+            dc.tokens += dStat.tokens || 0;
+            dc.uncachedInput += dStat.uncachedInput || 0;
+            dc.cacheRead += dStat.cacheRead || 0;
+            dc.output += dStat.output || 0;
+          }
+
+          if (summary.modelStats) {
+            for (const [mName, mStat] of Object.entries(summary.modelStats)) {
+              if (!modelStatsMap.has(mName)) {
+                modelStatsMap.set(mName, {
+                  costUsd: 0,
+                  tokens: 0,
+                  uncachedInput: 0,
+                  cacheRead: 0,
+                  output: 0,
+                  packId: mStat.packId,
+                  packLabel: mStat.packLabel,
+                  packColor: mStat.packColor,
+                  compactName: mStat.compactName,
+                  inputPerM: mStat.inputPerM,
+                  cacheReadPerM: mStat.cacheReadPerM,
+                  outputPerM: mStat.outputPerM
+                });
+              }
+              const ms = modelStatsMap.get(mName);
+              ms.costUsd += mStat.costUsd || 0;
+              ms.tokens += mStat.tokens || 0;
+              ms.uncachedInput += mStat.uncachedInput || 0;
+              ms.cacheRead += mStat.cacheRead || 0;
+              ms.output += mStat.output || 0;
+            }
+          } else if (summary.modelCosts) {
+            for (const [mName, mCost] of Object.entries(summary.modelCosts)) {
+              if (!modelStatsMap.has(mName)) {
+                const pricing = this.resolveModelPricing(mName);
+                modelStatsMap.set(mName, {
+                  costUsd: 0,
+                  tokens: 0,
+                  uncachedInput: 0,
+                  cacheRead: 0,
+                  output: 0,
+                  packId: pricing.packId,
+                  packLabel: pricing.packLabel,
+                  packColor: pricing.packColor,
+                  compactName: pricing.compactName,
+                  inputPerM: pricing.inputPerM,
+                  cacheReadPerM: pricing.cacheReadPerM,
+                  outputPerM: pricing.outputPerM
+                });
+              }
+              modelStatsMap.get(mName).costUsd += mCost;
+            }
+          }
+        }
+      }
+    } catch {
+      // Keep graceful empty metrics
+    }
+
+    // Merge global timestamps across sessions into contiguous stretches (gap <= 20 minutes)
+    const GAP_MS = 20 * 60 * 1000;
+    const MIN_EVENT_MS = 2.5 * 60 * 1000;
+    allTimestamps.sort((a, b) => a - b);
+
+    const intervals = [];
+    if (allTimestamps.length > 0) {
+      let curStart = allTimestamps[0];
+      let curEnd = allTimestamps[0];
+      for (let i = 1; i < allTimestamps.length; i++) {
+        const ts = allTimestamps[i];
+        if (ts - curEnd <= GAP_MS) {
+          curEnd = ts;
+        } else {
+          intervals.push({ start: curStart, end: Math.max(curEnd, curStart + MIN_EVENT_MS) });
+          curStart = ts;
+          curEnd = ts;
+        }
+      }
+      intervals.push({ start: curStart, end: Math.max(curEnd, curStart + MIN_EVENT_MS) });
+    }
+
+    let totalDurationMs = 0;
+    for (const iv of intervals) {
+      const dur = Math.max(MIN_EVENT_MS, iv.end - iv.start);
+      totalDurationMs += dur;
+
+      // Distribute interval duration across local calendar days it touches
+      let cursor = iv.start;
+      const effectiveEnd = iv.start + dur;
+      while (cursor < effectiveEnd) {
+        const d = new Date(cursor);
+        const nextMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
+        const sliceEnd = Math.min(effectiveEnd, nextMidnight);
+        const dayKey = toLocalDateKey(cursor);
+        dailyHoursMap.set(dayKey, (dailyHoursMap.get(dayKey) || 0) + ((sliceEnd - cursor) / 3_600_000));
+        cursor = sliceEnd;
+      }
+    }
+
+    const totalHours = Number((totalDurationMs / 3_600_000).toFixed(1));
+    const lastInterval = intervals.length > 0 ? intervals[intervals.length - 1] : null;
+    const currentStretchHours = lastInterval
+      ? Number(((lastInterval.end - lastInterval.start) / 3_600_000).toFixed(1))
+      : 0;
+    const isStretchActive = lastInterval ? (now - lastInterval.end) <= GAP_MS : false;
+    const currentStretchSub = lastInterval
+      ? `${isStretchActive ? 'activo, desde' : 'último bloque'} ${formatStretchStart(lastInterval.start)}`
+      : 'sin actividad reciente';
+
+    const activeDayKeys = Array.from(new Set([
+      ...Array.from(dailyHoursMap.keys()),
+      ...Array.from(dailyCostMap.keys())
+    ])).sort();
+
+    const activeDaysCount = activeDayKeys.length;
+    const avgHoursPerDay = activeDaysCount > 0 ? Number((totalHours / activeDaysCount).toFixed(1)) : 0;
+    const firstSessionDate = allTimestamps.length > 0 ? formatLongDate(allTimestamps[0]) : formatLongDate(now);
+
+    // Day streaks (best run & current streak up to today/yesterday)
+    const activeSet = new Set(activeDayKeys);
+    let bestStreak = 0;
+    let runStreak = 0;
+    if (activeDayKeys.length > 0) {
+      let prevDayMs = null;
+      for (const dk of activeDayKeys) {
+        const [yy, mm, dd] = dk.split('-').map(Number);
+        const dayMs = new Date(yy, mm - 1, dd).getTime();
+        if (prevDayMs !== null && Math.round((dayMs - prevDayMs) / 86_400_000) === 1) {
+          runStreak++;
+        } else {
+          runStreak = 1;
+        }
+        if (runStreak > bestStreak) bestStreak = runStreak;
+        prevDayMs = dayMs;
+      }
+    }
+
+    let currentStreak = 0;
+    const todayDate = new Date(now);
+    let checkDate = new Date(todayDate.getFullYear(), todayDate.getMonth(), todayDate.getDate());
+    if (!activeSet.has(toLocalDateKey(checkDate.getTime()))) {
+      checkDate.setDate(checkDate.getDate() - 1);
+    }
+    while (activeSet.has(toLocalDateKey(checkDate.getTime()))) {
+      currentStreak++;
+      checkDate.setDate(checkDate.getDate() - 1);
+    }
+
+    // Last 60 days series
+    const last60Days = [];
+    const todayStart = new Date(todayDate.getFullYear(), todayDate.getMonth(), todayDate.getDate());
+    for (let i = 59; i >= 0; i--) {
+      const d = new Date(todayStart);
+      d.setDate(d.getDate() - i);
+      const ms = d.getTime();
+      const key = toLocalDateKey(ms);
+      const hrs = Number((dailyHoursMap.get(key) || 0).toFixed(4));
+      const costObj = dailyCostMap.get(key) || {
+        mainCostUsd: 0,
+        bgCostUsd: 0,
+        totalCostUsd: 0,
+        tokens: 0,
+        uncachedInput: 0,
+        cacheRead: 0,
+        output: 0
+      };
+      last60Days.push({
+        date: key,
+        label: formatShortDate(ms),
+        fullDate: formatFullDate(ms),
+        hours: hrs,
+        durationLabel: formatDuration(hrs),
+        sessions: daySessionsMap.get(key) || 0,
+        tokens: costObj.tokens || 0,
+        uncachedInput: costObj.uncachedInput || 0,
+        cacheRead: costObj.cacheRead || 0,
+        output: costObj.output || 0,
+        mainCostUsd: Number(costObj.mainCostUsd.toFixed(2)),
+        bgCostUsd: Number(costObj.bgCostUsd.toFixed(2)),
+        totalCostUsd: Number(costObj.totalCostUsd.toFixed(2))
+      });
+    }
+
+    // Consistency heatmap grid (last 20 weeks, Monday..Sunday)
+    const numWeeks = 20;
+    const todayDowMon0 = (todayStart.getDay() + 6) % 7; // Mon=0 .. Sun=6
+    const currentWeekMon = new Date(todayStart);
+    currentWeekMon.setDate(currentWeekMon.getDate() - todayDowMon0);
+    const firstWeekMon = new Date(currentWeekMon);
+    firstWeekMon.setDate(firstWeekMon.getDate() - ((numWeeks - 1) * 7));
+
+    const consistencyWeeks = [];
+    let lastMonthSeen = -1;
+    for (let w = 0; w < numWeeks; w++) {
+      const weekMon = new Date(firstWeekMon);
+      weekMon.setDate(weekMon.getDate() + w * 7);
+      const mIdx = weekMon.getMonth();
+      const monthLabel = mIdx !== lastMonthSeen ? monthsShort[mIdx] : '';
+      lastMonthSeen = mIdx;
+
+      const days = [];
+      for (let dow = 0; dow < 7; dow++) {
+        const cellDate = new Date(weekMon);
+        cellDate.setDate(cellDate.getDate() + dow);
+        const ms = cellDate.getTime();
+        const isFuture = ms > todayStart.getTime();
+        const key = toLocalDateKey(ms);
+        const hrsRaw = isFuture ? 0 : (dailyHoursMap.get(key) || 0);
+        const hours = isFuture ? 0 : Number(hrsRaw.toFixed(2));
+        const costObj = isFuture ? null : dailyCostMap.get(key);
+        let level = 0;
+        if (!isFuture && hours > 0) {
+          if (hours > 6) level = 4;
+          else if (hours > 3) level = 3;
+          else if (hours > 1) level = 2;
+          else level = 1;
+        }
+        days.push({
+          date: key,
+          fullDate: formatFullDate(ms),
+          hours,
+          durationLabel: formatDuration(hrsRaw),
+          sessions: isFuture ? 0 : (daySessionsMap.get(key) || 0),
+          tokens: costObj ? (costObj.tokens || 0) : 0,
+          totalCostUsd: costObj ? Number(costObj.totalCostUsd.toFixed(2)) : 0,
+          level,
+          isFuture
+        });
+      }
+      consistencyWeeks.push({ monthLabel, days });
+    }
+
+    // Cost by model sorted descending (up to 10 models with spend > 0)
+    const sortedModels = Array.from(modelStatsMap.entries())
+      .map(([name, entry]) => ({ name, ...entry }))
+      .filter(e => e.costUsd > 0)
+      .sort((a, b) => b.costUsd - a.costUsd);
+
+    const modelsToUse = sortedModels.length > 0
+      ? sortedModels
+      : Array.from(modelStatsMap.entries()).map(([name, entry]) => ({ name, ...entry })).sort((a, b) => b.costUsd - a.costUsd);
+
+    const maxModelCost = modelsToUse.length > 0 ? Math.max(0.0001, modelsToUse[0].costUsd) : 1;
+    const costByModel = modelsToUse.slice(0, 10).map((entry, idx) => {
+      const pricing = this.resolveModelPricing(entry.name);
+      return {
+        name: entry.name,
+        compactName: entry.compactName || pricing.compactName,
+        packId: entry.packId || pricing.packId,
+        packLabel: entry.packLabel || pricing.packLabel,
+        packColor: entry.packColor || pricing.packColor,
+        costUsd: Math.round(entry.costUsd),
+        exactCostUsd: Number(entry.costUsd.toFixed(2)),
+        displayCost: entry.costUsd > 0 && entry.costUsd < 10 ? formatExactUsd(entry.costUsd) : formatUsd(entry.costUsd),
+        exactDisplayCost: formatExactUsd(entry.costUsd),
+        pctOfTotal: Number(((entry.costUsd / Math.max(0.0001, totalCostUsd)) * 100).toFixed(1)),
+        pctOfMax: Math.max(2, Math.round((entry.costUsd / maxModelCost) * 100)),
+        tokens: entry.tokens || 0,
+        uncachedInput: entry.uncachedInput || 0,
+        cacheRead: entry.cacheRead || 0,
+        output: entry.output || 0,
+        inputPerM: entry.inputPerM ?? pricing.inputPerM,
+        cacheReadPerM: entry.cacheReadPerM ?? pricing.cacheReadPerM,
+        outputPerM: entry.outputPerM ?? pricing.outputPerM,
+        isTop: idx === 0
+      };
+    });
+
+    // Group models by 4 Planner packages (costByModelPacks)
+    const packsMap = new Map();
+    for (const m of costByModel) {
+      const pId = m.packId || 'other';
+      if (!packsMap.has(pId)) {
+        packsMap.set(pId, {
+          packId: pId,
+          packLabel: m.packLabel || 'Otros',
+          packColor: m.packColor || '#94a3b8',
+          costUsd: 0,
+          exactCostUsd: 0,
+          tokens: 0,
+          uncachedInput: 0,
+          cacheRead: 0,
+          output: 0,
+          modelCount: 0,
+          models: []
+        });
+      }
+      const p = packsMap.get(pId);
+      p.costUsd += m.costUsd || 0;
+      p.exactCostUsd = Number((p.exactCostUsd + (m.exactCostUsd || 0)).toFixed(2));
+      p.tokens += m.tokens || 0;
+      p.uncachedInput += m.uncachedInput || 0;
+      p.cacheRead += m.cacheRead || 0;
+      p.output += m.output || 0;
+      p.modelCount++;
+      p.models.push(m);
+    }
+
+    const sortedPacks = Array.from(packsMap.values()).sort((a, b) => b.exactCostUsd - a.exactCostUsd);
+    const maxPackCost = sortedPacks.length > 0 ? Math.max(0.0001, sortedPacks[0].exactCostUsd) : 1;
+    const costByModelPacks = sortedPacks.map(p => {
+      p.models.sort((a, b) => (b.exactCostUsd || 0) - (a.exactCostUsd || 0));
+      return {
+        ...p,
+        displayCost: p.exactCostUsd > 0 && p.exactCostUsd < 10 ? formatExactUsd(p.exactCostUsd) : formatUsd(p.exactCostUsd),
+        exactDisplayCost: formatExactUsd(p.exactCostUsd),
+        pctOfTotal: Number(((p.exactCostUsd / Math.max(0.0001, totalCostUsd)) * 100).toFixed(1)),
+        pctOfMax: Math.max(2, Math.round((p.exactCostUsd / maxPackCost) * 100))
+      };
+    });
+
+    const result = {
+      currentStreak,
+      bestStreak,
+      totalHours,
+      exactTotalHours: Number((totalDurationMs / 3_600_000).toFixed(4)),
+      exactTotalDurationLabel: formatDuration(totalDurationMs / 3_600_000),
+      activeDaysCount,
+      firstSessionDate,
+      avgHoursPerDay,
+      currentStretchHours,
+      exactCurrentStretchDurationLabel: formatDuration(lastInterval ? (lastInterval.end - lastInterval.start) / 3_600_000 : 0),
+      currentStretchSub,
+      isStretchActive,
+      totalCostUsd: Math.round(totalCostUsd),
+      exactTotalCostUsd: Number(totalCostUsd.toFixed(2)),
+      displayTotalCost: formatUsd(totalCostUsd),
+      exactDisplayTotalCost: formatExactUsd(totalCostUsd),
+      totalTokens,
+      uncachedInputTokens: totalUncachedInputTokens,
+      cacheReadTokens: totalCacheReadTokens,
+      displayTotalTokens: formatBigTokens(totalTokens),
+      writtenTokens,
+      displayWrittenTokens: formatBigTokens(writtenTokens),
+      totalSessions,
+      last60Days,
+      consistencyWeeks,
+      costByModel,
+      costByModelPacks,
+      updatedAt: now
+    };
+
+    this.pitWallCache = { ts: now, data: result };
+    return result;
+  }
+
+  /**
+   * Parses a single transcript into compact Pit Wall timeline & cost aggregates for caching.
+   * @private
+   */
+  _parseTranscriptForPitWall(filePath, toLocalDateKey) {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const lines = content.split('\n');
+      const parsedLines = [];
+
+      let hasExactTokenTelemetry = false;
+      let firstFromModel = '';
+      let firstObjModel = '';
+
+      // Pass 1: Parse JSON and detect exact telemetry capability and initial model
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        let obj;
+        try {
+          obj = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        parsedLines.push({ obj, rawLine });
+
+        if (obj.input_tokens !== undefined || obj.output_tokens !== undefined) {
+          hasExactTokenTelemetry = true;
+        }
+
+        if (!firstFromModel) {
+          const { fromModel } = this.extractModelSelectionChange(obj.content);
+          if (fromModel) {
+            firstFromModel = fromModel;
+          }
+        }
+
+        if (!firstObjModel && typeof obj.model === 'string' && obj.model.trim()) {
+          const sanitized = this.sanitizeModelName(obj.model);
+          if (this.isValidModelName(sanitized)) {
+            firstObjModel = sanitized;
+          }
+        }
+      }
+
+      const initialModel = (firstFromModel && this.isValidModelName(firstFromModel))
+        ? firstFromModel
+        : ((firstObjModel && this.isValidModelName(firstObjModel)) ? firstObjModel : 'Gemini 3.8 Flash');
+
+      // Pass 2: Aggregate timestamps, tokens, and pricing with model state tracking
+      const timestamps = [];
+      const sessionDays = new Set();
+      const dailyCosts = {};
+      const dailyStats = {};
+      const modelCosts = {};
+      const modelStats = {};
+      let totalUncachedInputTokens = 0;
+      let totalCacheReadTokens = 0;
+      let totalTokens = 0;
+      let writtenTokens = 0;
+      let totalCostUsd = 0;
+      let detectedModel = initialModel;
+      let subagentWindowSteps = 0;
+
+      for (const { obj, rawLine } of parsedLines) {
+        const { toModel } = this.extractModelSelectionChange(obj.content);
+        if (toModel) {
+          detectedModel = toModel;
+        }
+
+        if (typeof obj.model === 'string' && obj.model.trim()) {
+          const sanitized = this.sanitizeModelName(obj.model);
+          if (this.isValidModelName(sanitized)) {
+            detectedModel = sanitized;
+          }
+        }
+
+        const activeModel = (this.isValidModelName(detectedModel) ? this.sanitizeModelName(detectedModel) : '') || 'Gemini 3.8 Flash';
+        const pricing = this.resolveModelPricing(activeModel);
+
+        let tsMs = obj.created_at ? Date.parse(obj.created_at) : NaN;
+        if (!Number.isFinite(tsMs)) {
+          tsMs = 0;
+        } else {
+          timestamps.push(tsMs);
+        }
+
+        let uncachedInputTok = 0;
+        let cacheReadTok = 0;
+        let outputTok = 0;
+
+        if (obj.input_tokens !== undefined || obj.output_tokens !== undefined) {
+          uncachedInputTok = Number(obj.input_tokens) || 0;
+          cacheReadTok = Number(obj.cache_read_tokens) || 0;
+          outputTok = Number(obj.output_tokens) || 0;
+        } else if (!hasExactTokenTelemetry) {
+          const thinkingLen = typeof obj.thinking === 'string' ? obj.thinking.length : 0;
+          const contentLen = typeof obj.content === 'string' ? obj.content.length : 0;
+          const toolCallsLen = obj.tool_calls ? JSON.stringify(obj.tool_calls).length : 0;
+          const approx = Math.round(Math.max(rawLine.length, contentLen + thinkingLen + toolCallsLen) / this.charsPerToken);
+          if (obj.type === 'PLANNER_RESPONSE') {
+            outputTok = approx;
+          } else {
+            uncachedInputTok = approx;
+          }
+        } else {
+          uncachedInputTok = 0;
+          cacheReadTok = 0;
+          outputTok = 0;
+        }
+
+        const stepTokens = uncachedInputTok + cacheReadTok + outputTok;
+        const stepCost = ((uncachedInputTok / 1e6) * pricing.inputPerM) +
+          ((cacheReadTok / 1e6) * pricing.cacheReadPerM) +
+          ((outputTok / 1e6) * pricing.outputPerM);
+
+        totalUncachedInputTokens += uncachedInputTok;
+        totalCacheReadTokens += cacheReadTok;
+        totalTokens += stepTokens;
+        writtenTokens += outputTok;
+        totalCostUsd += stepCost;
+
+        let isBackground = subagentWindowSteps > 0;
+        if (Array.isArray(obj.tool_calls) && obj.tool_calls.some(tc => tc.name === 'invoke_subagent' || tc.name === 'swarm')) {
+          isBackground = true;
+          subagentWindowSteps = 2;
+        } else if (subagentWindowSteps > 0) {
+          subagentWindowSteps--;
+        }
+
+        if (tsMs > 0) {
+          const dayKey = toLocalDateKey(tsMs);
+          sessionDays.add(dayKey);
+
+          if (!dailyStats[dayKey]) {
+            dailyStats[dayKey] = {
+              mainCostUsd: 0,
+              bgCostUsd: 0,
+              totalCostUsd: 0,
+              tokens: 0,
+              uncachedInput: 0,
+              cacheRead: 0,
+              output: 0
+            };
+          }
+          const ds = dailyStats[dayKey];
+          if (isBackground) {
+            ds.bgCostUsd += stepCost;
+          } else {
+            ds.mainCostUsd += stepCost;
+          }
+          ds.totalCostUsd = ds.mainCostUsd + ds.bgCostUsd;
+          ds.tokens += stepTokens;
+          ds.uncachedInput += uncachedInputTok;
+          ds.cacheRead += cacheReadTok;
+          ds.output += outputTok;
+
+          if (!dailyCosts[dayKey]) {
+            dailyCosts[dayKey] = { mainCostUsd: 0, bgCostUsd: 0 };
+          }
+          if (isBackground) {
+            dailyCosts[dayKey].bgCostUsd += stepCost;
+          } else {
+            dailyCosts[dayKey].mainCostUsd += stepCost;
+          }
+        }
+
+        if (!modelStats[pricing.baseName]) {
+          modelStats[pricing.baseName] = {
+            costUsd: 0,
+            tokens: 0,
+            uncachedInput: 0,
+            cacheRead: 0,
+            output: 0,
+            packId: pricing.packId,
+            packLabel: pricing.packLabel,
+            packColor: pricing.packColor,
+            compactName: pricing.compactName,
+            inputPerM: pricing.inputPerM,
+            cacheReadPerM: pricing.cacheReadPerM,
+            outputPerM: pricing.outputPerM
+          };
+        }
+        const ms = modelStats[pricing.baseName];
+        ms.costUsd += stepCost;
+        ms.tokens += stepTokens;
+        ms.uncachedInput += uncachedInputTok;
+        ms.cacheRead += cacheReadTok;
+        ms.output += outputTok;
+
+        modelCosts[pricing.baseName] = (modelCosts[pricing.baseName] || 0) + stepCost;
+      }
+
+      return {
+        timestamps,
+        sessionDays: Array.from(sessionDays),
+        dailyCosts,
+        dailyStats,
+        modelCosts,
+        modelStats,
+        totalUncachedInputTokens,
+        totalCacheReadTokens,
+        totalTokens,
+        writtenTokens,
+        totalCostUsd
+      };
+    } catch {
+      return null;
+    }
   }
 }
 

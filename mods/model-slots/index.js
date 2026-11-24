@@ -39,8 +39,9 @@ export class ModelSlotsMod extends AntigravityMod {
    */
   render(context = {}) {
     const slots = context.slots || context.modelSlots;
+    const catalog = context.modelCatalog?.modelCatalog || context.modelCatalog?.baseModels || undefined;
     return {
-      html: renderModelSlotsMenubarHtml(slots),
+      html: renderModelSlotsMenubarHtml(slots, catalog),
       css: this.cachedCss
     };
   }

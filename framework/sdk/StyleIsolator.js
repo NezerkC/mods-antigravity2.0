@@ -81,7 +81,13 @@ export class StyleIsolator {
             sel.startsWith('.antigravity-agent-item') ||
             sel.startsWith('.model-slot-') ||
             sel.startsWith('.model-effort-') ||
+            sel.startsWith('.model-pack') ||
+            sel.startsWith('.pit-wall-') ||
+            sel.includes('antigravity-pit-wall') ||
             sel.includes('antigravity-subagent-model') ||
+            sel.includes('antigravity-native-model-locked') ||
+            sel.includes('antigravity-native-model-desynced') ||
+            sel.includes('antigravity-chat-planner-sync-btn') ||
             sel.startsWith('body') ||
             sel.startsWith(':root')
           ) {

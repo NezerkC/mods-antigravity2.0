@@ -13,10 +13,13 @@ import {
   MODEL_CATALOG,
   DEFAULT_MODEL_SLOTS,
   getModelById,
+  groupBaseModelsIntoPacks,
+  normalizeNativeModelCatalog,
   renderModelSlotsMenubarHtml,
   renderModelSlotDropdownHtml,
   renderSubagentModelPill
 } from '../../mods/model-slots/components/ModelSlotsHtml.js';
+import { execFileSync } from 'node:child_process';
 import { ModelSlotsMod } from '../../mods/model-slots/index.js';
 import { AgentSyncServer } from '../../framework/services/AgentSyncServer.js';
 import { createDefaultHost } from '../../framework/core/ModDaemon.js';
@@ -25,17 +28,19 @@ import { SlotManager } from '../../framework/core/SlotManager.js';
 import { StyleIsolator } from '../../framework/sdk/StyleIsolator.js';
 
 describe('ModelSlotsMod - Catalog Symmetry & Completeness', () => {
-  it('BASE_MODELS defines 7 base models with grouped effort levels', () => {
+  it('BASE_MODELS defines 9 base models with grouped effort levels including Gemini 4 Neon and Orchestrator (Neon)', () => {
     assert.ok(Array.isArray(BASE_MODELS));
-    assert.equal(BASE_MODELS.length, 7, 'Expected 7 base models');
+    assert.equal(BASE_MODELS.length, 9, 'Expected 9 base models');
 
     const expectedNames = [
+      'Gemini 4 Neon',
       'Gemini 4 Argon',
       'Gemini 4 Hydrogen',
       'Gemini 3.8 Flash',
       'Claude Opus 5.5',
       'Claude Sonnet 5.5',
       'GPT-OSS 120B',
+      'Orchestrator (Neon)',
       'Orchestrator (Argon)'
     ];
 
@@ -57,7 +62,18 @@ describe('ModelSlotsMod - Catalog Symmetry & Completeness', () => {
       }
     }
 
-    assert.equal(totalEfforts, 18, 'Expected 18 total effort levels matching MODEL_CATALOG');
+    assert.equal(totalEfforts, 23, 'Expected 23 total effort levels matching MODEL_CATALOG');
+
+    // Neon must support 4 effort levels: Low, Medium, High, XHigh
+    const neon = BASE_MODELS.find(m => m.name === 'Gemini 4 Neon');
+    assert.ok(neon);
+    assert.deepEqual(neon.efforts.map(e => e.label), ['Low', 'Medium', 'High', 'XHigh']);
+    assert.deepEqual(neon.efforts.map(e => e.id), [
+      'gemini-4-neon-low',
+      'gemini-4-neon-medium',
+      'gemini-4-neon-high',
+      'gemini-4-neon-xhigh'
+    ]);
 
     // Hydrogen must support 4 effort levels: Low, Medium, High, XHigh
     const hydrogen = BASE_MODELS.find(m => m.name === 'Gemini 4 Hydrogen');
@@ -146,6 +162,9 @@ describe('ModelSlotsMod - Menubar & Hierarchical Dropdown HTML Rendering', () =>
 
     assert.ok(html.includes('antigravity-model-slots-group'));
     assert.ok(html.includes('id="antigravity-model-slot-planner"'));
+    assert.ok(html.includes('id="antigravity-planner-sync-btn"'));
+    assert.ok(html.includes('aria-label="Sync chat model with Planner"'));
+    assert.ok(html.includes('aria-pressed="true"'));
     assert.ok(html.includes('id="antigravity-model-slot-builder"'));
     assert.ok(html.includes('data-slot-role="planner"'));
     assert.ok(html.includes('data-slot-role="builder"'));
@@ -159,20 +178,20 @@ describe('ModelSlotsMod - Menubar & Hierarchical Dropdown HTML Rendering', () =>
     assert.ok(html.includes('model-slot-caret'));
   });
 
-  it('renderModelSlotDropdownHtml renders 7 base model rows with flyouts, effort options, and chevrons', () => {
+  it('renderModelSlotDropdownHtml renders 9 base model rows with flyouts, effort options, and chevrons', () => {
     const dropdown = renderModelSlotDropdownHtml('builder', 'gemini-4-hydrogen-high', BASE_MODELS);
 
-    // Verify 7 base model rows (exclude row child classes like model-slot-row-left)
+    // Verify 9 base model rows (exclude row child classes like model-slot-row-left)
     const rowMatches = (dropdown.match(/class="model-slot-row(?:\s+[^"]*)?"/g) || []).filter(c => !c.includes('model-slot-row-'));
-    assert.equal(rowMatches.length, 7, 'Expected 7 .model-slot-row elements');
+    assert.equal(rowMatches.length, 9, 'Expected 9 .model-slot-row elements');
 
     // Verify chevrons
     const chevronMatches = dropdown.match(/&#8250;/g);
-    assert.equal(chevronMatches.length, 7, 'Expected 7 chevron indicators');
+    assert.equal(chevronMatches.length, 9, 'Expected 9 chevron indicators');
 
     // Verify flyout submenus
     const submenuMatches = dropdown.match(/class="model-slot-submenu"/g);
-    assert.equal(submenuMatches.length, 7, 'Expected 7 .model-slot-submenu containers');
+    assert.equal(submenuMatches.length, 9, 'Expected 9 .model-slot-submenu containers');
 
     // Verify active row highlight and active badge
     assert.ok(dropdown.includes('class="model-slot-row active"'), 'Expected active class on selected model row');
@@ -1046,8 +1065,10 @@ describe('ModelSlotsMod - Native Model Selector Synchronization', () => {
 
     vm.runInContext(script, sandbox);
 
-    // 1. Validate mapping table for all 7 families
-    assert.deepEqual({ ...windowMock.__resolveNativeModelTarget('gemini-pro-orchestrator-g1-pro') }, { base: 'Orchestrator', effort: null });
+    // 1. Validate mapping table for all 9 families (including Gemini 4 Neon & Orchestrator Neon)
+    assert.deepEqual({ ...windowMock.__resolveNativeModelTarget('gemini-pro-orchestrator-neon') }, { base: 'Orchestrator (Neon)', effort: null });
+    assert.deepEqual({ ...windowMock.__resolveNativeModelTarget('gemini-pro-orchestrator-g1-pro') }, { base: 'Orchestrator (Argon)', effort: null });
+    assert.deepEqual({ ...windowMock.__resolveNativeModelTarget('gemini-4-neon-xhigh') }, { base: 'Gemini 4 Neon', effort: 'XHigh' });
     assert.deepEqual({ ...windowMock.__resolveNativeModelTarget('gemini-4-argon-medium') }, { base: 'Gemini 4 Argon', effort: 'Medium' });
     assert.deepEqual({ ...windowMock.__resolveNativeModelTarget('gemini-4-hydrogen-xhigh') }, { base: 'Gemini 4 Hydrogen', effort: 'XHigh' });
     assert.deepEqual({ ...windowMock.__resolveNativeModelTarget('gemini-3.8-flash-low') }, { base: 'Gemini 3.8 Flash', effort: 'Low' });
@@ -1133,7 +1154,7 @@ describe('ModelSlotsMod - Native Model Selector Synchronization', () => {
     windowMock.__selectModelForSlot('builder', 'claude-sonnet-5-5-low');
     assert.equal(activeTrigger.clickCount, prevTriggerClicks, 'Builder slot must not command native selector');
 
-    // 6. Reverse observation: native UI text mutation updates PLANNER menubar button
+    // 6. Reverse observation: manual native UI change breaks sync WITHOUT overwriting PLANNER slot
     const triggerObserverRec = observerRecords.find(r => r.target === activeTrigger);
     assert.ok(triggerObserverRec, 'MutationObserver must observe native trigger');
     assert.equal(triggerObserverRec.opts.characterData, true, 'Observer must watch characterData');
@@ -1143,10 +1164,13 @@ describe('ModelSlotsMod - Native Model Selector Synchronization', () => {
     activeTrigger.textContent = 'Claude Opus 5.5 (Medium)';
     triggerObserverRec.instance.trigger();
 
-    assert.equal(plannerBtn.getAttribute('data-model-id'), 'claude-opus-5-5-medium');
-    assert.equal(plannerVal.textContent, 'Opus 5.5 Med');
+    assert.equal(plannerBtn.getAttribute('data-model-id'), 'gemini-4-hydrogen-xhigh', 'Manual chat selection must preserve Planner slot');
     const persisted = JSON.parse(store.get('__antigravity_model_slots'));
-    assert.equal(persisted.planner, 'claude-opus-5-5-medium');
+    assert.equal(persisted.planner, 'gemini-4-hydrogen-xhigh', 'Persisted Planner slot must remain unchanged');
+    assert.equal(persisted.lockNative, false, 'Manual chat override must mark lockNative false');
+    assert.equal(persisted.plannerSyncBroken, true, 'Manual chat override must mark plannerSyncBroken true');
+    assert.equal(persisted.nativeOverrideModel, 'claude-opus-5-5-medium', 'Must record overridden chat model id');
+    assert.equal(activeTrigger.getAttribute('data-antigravity-sync'), 'desynced');
   });
 });
 
@@ -1989,5 +2013,802 @@ describe('ModelSlotsMod & ModLoader - Single-Toggle & Observer Stabilization', (
     modObserver.cb([{ target: env.body }]);
     assert.equal(env.scheduledTimeouts.length, initialTimeouts, 'Mutation while mounting must not schedule mount check');
     env.windowMock.__antigravityIsMountingMods = false;
+  });
+});
+
+describe('Dynamic Model Catalog Discovery & Lifecycle Hook', () => {
+  it('normalizeNativeModelCatalog groups efforts canonically, tracks disabled models, and handles unknown future models', () => {
+    const rawOptions = [
+      { modelId: 'gemini-4-neon-high', label: 'Gemini 4 Neon (High)', value: 1532, disabled: false },
+      { modelId: 'gemini-4-neon-xhigh', label: 'Gemini 4 Neon (XHigh)', value: 1535, disabled: false },
+      { modelId: 'gemini-4-neon-low', label: 'Gemini 4 Neon (Low)', value: 1534, disabled: false },
+      { modelId: 'gemini-4-neon-medium', label: 'Gemini 4 Neon (Medium)', value: 1533, disabled: false },
+      { modelId: 'gemini-pro-orchestrator-neon', label: 'Orchestrator (Neon)', value: 1537, disabled: false },
+      { modelId: 'gemini-5-krypton-max', label: 'Gemini 5 Krypton (Max)', value: 2001, disabled: false },
+      { modelId: 'gemini-5-krypton-low', label: 'Gemini 5 Krypton (Low)', value: 2000, disabled: false }
+    ];
+    const groups = [
+      {
+        groupName: 'Recommended',
+        options: [
+          ...rawOptions,
+          {
+            modelId: 'gemini-4-carbon-disabled',
+            label: 'Gemini 4 Carbon',
+            value: 1670,
+            disabled: true,
+            tagTitle: 'Unavailable',
+            tagDescription: 'Ultra plan only'
+          }
+        ]
+      }
+    ];
+
+    const res = normalizeNativeModelCatalog(rawOptions, null, groups);
+    assert.equal(res.totalBaseModels, 3);
+    assert.equal(res.totalModels, 7);
+    assert.equal(res.disabledModels.length, 1);
+    assert.equal(res.disabledModels[0].id, 'gemini-4-carbon-disabled');
+
+    const neon = res.baseModels.find(b => b.name === 'Gemini 4 Neon');
+    assert.ok(neon);
+    assert.deepEqual(neon.efforts.map(e => e.label), ['Low', 'Medium', 'High', 'XHigh']);
+
+    const krypton = res.baseModels.find(b => b.name === 'Gemini 5 Krypton');
+    assert.ok(krypton, 'Future unknown model must be auto-discovered');
+    assert.deepEqual(krypton.efforts.map(e => e.label), ['Low', 'Max']);
+  });
+
+  it('AgentSyncServer persists and serves GET/POST /model-catalog', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-model-catalog-test-'));
+    const catalogPath = path.join(tmpDir, 'model_catalog.json');
+    const port = 54000 + Math.floor(Math.random() * 5000);
+    const server = new AgentSyncServer({ port, modelCatalogPath: catalogPath });
+    await server.start();
+
+    try {
+      const samplePayload = {
+        source: 'native-react-context',
+        baseModels: [
+          {
+            name: 'Gemini 4 Neon',
+            family: 'Neon',
+            color: '#a3e635',
+            efforts: [
+              { id: 'gemini-4-neon-low', label: 'Low', shortName: 'Neon Low' },
+              { id: 'gemini-4-neon-xhigh', label: 'XHigh', shortName: 'Neon XHigh' }
+            ]
+          }
+        ],
+        modelCatalog: [
+          { id: 'gemini-4-neon-xhigh', name: 'Gemini 4 Neon (XHigh)', shortName: 'Neon XHigh', family: 'Neon', color: '#a3e635' },
+          { id: 'gemini-4-neon-low', name: 'Gemini 4 Neon (Low)', shortName: 'Neon Low', family: 'Neon', color: '#a3e635' }
+        ],
+        disabledModels: [{ id: 'gemini-4-carbon-disabled', name: 'Gemini 4 Carbon', tagTitle: 'Unavailable' }]
+      };
+
+      const postRes = await fetch(`http://127.0.0.1:${port}/model-catalog`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(samplePayload)
+      });
+      assert.equal(postRes.status, 200);
+      const postJson = await postRes.json();
+      assert.equal(postJson.success, true);
+      assert.equal(postJson.catalog.totalBaseModels, 1);
+      assert.equal(postJson.catalog.totalModels, 2);
+
+      const getRes = await fetch(`http://127.0.0.1:${port}/model-catalog`);
+      assert.equal(getRes.status, 200);
+      const getJson = await getRes.json();
+      assert.equal(getJson.baseModels[0].name, 'Gemini 4 Neon');
+      assert.equal(getJson.disabledModels[0].id, 'gemini-4-carbon-disabled');
+      assert.ok(fs.existsSync(catalogPath), 'model_catalog.json must be written to disk');
+    } finally {
+      await server.stop();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ModLoader __discoverNativeModelCatalog extracts models from React fiber and enables dynamic native resolution', () => {
+    const loader = new ModLoader();
+    const script = loader.buildInjectionPayload({});
+
+    const postedBodies = [];
+    const triggerEl = {
+      tagName: 'BUTTON',
+      textContent: 'Gemini 5 Krypton (Max)',
+      getAttribute(k) { return k === 'data-testid' ? 'model-selector-trigger' : null; },
+      __reactFiber$mock: {
+        return: {
+          memoizedProps: {
+            value: {
+              modelOptions: [
+                { modelId: 'gemini-5-krypton-low', label: 'Gemini 5 Krypton (Low)', value: 3001, disabled: false },
+                { modelId: 'gemini-5-krypton-max', label: 'Gemini 5 Krypton (Max)', value: 3002, disabled: false }
+              ],
+              effortIndex: new Map([
+                ['Gemini 5 Krypton', [
+                  { effort: 'low', modelId: 'gemini-5-krypton-low', label: 'Gemini 5 Krypton (Low)' },
+                  { effort: 'max', modelId: 'gemini-5-krypton-max', label: 'Gemini 5 Krypton (Max)' }
+                ]]
+              ]),
+              groups: []
+            }
+          },
+          return: null
+        }
+      }
+    };
+
+    const noopEl = {
+      style: {},
+      classList: { add() {}, remove() {}, contains() { return false; }, toggle() {} },
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+      appendChild() {},
+      setAttribute() {},
+      getAttribute() { return null; },
+      addEventListener() {},
+      removeEventListener() {},
+      getBoundingClientRect() { return { top: 0, bottom: 20, left: 0, width: 100, height: 20 }; }
+    };
+    const documentMock = {
+      head: noopEl,
+      body: noopEl,
+      documentElement: noopEl,
+      getElementById() { return null; },
+      querySelector(sel) { return sel.includes('model-selector-trigger') ? triggerEl : null; },
+      querySelectorAll(sel) { return sel.includes('model-selector-trigger') ? [triggerEl] : []; },
+      createElement() { return { ...noopEl }; },
+      addEventListener() {}
+    };
+    const windowMock = {
+      location: { pathname: '/', search: '' },
+      innerWidth: 1280,
+      document: documentMock,
+      ResizeObserver: class { observe() {} disconnect() {} },
+      MutationObserver: class { observe() {} disconnect() {} }
+    };
+    windowMock.window = windowMock;
+
+    const store = new Map();
+    const sandbox = vm.createContext({
+      window: windowMock,
+      document: documentMock,
+      localStorage: {
+        getItem(k) { return store.has(k) ? store.get(k) : null; },
+        setItem(k, v) { store.set(k, String(v)); },
+        removeItem(k) { store.delete(k); }
+      },
+      fetch: (url, init) => {
+        postedBodies.push({ url, body: init?.body ? JSON.parse(init.body) : null });
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      },
+      ResizeObserver: windowMock.ResizeObserver,
+      MutationObserver: windowMock.MutationObserver,
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+      setInterval: () => 0,
+      clearInterval: () => {}
+    });
+
+    const evalResult = vm.runInContext(script, sandbox);
+    assert.ok(evalResult.discoveredModelCatalog, 'Evaluation must return discoveredModelCatalog');
+    assert.equal(evalResult.discoveredModelCatalog.totalBaseModels, 1);
+    assert.equal(windowMock.__BASE_MODELS[0].name, 'Gemini 5 Krypton');
+
+    const catalogPost = postedBodies.find(p => p.url.endsWith('/model-catalog'));
+    assert.ok(catalogPost, 'Must POST discovered catalog to /model-catalog');
+    assert.equal(catalogPost.body.totalModels, 2);
+
+    // Dynamic resolution for newly discovered model without hardcoded rules
+    assert.deepEqual(
+      { ...windowMock.__resolveNativeModelTarget('gemini-5-krypton-max') },
+      { base: 'Gemini 5 Krypton', effort: 'Max' }
+    );
+    assert.equal(
+      windowMock.__resolveModelIdFromNativeText('Gemini 5 Krypton (Max)'),
+      'gemini-5-krypton-max'
+    );
+  });
+
+  it('tools/hooks/model-catalog-hook.py outputs valid SessionStart hook JSON and CLI inspect summary', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-hook-catalog-test-'));
+    const catalogPath = path.join(tmpDir, 'model_catalog.json');
+    fs.writeFileSync(
+      catalogPath,
+      JSON.stringify({
+        source: 'native-react-context',
+        updatedAt: Date.now(),
+        baseModels: [
+          {
+            name: 'Gemini 4 Neon',
+            family: 'Neon',
+            efforts: [
+              { id: 'gemini-4-neon-low', label: 'Low' },
+              { id: 'gemini-4-neon-high', label: 'High' },
+              { id: 'gemini-4-neon-xhigh', label: 'XHigh' }
+            ]
+          }
+        ],
+        disabledModels: [
+          { id: 'gemini-4-carbon-disabled', name: 'Gemini 4 Carbon', tagTitle: 'Unavailable' }
+        ]
+      }),
+      'utf-8'
+    );
+
+    try {
+      const hookScript = path.resolve('tools/hooks/model-catalog-hook.py');
+      const hookOut = execFileSync('python', [hookScript, '--catalog-path', catalogPath], {
+        input: JSON.stringify({ conversationId: 'test-conv', hookEventName: 'SessionStart' }),
+        encoding: 'utf-8'
+      });
+      const parsed = JSON.parse(hookOut);
+      assert.ok(Array.isArray(parsed.injectSteps) && parsed.injectSteps.length === 1);
+      const msg = parsed.injectSteps[0].systemMessage.systemMessage;
+      assert.ok(msg.includes('[LIVE MODEL CATALOG & EFFORTS]'));
+      assert.ok(msg.includes('Gemini 4 Neon: [Low, High, XHigh]'));
+      assert.ok(msg.includes('Gemini 4 Carbon (Unavailable)'));
+
+      const inspectOut = execFileSync('python', [hookScript, '--inspect', '--catalog-path', catalogPath], {
+        encoding: 'utf-8'
+      });
+      assert.ok(inspectOut.includes('Gemini 4 Neon: [Low, High, XHigh]'));
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('groupBaseModelsIntoPacks packages 9 base models into 4 compact packs and only expands active pack', () => {
+    const packs = groupBaseModelsIntoPacks(BASE_MODELS);
+    assert.equal(packs.length, 4, 'Expected 4 packaged family groups');
+    assert.deepEqual(packs.map(p => p.id), ['gemini', 'claude', 'openai-oss', 'orchestrators']);
+
+    const geminiPack = packs.find(p => p.id === 'gemini');
+    assert.equal(geminiPack.models.length, 4);
+    assert.deepEqual(geminiPack.models.map(m => m.compactName), ['4 Neon', '4 Argon', '4 Hydrogen', '3.8 Flash']);
+
+    const html = renderModelSlotDropdownHtml('planner', 'claude-opus-5-5-high', BASE_MODELS, { lockNative: true });
+    assert.ok(html.includes('class="model-pack expanded has-active" data-pack-id="claude"'), 'Only active pack must start expanded');
+    assert.ok(html.includes('class="model-pack" data-pack-id="gemini"'), 'Inactive packs must start collapsed');
+    assert.ok(html.includes('id="antigravity-model-lock-toggle"'), 'Planner dropdown must render sync status/action button');
+    assert.ok(html.includes('Chat Synced'), 'Sync button must display synced state by default');
+
+    const desyncedHtml = renderModelSlotDropdownHtml('planner', 'claude-opus-5-5-high', BASE_MODELS, { lockNative: false });
+    assert.ok(desyncedHtml.includes('Sync Planner'), 'Desynced dropdown must display Sync Planner action');
+    assert.ok(desyncedHtml.includes('model-slot-lock-toggle desynced'), 'Desynced dropdown button must include desynced class');
+
+    const builderHtml = renderModelSlotDropdownHtml('builder', 'gemini-4-neon-high', BASE_MODELS);
+    assert.ok(!builderHtml.includes('id="antigravity-model-lock-toggle"'), 'Builder dropdown must not render chat sync toggle');
+  });
+
+  it('ModLoader soft-locks native chat selector, allows manual override breaking sync without altering Planner, and resyncs via Sync button', () => {
+    const loader = new ModLoader();
+    const script = loader.buildInjectionPayload({});
+
+    const setSelectedCalls = [];
+    const neonHighOpt = { modelId: 'gemini-4-neon-high', label: 'Gemini 4 Neon (High)', value: 1532, disabled: false };
+    const flashHighOpt = { modelId: 'gemini-3.8-flash-high', label: 'Gemini 3.8 Flash (High)', value: 1318, disabled: false };
+    const opusHighOpt = { modelId: 'claude-opus-5-5-high', label: 'Claude Opus 5.5 (High)', value: 1410, disabled: false };
+    const ctxValue = {
+      selectedModel: flashHighOpt,
+      modelOptions: [neonHighOpt, flashHighOpt, opusHighOpt],
+      setSelectedModel(opt) {
+        setSelectedCalls.push(opt);
+        ctxValue.selectedModel = opt;
+        triggerEl.textContent = opt.label;
+      },
+      groups: []
+    };
+
+    function createSimpleEl(tag, initAttrs = {}, parent = null) {
+      const attrs = new Map(Object.entries(initAttrs));
+      const classes = new Set((initAttrs.class || '').split(/\s+/).filter(Boolean));
+      const el = {
+        tagName: tag.toUpperCase(),
+        nodeType: 1,
+        parentElement: parent,
+        children: [],
+        style: {},
+        textContent: '',
+        hidden: false,
+        _innerHTML: '',
+        setAttribute(k, v) {
+          attrs.set(k, String(v));
+          if (k === 'class') {
+            classes.clear();
+            String(v).split(/\s+/).filter(Boolean).forEach(c => classes.add(c));
+          }
+        },
+        getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+        hasAttribute(k) { return attrs.has(k); },
+        removeAttribute(k) { attrs.delete(k); },
+        appendChild(child) { child.parentElement = el; el.children.push(child); return child; },
+        prepend(child) { child.parentElement = el; el.children.unshift(child); return child; },
+        after(child) {
+          if (!el.parentElement) return;
+          const idx = el.parentElement.children.indexOf(el);
+          child.parentElement = el.parentElement;
+          el.parentElement.children.splice(idx + 1, 0, child);
+        },
+        closest(sel) {
+          const parts = sel.split(',').map(s => s.trim());
+          let cur = el;
+          while (cur) {
+            for (const s of parts) {
+              if (s.includes('model-selector-trigger') && cur.getAttribute('data-testid') === 'model-selector-trigger') return cur;
+              if (s === '.flex.items-center' && cur.classList.contains('flex') && cur.classList.contains('items-center')) return cur;
+              if (s.startsWith('.') && cur.classList.contains(s.slice(1))) return cur;
+              if (s.startsWith('#') && cur.getAttribute('id') === s.slice(1)) return cur;
+            }
+            cur = cur.parentElement;
+          }
+          return null;
+        },
+        querySelectorAll(sel) {
+          const out = [];
+          const parts = sel.split(',').map(s => s.trim());
+          const match = (n, s) => {
+            if (s === 'button[data-testid="model-selector-trigger"]') return n.tagName === 'BUTTON' && n.getAttribute('data-testid') === 'model-selector-trigger';
+            if (s === '.antigravity-model-slot-btn[data-slot-role="planner"]') return n.classList.contains('antigravity-model-slot-btn') && n.getAttribute('data-slot-role') === 'planner';
+            if (s.startsWith('#')) return n.getAttribute('id') === s.slice(1);
+            if (s.startsWith('.')) return s.slice(1).split('.').every(c => n.classList.contains(c));
+            return false;
+          };
+          const walk = (node) => {
+            for (const c of node.children) {
+              if (parts.some(s => match(c, s))) out.push(c);
+              walk(c);
+            }
+          };
+          walk(el);
+          return out;
+        },
+        querySelector(sel) { return el.querySelectorAll(sel)[0] || null; },
+        addEventListener() {},
+        removeEventListener() {},
+        getBoundingClientRect() { return { top: 0, bottom: 20, left: 0, width: 100, height: 20 }; },
+        classList: {
+          add(c) { classes.add(c); },
+          remove(c) { classes.delete(c); },
+          contains(c) { return classes.has(c); },
+          toggle(c, force) {
+            if (force === undefined) {
+              if (classes.has(c)) { classes.delete(c); return false; }
+              classes.add(c); return true;
+            }
+            if (force) { classes.add(c); return true; }
+            classes.delete(c); return false;
+          }
+        }
+      };
+      Object.defineProperty(el, 'firstElementChild', { get() { return el.children[0] || null; } });
+      Object.defineProperty(el, 'innerHTML', {
+        get() { return el._innerHTML; },
+        set(val) {
+          el._innerHTML = String(val);
+          el.children = [];
+          if (el._innerHTML.includes('chat-planner-sync-label')) {
+            const span = createSimpleEl('span', { class: 'chat-planner-sync-label' }, el);
+            span.textContent = 'Sync Plan';
+            el.children.push(span);
+          }
+        }
+      });
+      return el;
+    }
+
+    const body = createSimpleEl('body');
+    const head = createSimpleEl('head');
+    const docEl = createSimpleEl('html');
+    docEl.appendChild(head);
+    docEl.appendChild(body);
+
+    const chatRow = createSimpleEl('div', { class: 'flex items-center' }, body);
+    const triggerEl = createSimpleEl('button', { 'data-testid': 'model-selector-trigger' }, chatRow);
+    triggerEl.textContent = 'Gemini 3.8 Flash (High)';
+    const legacyGuardFn = () => {};
+    let removedLegacyListeners = 0;
+    triggerEl.__antigravityLockGuard = legacyGuardFn;
+    triggerEl.removeEventListener = (type, fn, capture) => {
+      if (capture && fn === legacyGuardFn) removedLegacyListeners++;
+    };
+    const triggerCaptureListeners = {};
+    triggerEl.addEventListener = (type, fn, capture) => {
+      if (capture) triggerCaptureListeners[type] = fn;
+    };
+    triggerEl.__reactFiber$locktest = {
+      return: { memoizedProps: { value: ctxValue }, return: null }
+    };
+    const headerActionsSlot = createSimpleEl('div', { id: 'antigravity-slot-header-actions', class: 'antigravity-slot-container antigravity-slot-header-actions' }, chatRow);
+    chatRow.appendChild(triggerEl);
+    chatRow.appendChild(headerActionsSlot);
+    body.appendChild(chatRow);
+
+    const menubarPlannerBtn = createSimpleEl('button', { id: 'antigravity-model-slot-planner', class: 'antigravity-model-slot-btn', 'data-slot-role': 'planner', 'data-model-id': 'gemini-4-neon-high' }, body);
+    const menubarSyncBtn = createSimpleEl('button', { id: 'antigravity-planner-sync-btn', class: 'antigravity-planner-sync-btn is-synced', 'data-sync-state': 'synced', 'aria-pressed': 'true' }, body);
+    body.appendChild(menubarPlannerBtn);
+    body.appendChild(menubarSyncBtn);
+
+    const observers = [];
+    class MockMutationObserver {
+      constructor(cb) { this.cb = cb; observers.push(this); }
+      observe(target) { this.target = target; }
+      disconnect() {}
+    }
+
+    let docClickHandler = null;
+    const documentMock = {
+      head,
+      body,
+      documentElement: docEl,
+      getElementById(id) { return docEl.querySelector(`#${id}`); },
+      querySelector(sel) { return docEl.querySelector(sel); },
+      querySelectorAll(sel) { return docEl.querySelectorAll(sel); },
+      createElement(tag) { return createSimpleEl(tag); },
+      addEventListener(type, fn, capture) { if (type === 'click' && capture) docClickHandler = fn; },
+      removeEventListener() {}
+    };
+
+    const windowMock = {
+      location: { pathname: '/', search: '' },
+      innerWidth: 1280,
+      document: documentMock,
+      ResizeObserver: class { observe() {} disconnect() {} },
+      MutationObserver: MockMutationObserver
+    };
+    windowMock.window = windowMock;
+
+    const store = new Map([
+      ['__antigravity_model_slots', JSON.stringify({ planner: 'gemini-4-neon-high', builder: 'gemini-3.8-flash-medium', lockNative: true })]
+    ]);
+    const sandbox = vm.createContext({
+      window: windowMock,
+      document: documentMock,
+      localStorage: {
+        getItem(k) { return store.has(k) ? store.get(k) : null; },
+        setItem(k, v) { store.set(k, String(v)); },
+        removeItem(k) { store.delete(k); }
+      },
+      fetch: () => Promise.resolve({ ok: true, json: async () => ({}) }),
+      ResizeObserver: windowMock.ResizeObserver,
+      MutationObserver: MockMutationObserver,
+      setTimeout: (fn) => { fn(); return 1; },
+      clearTimeout: () => {},
+      setInterval: () => 0,
+      clearInterval: () => {}
+    });
+
+    vm.runInContext(script, sandbox);
+
+    // 1. Soft-lock on boot: enforces Planner model, removes legacy blocker, never sets aria-disabled or blocks clicks
+    assert.equal(removedLegacyListeners, 4, 'Must remove any legacy capture-phase blocking listeners');
+    assert.equal(Object.keys(triggerCaptureListeners).length, 0, 'Must NOT install capture-phase click blocker on native trigger');
+    assert.equal(triggerEl.getAttribute('data-antigravity-locked'), 'true');
+    assert.equal(triggerEl.getAttribute('data-antigravity-sync'), 'synced');
+    assert.equal(triggerEl.hasAttribute('aria-disabled'), false, 'Native trigger must remain accessible and clickable');
+    assert.ok(triggerEl.classList.contains('antigravity-native-model-locked'));
+    assert.equal(setSelectedCalls.length, 1);
+    assert.equal(setSelectedCalls[0].modelId, 'gemini-4-neon-high');
+
+    // Inline chat sync button exists inside #antigravity-slot-header-actions but is hidden while synced
+    const chatSyncBtn = headerActionsSlot.querySelector('.antigravity-chat-planner-sync-btn');
+    assert.ok(chatSyncBtn, 'Inline chatbox Sync Plan button must be mounted inside header-actions slot');
+    assert.equal(chatSyncBtn.hidden, true, 'Inline chatbox Sync Plan button must stay hidden while synced');
+    assert.equal(menubarSyncBtn.getAttribute('data-sync-state'), 'synced');
+
+    // 2. User manually picks Claude Opus 5.5 (High) in the chatbox native selector -> breaks sync without altering Planner
+    ctxValue.selectedModel = opusHighOpt;
+    triggerEl.textContent = 'Claude Opus 5.5 (High)';
+    const nativeObs = observers.find(o => o.target === triggerEl);
+    assert.ok(nativeObs, 'MutationObserver must watch native trigger');
+    nativeObs.cb([]);
+
+    const afterOverride = JSON.parse(store.get('__antigravity_model_slots'));
+    assert.equal(afterOverride.planner, 'gemini-4-neon-high', 'Planner slot must NOT be overwritten');
+    assert.equal(afterOverride.lockNative, false);
+    assert.equal(afterOverride.plannerSyncBroken, true);
+    assert.equal(afterOverride.nativeOverrideModel, 'claude-opus-5-5-high');
+    assert.equal(ctxValue.selectedModel.modelId, 'claude-opus-5-5-high', 'Chatbox must stay on manually chosen model (no snap-back)');
+    assert.equal(setSelectedCalls.length, 1, 'Must NOT snap native selector back while sync is broken');
+
+    assert.equal(triggerEl.classList.contains('antigravity-native-model-locked'), false);
+    assert.equal(triggerEl.classList.contains('antigravity-native-model-desynced'), true);
+    assert.equal(triggerEl.getAttribute('data-antigravity-sync'), 'desynced');
+    assert.equal(menubarSyncBtn.getAttribute('data-sync-state'), 'desynced');
+    assert.equal(menubarSyncBtn.getAttribute('aria-pressed'), 'false');
+    assert.equal(menubarPlannerBtn.classList.contains('is-desynced'), true);
+    assert.equal(chatSyncBtn.hidden, false, 'Inline chatbox Sync Plan button must become visible when sync is broken');
+    assert.equal(chatSyncBtn.classList.contains('is-desynced'), true);
+
+    // 3. Clicking the inline chatbox Sync Plan button re-synchronizes chatbox back to Planner model
+    assert.equal(typeof docClickHandler, 'function', 'Delegated click handler must be registered');
+    docClickHandler({ target: chatSyncBtn, preventDefault() {}, stopPropagation() {} });
+
+    const afterResync = JSON.parse(store.get('__antigravity_model_slots'));
+    assert.equal(afterResync.lockNative, true);
+    assert.equal(afterResync.plannerSyncBroken, false);
+    assert.equal(afterResync.nativeOverrideModel, null);
+    assert.equal(ctxValue.selectedModel.modelId, 'gemini-4-neon-high', 'Sync button must restore Planner model in native chatbox');
+    assert.equal(setSelectedCalls.length, 2);
+    assert.equal(triggerEl.getAttribute('data-antigravity-sync'), 'synced');
+    assert.equal(chatSyncBtn.hidden, true, 'Inline chatbox Sync Plan button must hide again once synced');
+    assert.equal(menubarSyncBtn.getAttribute('data-sync-state'), 'synced');
+    assert.equal(menubarSyncBtn.getAttribute('aria-pressed'), 'true');
+    assert.equal(menubarPlannerBtn.classList.contains('is-desynced'), false);
+
+    // 4. Break sync again, then restore via menubar Sync button
+    ctxValue.selectedModel = flashHighOpt;
+    triggerEl.textContent = 'Gemini 3.8 Flash (High)';
+    nativeObs.cb([]);
+    assert.equal(menubarSyncBtn.getAttribute('data-sync-state'), 'desynced');
+
+    docClickHandler({ target: menubarSyncBtn, preventDefault() {}, stopPropagation() {} });
+    assert.equal(ctxValue.selectedModel.modelId, 'gemini-4-neon-high', 'Menubar sync button must restore Planner model');
+    assert.equal(menubarSyncBtn.getAttribute('data-sync-state'), 'synced');
+  });
+
+  it('StyleIsolator preserves desynced trigger and inline chat sync button selectors without root prefix', () => {
+    const rawCss = `
+      button[data-testid="model-selector-trigger"].antigravity-native-model-desynced { border: 1px solid #f59e0b; }
+      .antigravity-chat-planner-sync-btn { display: none; }
+    `;
+    const scoped = StyleIsolator.scopeCss(rawCss, '#antigravity-mod-model-slots');
+    assert.ok(!scoped.includes('#antigravity-mod-model-slots button[data-testid="model-selector-trigger"].antigravity-native-model-desynced'));
+    assert.ok(!scoped.includes('#antigravity-mod-model-slots .antigravity-chat-planner-sync-btn'));
+    assert.ok(scoped.includes('antigravity-native-model-desynced'));
+    assert.ok(scoped.includes('.antigravity-chat-planner-sync-btn'));
+  });
+
+  it('styles.css omits the LOCKED ::after badge while preserving the locked trigger state rule', () => {
+    const css = fs.readFileSync(path.resolve('mods/model-slots/styles.css'), 'utf-8');
+    assert.ok(
+      css.includes('button[data-testid="model-selector-trigger"].antigravity-native-model-locked {'),
+      'Must preserve locked trigger styling rule'
+    );
+    assert.equal(
+      css.includes('antigravity-native-model-locked::after'),
+      false,
+      'Must not define ::after pseudo-element badge on locked native model selector'
+    );
+    assert.equal(
+      /content\s*:\s*["']LOCKED["']/i.test(css),
+      false,
+      'Must not inject LOCKED text badge via CSS content'
+    );
+  });
+});
+
+describe('Dual-Slot Swarm Enforcement & Permission Guard Hooks', () => {
+  it('context-tracker.py injects swarm Warm Builder rules, falls back when builder is disabled, and suppresses rules for child workers', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-dual-slot-tracker-'));
+    const slotsPath = path.join(tmpDir, 'model_slots.json');
+    const catalogPath = path.join(tmpDir, 'model_catalog.json');
+    const parentTranscript = path.join(tmpDir, 'parent_transcript.jsonl');
+    const childTranscript = path.join(tmpDir, 'child_transcript.jsonl');
+    const msgChildTranscript = path.join(tmpDir, 'msg_child_transcript.jsonl');
+    const trackerScript = path.resolve('tools/hooks/context-tracker.py');
+
+    try {
+      fs.writeFileSync(
+        slotsPath,
+        JSON.stringify({
+          planner: 'gemini-pro-orchestrator-g1-pro',
+          builder: 'gemini-3.8-flash-medium',
+          enabled: true
+        }),
+        'utf-8'
+      );
+      fs.writeFileSync(
+        catalogPath,
+        JSON.stringify({
+          baseModels: [],
+          modelCatalog: [],
+          disabledModels: [
+            { id: 'gemini-4-carbon-disabled', name: 'Gemini 4 Carbon', tagTitle: 'Unavailable' }
+          ]
+        }),
+        'utf-8'
+      );
+      fs.writeFileSync(
+        parentTranscript,
+        JSON.stringify({
+          step_index: 0,
+          source: 'USER_EXPLICIT',
+          type: 'USER_INPUT',
+          content: '<USER_REQUEST>\nimplementa el modulo de pagos\n</USER_REQUEST>'
+        }) + '\n',
+        'utf-8'
+      );
+
+      const env = {
+        ...process.env,
+        ANTIGRAVITY_MODEL_SLOTS_PATH: slotsPath,
+        ANTIGRAVITY_MODEL_CATALOG_PATH: catalogPath
+      };
+
+      // 1. Parent session receives swarm Warm Builder directive
+      const parentOut = execFileSync('python', [trackerScript], {
+        input: JSON.stringify({ conversationId: 'test-parent-conv', transcriptPath: parentTranscript }),
+        encoding: 'utf-8',
+        env
+      });
+      const parentJson = JSON.parse(parentOut);
+      const msgs = (parentJson.injectSteps || []).map(s => s.ephemeralMessage || '').join('\n');
+      assert.ok(msgs.includes('[DUAL-SLOT MODEL GOVERNANCE: PLANNER & BUILDER]'), 'Must inject Dual-Slot governance header');
+      assert.ok(msgs.includes('NEVER use `invoke_subagent`'), 'Must forbid invoke_subagent');
+      assert.ok(
+        msgs.includes('swarm(action="add", name="builder", model="gemini-3.8-flash-medium"'),
+        'Must instruct exact swarm Warm Builder call'
+      );
+
+      // 2. Disabled builder model falls back to gemini-3.8-flash-medium
+      fs.writeFileSync(
+        slotsPath,
+        JSON.stringify({
+          planner: 'gemini-pro-orchestrator-g1-pro',
+          builder: 'gemini-4-carbon-disabled',
+          enabled: true
+        }),
+        'utf-8'
+      );
+      const fallbackOut = execFileSync('python', [trackerScript], {
+        input: JSON.stringify({ conversationId: 'test-parent-conv', transcriptPath: parentTranscript }),
+        encoding: 'utf-8',
+        env
+      });
+      const fallbackMsgs = (JSON.parse(fallbackOut).injectSteps || []).map(s => s.ephemeralMessage || '').join('\n');
+      assert.ok(
+        fallbackMsgs.includes('swarm(action="add", name="builder", model="gemini-3.8-flash-medium"'),
+        'Disabled builder model must fall back to gemini-3.8-flash-medium'
+      );
+
+      // 3. Child worker transcripts (<swarm_worker> and [Message] sender=) receive worker role without orchestration rules
+      fs.writeFileSync(
+        childTranscript,
+        JSON.stringify({
+          step_index: 0,
+          source: 'SYSTEM',
+          type: 'SYSTEM_MESSAGE',
+          content: '<swarm_worker>You are builder.</swarm_worker>'
+        }) + '\n',
+        'utf-8'
+      );
+      const childOut = execFileSync('python', [trackerScript], {
+        input: JSON.stringify({ conversationId: 'test-child-conv', transcriptPath: childTranscript }),
+        encoding: 'utf-8',
+        env
+      });
+      const childMsgs = (JSON.parse(childOut).injectSteps || []).map(s => s.ephemeralMessage || '').join('\n');
+      assert.ok(childMsgs.includes('[ROLE: BUILDER WORKER]'), 'Child worker must receive BUILDER WORKER role');
+      assert.ok(!childMsgs.includes('ORCHESTRATION RULES:'), 'Child worker must NOT receive Planner orchestration rules');
+
+      fs.writeFileSync(
+        msgChildTranscript,
+        JSON.stringify({
+          step_index: 0,
+          source: 'SYSTEM',
+          type: 'SYSTEM_MESSAGE',
+          content: '[Message] timestamp=2026-11-19T00:00:00Z sender=parent-conv content=Do tactical edit'
+        }) + '\n',
+        'utf-8'
+      );
+      const msgChildOut = execFileSync('python', [trackerScript], {
+        input: JSON.stringify({ conversationId: 'test-child-msg-conv', transcriptPath: msgChildTranscript }),
+        encoding: 'utf-8',
+        env
+      });
+      const msgChildMsgs = (JSON.parse(msgChildOut).injectSteps || []).map(s => s.ephemeralMessage || '').join('\n');
+      assert.ok(msgChildMsgs.includes('[ROLE: BUILDER WORKER]'), 'Message-dispatched child must receive BUILDER WORKER role');
+      assert.ok(!msgChildMsgs.includes('ORCHESTRATION RULES:'), 'Message-dispatched child must NOT receive orchestration rules');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('permission-guard.py blocks invoke_subagent, enforces exact Builder model on swarm, allows helpers and disabled mode', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-dual-slot-guard-'));
+    const slotsPath = path.join(tmpDir, 'model_slots.json');
+    const catalogPath = path.join(tmpDir, 'model_catalog.json');
+    const activeAgentsPath = path.join(tmpDir, 'active_agents.json');
+    const guardScript = path.resolve('tools/hooks/permission-guard.py');
+
+    const runGuard = (toolName, args) => {
+      const out = execFileSync('python', [guardScript], {
+        input: JSON.stringify({
+          conversationId: 'test-guard-conv',
+          toolCall: { name: toolName, args }
+        }),
+        encoding: 'utf-8',
+        env: {
+          ...process.env,
+          ANTIGRAVITY_MODEL_SLOTS_PATH: slotsPath,
+          ANTIGRAVITY_MODEL_CATALOG_PATH: catalogPath,
+          ANTIGRAVITY_ACTIVE_AGENTS_PATH: activeAgentsPath
+        }
+      });
+      return JSON.parse(out);
+    };
+
+    try {
+      fs.writeFileSync(
+        slotsPath,
+        JSON.stringify({
+          planner: 'gemini-pro-orchestrator-g1-pro',
+          builder: 'claude-sonnet-5-5-high',
+          enabled: true
+        }),
+        'utf-8'
+      );
+      fs.writeFileSync(catalogPath, JSON.stringify({ baseModels: [], modelCatalog: [], disabledModels: [] }), 'utf-8');
+      fs.writeFileSync(activeAgentsPath, JSON.stringify({}), 'utf-8');
+
+      // 1. Denies invoke_subagent and cites active Builder model
+      const denySubagent = runGuard('invoke_subagent', { TypeName: 'self', Model: 'flash', Prompt: 'fix bug' });
+      assert.equal(denySubagent.decision, 'deny');
+      assert.ok(denySubagent.reason.includes('claude-sonnet-5-5-high'), 'Deny reason must mention exact builder id');
+
+      // 2. Denies swarm add without model
+      const denyMissingModel = runGuard('swarm', { action: 'add', name: 'builder', brief: 'do work' });
+      assert.equal(denyMissingModel.decision, 'deny');
+      assert.ok(denyMissingModel.reason.includes('claude-sonnet-5-5-high'));
+
+      // 3. Denies swarm add with wrong model
+      const denyWrongModel = runGuard('swarm', {
+        action: 'add',
+        name: 'builder',
+        model: 'gemini-4-neon-low',
+        brief: 'do work'
+      });
+      assert.equal(denyWrongModel.decision, 'deny');
+      assert.ok(denyWrongModel.reason.includes('claude-sonnet-5-5-high'));
+
+      // 4. Allows swarm add with exact Builder model
+      const allowExactSwarm = runGuard('swarm', {
+        action: 'add',
+        name: 'builder',
+        model: 'claude-sonnet-5-5-high',
+        brief: 'do work'
+      });
+      assert.equal(allowExactSwarm.decision, 'allow');
+
+      // 5. Allows swarm add for system helper narrator without model
+      const allowNarrator = runGuard('swarm', {
+        action: 'add',
+        name: 'narrator',
+        brief: 'narrate swarm'
+      });
+      assert.equal(allowNarrator.decision, 'allow');
+
+      // 6. Allows invoke_subagent when Dual-Slot Governance is disabled
+      fs.writeFileSync(
+        slotsPath,
+        JSON.stringify({
+          planner: 'gemini-pro-orchestrator-g1-pro',
+          builder: 'claude-sonnet-5-5-high',
+          enabled: false
+        }),
+        'utf-8'
+      );
+      const allowWhenDisabled = runGuard('invoke_subagent', { TypeName: 'self', Model: 'flash', Prompt: 'fix bug' });
+      assert.equal(allowWhenDisabled.decision, 'allow');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ModLoader __getSubagentBadges and __syncSubagentModelBadges recognize swarm and builder badges', () => {
+    const loader = new ModLoader();
+    const script = loader.buildInjectionPayload({
+      modelSlots: {
+        planner: 'gemini-4-argon-high',
+        builder: 'gemini-3.8-flash-medium'
+      }
+    });
+
+    assert.ok(script.includes('[data-swarm-worker]'), 'Payload must query [data-swarm-worker]');
+    assert.ok(script.includes('(self|swarm|builder)'), 'Payload must match self, swarm, or builder spans case-insensitively');
   });
 });

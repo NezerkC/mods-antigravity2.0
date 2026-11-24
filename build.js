@@ -97,6 +97,15 @@ async function build() {
     .replace(/const __dirname = .*?;/, '')
     .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(modelSlotsCss)};`);
 
+  // 8. Read Pit Wall Mod sources
+  const pitWallHtml = cleanModuleCode('mods/pit-wall/components/PitWallHtml.js');
+  const pitWallCss = fs.readFileSync(path.resolve('mods/pit-wall/styles.css'), 'utf-8');
+
+  const pitWallIndex = cleanModuleCode('mods/pit-wall/index.js')
+    .replace(/const __filename = .*?;/, '')
+    .replace(/const __dirname = .*?;/, '')
+    .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(pitWallCss)};`);
+
   // 8. Assemble Standalone Bundle
   const bundle = `// Antigravity Mod Framework Runtime Host (Bundle)
 import http from 'node:http';
@@ -180,6 +189,11 @@ ${modelSlotsHtml}
 
 ${modelSlotsIndex}
 
+// ======================= Pit Wall Mod ========================
+${pitWallHtml}
+
+${pitWallIndex}
+
 // ======================= Entrypoint Execution =======================
 async function main() {
   try {
@@ -188,6 +202,7 @@ async function main() {
     host.registerMod(new AgentSelectorMod());
     host.registerMod(new ModsManagerMod());
     host.registerMod(new ModelSlotsMod());
+    host.registerMod(new PitWallMod());
 
     // Lazy VCS: Avoid running 20+ git/gh processes synchronously on every hook execution.
     // Full VCS overview will be fetched on demand by GitGraph via the local HTTP bridge.
@@ -230,9 +245,32 @@ main();
 
   fs.writeFileSync(targetLoader, bundle, 'utf-8');
   fs.writeFileSync(targetLegacy, bundle, 'utf-8');
+
+  // Deploy lifecycle hooks alongside runtime bundle
+  const hooksDir = path.resolve('tools/hooks');
+  const deployedHooks = [];
+  for (const hookFile of ['context-tracker.py', 'model-catalog-hook.py']) {
+    const srcHook = path.join(hooksDir, hookFile);
+    if (fs.existsSync(srcHook)) {
+      const dstHook = path.join(targetDir, hookFile);
+      fs.copyFileSync(srcHook, dstHook);
+      deployedHooks.push(dstHook);
+    }
+  }
+  const modelCatalogCmdPath = path.join(targetDir, 'model-catalog-hook.cmd');
+  fs.writeFileSync(
+    modelCatalogCmdPath,
+    `@echo off\r\npython "${path.join(targetDir, 'model-catalog-hook.py')}" %*\r\n`,
+    'utf-8'
+  );
+  deployedHooks.push(modelCatalogCmdPath);
+
   console.log('🚀 Deployed successfully to ~/.gemini/config/mods/:');
   console.log('   - ', targetLoader);
   console.log('   - ', targetLegacy);
+  for (const h of deployedHooks) {
+    console.log('   - ', h);
+  }
 }
 
 build().catch(err => {

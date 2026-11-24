@@ -157,6 +157,28 @@ export function renderModsManagerPanelHtml() {
         </label>
       </div>
 
+      <!-- Mod Card: Pit Wall Analytics -->
+      <div class="mod-card">
+        <div class="mod-info">
+          <div class="mod-icon-box slots-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 3v18h18"></path>
+              <rect x="7" y="10" width="3" height="7" rx="1"></rect>
+              <rect x="12" y="6" width="3" height="11" rx="1"></rect>
+              <rect x="17" y="13" width="3" height="4" rx="1"></rect>
+            </svg>
+          </div>
+          <div class="mod-text">
+            <div class="mod-title">Pit Wall Analytics</div>
+            <div class="mod-desc">Dashboard de rachas, horas trabajadas, consistencia y costos API en el menubar.</div>
+          </div>
+        </div>
+        <label class="mod-switch">
+          <input type="checkbox" id="mod-toggle-pit-wall" data-mod="pit-wall" checked>
+          <span class="mod-slider"></span>
+        </label>
+      </div>
+
       <!-- Mod Card: Background Persistence (Daemon Kill-Switch) -->
       <div class="mod-card daemon-card">
         <div class="mod-info">

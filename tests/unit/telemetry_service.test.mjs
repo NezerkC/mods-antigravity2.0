@@ -128,12 +128,21 @@ test('TelemetryService - tracks multi-model state machine per chat and calculate
     assert.ok(flashEntry);
     assert.ok(argonEntry);
     assert.equal(flashEntry.hasDualLimit, true);
+    assert.equal(flashEntry.color, '#fbbf24');
+    assert.equal(flashEntry.poolId, 'gemini_unified');
     assert.ok(flashEntry.tokens >= 30000);
     assert.equal(flashEntry.chatRollingPct, 10);
 
     assert.equal(argonEntry.hasDualLimit, false);
+    assert.equal(argonEntry.color, '#38bdf8');
+    assert.equal(argonEntry.poolId, 'argon_weekly');
     assert.ok(argonEntry.tokens >= 50000);
     assert.equal(argonEntry.chatWeeklyPct, 10);
+
+    // Waffle grid & 3-pool summary enrichment
+    assert.equal(snapshot.waffleCells.length, 100);
+    assert.equal(snapshot.poolsSummary.length, 3);
+    assert.deepEqual(snapshot.poolsSummary.map(p => p.id), ['gemini_unified', 'argon_weekly', 'third_party']);
 
     // Active model at end of chat is Gemini 4 Argon (Medium)
     assert.equal(snapshot.modelQuota.hasDualLimit, false);
