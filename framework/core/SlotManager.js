@@ -121,6 +121,15 @@ export class SlotManager {
         let anchorEntries = Array.from(document.querySelectorAll('${slot.selector}'))
           .map(anchor => ({ anchor, strategy: '${slot.strategy}' }));
 
+        if (!anchorEntries.length && '${slotId}' === 'menubar-actions') {
+          const menubar = document.querySelector('.shrink-0.bg-sidebar .flex.items-center.bg-sidebar') ||
+                          document.querySelector('.shrink-0 .flex.items-center.bg-sidebar') ||
+                          document.querySelector('.shrink-0.bg-sidebar');
+          if (menubar) {
+            anchorEntries = [{ anchor: menubar, strategy: '${slot.strategy}' }];
+          }
+        }
+
         if (!anchorEntries.length && '${slotId}' === 'aux-pane-tab') {
           const sidePanelNewTabBtns = Array.from(document.querySelectorAll('button[data-testid="side-panel-new-tab-button"]'));
           if (sidePanelNewTabBtns.length) {

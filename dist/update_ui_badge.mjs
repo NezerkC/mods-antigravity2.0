@@ -521,6 +521,15 @@ class SlotManager {
         let anchorEntries = Array.from(document.querySelectorAll('${slot.selector}'))
           .map(anchor => ({ anchor, strategy: '${slot.strategy}' }));
 
+        if (!anchorEntries.length && '${slotId}' === 'menubar-actions') {
+          const menubar = document.querySelector('.shrink-0.bg-sidebar .flex.items-center.bg-sidebar') ||
+                          document.querySelector('.shrink-0 .flex.items-center.bg-sidebar') ||
+                          document.querySelector('.shrink-0.bg-sidebar');
+          if (menubar) {
+            anchorEntries = [{ anchor: menubar, strategy: '${slot.strategy}' }];
+          }
+        }
+
         if (!anchorEntries.length && '${slotId}' === 'aux-pane-tab') {
           const sidePanelNewTabBtns = Array.from(document.querySelectorAll('button[data-testid="side-panel-new-tab-button"]'));
           if (sidePanelNewTabBtns.length) {
@@ -772,7 +781,13 @@ class StyleIsolator {
             sel.startsWith('.antigravity-agent-item') ||
             sel.startsWith('.model-slot-') ||
             sel.startsWith('.model-effort-') ||
+            sel.startsWith('.model-pack') ||
+            sel.startsWith('.pit-wall-') ||
+            sel.includes('antigravity-pit-wall') ||
             sel.includes('antigravity-subagent-model') ||
+            sel.includes('antigravity-native-model-locked') ||
+            sel.includes('antigravity-native-model-desynced') ||
+            sel.includes('antigravity-chat-planner-sync-btn') ||
             sel.startsWith('body') ||
             sel.startsWith(':root')
           ) {
@@ -866,6 +881,7 @@ class AntigravityMod {
 
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 
 
 
@@ -1248,6 +1264,13 @@ class ModLoader {
           }
           document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
 
+          const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+          if (pwPortal) {
+            pwPortal.classList.remove('open');
+            pwPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+
           document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
           portal.classList.remove('open');
           portal.__currentBadge = null;
@@ -1532,6 +1555,8 @@ class ModLoader {
         window.__resolveNativeQuotaForModel = ${resolveNativeQuotaForModel.toString()};
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
         window.__renderModsManagerPanelHtml = ${renderModsManagerPanelHtml.toString()};
+        window.__renderPitWallModalHtml = ${renderPitWallModalHtml.toString()};
+        window.__antigravityPitWall = ${JSON.stringify(context.pitWall || null)};
         const renderReticleSvg = ${renderReticleSvg.toString()};
         window.__renderReticleSvg = renderReticleSvg;
 
@@ -1604,9 +1629,19 @@ class ModLoader {
           }
         };
 
-        window.__BASE_MODELS = ${JSON.stringify(BASE_MODELS)};
-        window.__MODEL_CATALOG = ${JSON.stringify(MODEL_CATALOG)};
+        window.__BASE_MODELS = ${JSON.stringify(
+          (context.modelCatalog && Array.isArray(context.modelCatalog.baseModels) && context.modelCatalog.baseModels.length > 0)
+            ? context.modelCatalog.baseModels
+            : BASE_MODELS
+        )};
+        window.__MODEL_CATALOG = ${JSON.stringify(
+          (context.modelCatalog && Array.isArray(context.modelCatalog.modelCatalog) && context.modelCatalog.modelCatalog.length > 0)
+            ? context.modelCatalog.modelCatalog
+            : MODEL_CATALOG
+        )};
         window.__DEFAULT_MODEL_SLOTS = ${JSON.stringify(DEFAULT_MODEL_SLOTS)};
+        window.__normalizeNativeModelCatalog = ${normalizeNativeModelCatalog.toString()};
+        window.__groupBaseModelsIntoPacks = ${groupBaseModelsIntoPacks.toString()};
         window.__antigravitySubagentSessionSlots = Object.assign(
           window.__antigravitySubagentSessionSlots || {},
           ${JSON.stringify((context.modelSlots && context.modelSlots.sessions) ? context.modelSlots.sessions : {})}
@@ -1615,6 +1650,128 @@ class ModLoader {
         window.getModelById = window.__getModelById;
         window.__renderModelSlotDropdownHtml = ${renderModelSlotDropdownHtml.toString()};
         window.__renderSubagentModelPill = ${renderSubagentModelPill.toString()};
+
+        window.__discoverNativeModelCatalog = function(options) {
+          const opts = options || {};
+          try {
+            const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+            const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
+            if (!activeTrigger) return null;
+
+            const reactKey = Object.keys(activeTrigger).find(k => k.startsWith('__reactFiber'));
+            if (!reactKey) return null;
+
+            let cur = activeTrigger[reactKey];
+            let depth = 0;
+            let ctxValue = null;
+            while (cur && depth < 35) {
+              const val = cur.memoizedProps && cur.memoizedProps.value;
+              if (val && Array.isArray(val.modelOptions) && val.modelOptions.length > 0) {
+                ctxValue = val;
+                break;
+              }
+              cur = cur.return;
+              depth++;
+            }
+            if (!ctxValue) return null;
+
+            const rawOptions = ctxValue.modelOptions.map(m => ({
+              modelId: m.modelId || m.id || '',
+              label: m.label || m.name || '',
+              value: m.value,
+              disabled: Boolean(m.disabled),
+              tagTitle: m.tagTitle || '',
+              tagDescription: m.tagDescription || ''
+            }));
+
+            const rawGroups = Array.isArray(ctxValue.groups)
+              ? ctxValue.groups.map(g => ({
+                  groupName: g.groupName || '',
+                  options: Array.isArray(g.options)
+                    ? g.options.map(o => ({
+                        modelId: o.modelId || o.id || '',
+                        label: o.label || o.name || '',
+                        value: o.value,
+                        disabled: Boolean(o.disabled),
+                        tagTitle: o.tagTitle || '',
+                        tagDescription: o.tagDescription || ''
+                      }))
+                    : []
+                }))
+              : [];
+
+            const effortIndexObj = {};
+            const ei = ctxValue.effortIndex;
+            if (ei && typeof ei === 'object') {
+              const entries = (typeof Map === 'function' && ei instanceof Map)
+                ? Array.from(ei.entries())
+                : Object.entries(ei);
+              for (const pair of entries) {
+                const baseKey = pair[0];
+                const effList = pair[1];
+                if (typeof Map === 'function' && effList instanceof Map) {
+                  effortIndexObj[baseKey] = Array.from(effList.entries()).map(ep => ({
+                    effort: ep[0],
+                    modelId: ep[1] && (ep[1].modelId || ep[1].id) || '',
+                    label: ep[1] && (ep[1].label || ep[1].name) || '',
+                    value: ep[1] && ep[1].value,
+                    disabled: Boolean(ep[1] && ep[1].disabled)
+                  }));
+                } else if (Array.isArray(effList)) {
+                  effortIndexObj[baseKey] = effList.map(ev => ({
+                    effort: ev && (ev.effort || ev.effortLabel) || '',
+                    modelId: ev && (ev.modelId || ev.id) || '',
+                    label: ev && (ev.label || ev.name) || '',
+                    value: ev && ev.value,
+                    disabled: Boolean(ev && ev.disabled)
+                  }));
+                }
+              }
+            }
+
+            if (typeof window.__normalizeNativeModelCatalog !== 'function') return null;
+            const normalized = window.__normalizeNativeModelCatalog(rawOptions, effortIndexObj, rawGroups);
+            if (!normalized || !Array.isArray(normalized.baseModels) || normalized.baseModels.length === 0) {
+              return null;
+            }
+
+            const payload = {
+              source: 'native-react-context',
+              ...normalized,
+              discoveredAt: Date.now()
+            };
+
+            const signature = JSON.stringify({
+              models: normalized.modelCatalog.map(m => m.id),
+              disabled: normalized.disabledModels.map(m => m.id)
+            });
+
+            window.__BASE_MODELS = normalized.baseModels;
+            window.__MODEL_CATALOG = normalized.modelCatalog;
+            window.__DISCOVERED_MODEL_CATALOG = payload;
+
+            const changed = window.__lastModelCatalogSignature !== signature;
+            if (changed || opts.forceSync) {
+              window.__lastModelCatalogSignature = signature;
+              if (typeof window.__updateMenubarSlotButtons === 'function' && typeof window.__getActiveMenubarSlotModels === 'function') {
+                window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+              }
+              try {
+                if (typeof fetch === 'function') {
+                  fetch('http://127.0.0.1:53912/model-catalog', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                  }).catch(function() {});
+                }
+              } catch (e) {}
+            }
+
+            return payload;
+          } catch (e) {
+            return null;
+          }
+        };
 
         window.__getSavedModelSlots = function() {
           try {
@@ -1792,12 +1949,12 @@ class ModLoader {
         window.__getSubagentBadges = function() {
           let candidates = [];
           try {
-            candidates = Array.from(document.querySelectorAll('div[title="Subagent"], .text-secondary-foreground:has(> span)'));
+            candidates = Array.from(document.querySelectorAll('div[title="Subagent"], [data-swarm-worker], .text-secondary-foreground:has(> span)'));
           } catch (e) {
-            candidates = Array.from(document.querySelectorAll('div[title="Subagent"], .text-secondary-foreground'));
+            candidates = Array.from(document.querySelectorAll('div[title="Subagent"], [data-swarm-worker], .text-secondary-foreground'));
           }
           return candidates.filter(badge =>
-            Array.from(badge.querySelectorAll('span')).some(s => s.textContent.trim() === 'self')
+            Array.from(badge.querySelectorAll('span')).some(s => /^(self|swarm|builder)$/i.test(String(s.textContent || '').trim()))
           );
         };
 
@@ -1890,7 +2047,7 @@ class ModLoader {
           const badges = window.__getSubagentBadges ? window.__getSubagentBadges() : [];
 
           badges.forEach(badge => {
-            const selfSpan = Array.from(badge.querySelectorAll('span')).find(s => s.textContent.trim() === 'self');
+            const selfSpan = Array.from(badge.querySelectorAll('span')).find(s => /^(self|swarm|builder)$/i.test(String(s.textContent || '').trim()));
             if (!selfSpan) return;
 
             const sessionId = window.__resolveSubagentSessionId(badge);
@@ -1972,6 +2129,9 @@ class ModLoader {
           if (typeof window.__syncSubagentModelBadges === 'function') {
             window.__syncSubagentModelBadges();
           }
+          if (typeof window.__syncPlannerSyncButtons === 'function') {
+            window.__syncPlannerSyncButtons();
+          }
         };
 
         window.__resolveNativeModelTarget = function(modelId) {
@@ -1981,14 +2141,37 @@ class ModLoader {
             : null;
           const effectiveId = (resolved && resolved.id === modelId) ? resolved.id : modelId;
 
+          const baseModels = Array.isArray(window.__BASE_MODELS) ? window.__BASE_MODELS : [];
+          for (const bm of baseModels) {
+            if (!bm || !Array.isArray(bm.efforts)) continue;
+            const foundEff = bm.efforts.find(e => e.id === effectiveId);
+            if (foundEff) {
+              const isDirectSelect =
+                bm.efforts.length === 1 &&
+                (
+                  String(foundEff.label || '').toLowerCase() === 'standard' ||
+                  /^orchestrator/i.test(bm.name) ||
+                  /^gpt-oss/i.test(bm.name)
+                );
+              return {
+                base: bm.name,
+                effort: isDirectSelect ? null : (foundEff.label || null)
+              };
+            }
+          }
+
+          if (effectiveId === 'gemini-pro-orchestrator-neon') {
+            return { base: 'Orchestrator (Neon)', effort: null };
+          }
           if (effectiveId === 'gemini-pro-orchestrator-g1-pro') {
-            return { base: 'Orchestrator', effort: null };
+            return { base: 'Orchestrator (Argon)', effort: null };
           }
           if (effectiveId.startsWith('gpt-oss-120b-')) {
             return { base: 'GPT-OSS 120B', effort: null };
           }
 
           const basePrefixes = [
+            { prefix: 'gemini-4-neon-', base: 'Gemini 4 Neon' },
             { prefix: 'gemini-4-argon-', base: 'Gemini 4 Argon' },
             { prefix: 'gemini-4-hydrogen-', base: 'Gemini 4 Hydrogen' },
             { prefix: 'gemini-3.8-flash-', base: 'Gemini 3.8 Flash' },
@@ -1997,10 +2180,12 @@ class ModLoader {
           ];
 
           const effortLabels = {
+            minimal: 'Minimal',
             low: 'Low',
             medium: 'Medium',
             high: 'High',
-            xhigh: 'XHigh'
+            xhigh: 'XHigh',
+            max: 'Max'
           };
 
           for (const entry of basePrefixes) {
@@ -2020,11 +2205,61 @@ class ModLoader {
           const text = rawText.trim().toLowerCase();
           if (!text) return null;
 
-          if (text.includes('orchestrator')) return 'gemini-pro-orchestrator-g1-pro';
+          const normalizedText = text.replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim();
+          const catalog = Array.isArray(window.__MODEL_CATALOG) ? window.__MODEL_CATALOG : [];
+          const baseModels = Array.isArray(window.__BASE_MODELS) ? window.__BASE_MODELS : [];
+
+          // 1. Direct normalized match against live catalog names
+          for (const item of catalog) {
+            if (!item || !item.name) continue;
+            const itemNorm = String(item.name).toLowerCase().replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim();
+            if (itemNorm === normalizedText) {
+              return item.id;
+            }
+          }
+
+          // 2. Dynamic base-model + effort resolution against live BASE_MODELS
+          let detectedEffortKey = null;
+          if (/(?:^|[^a-z])xhigh(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'xhigh';
+          else if (/(?:^|[^a-z])high(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'high';
+          else if (/(?:^|[^a-z])(?:medium|med)(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'medium';
+          else if (/(?:^|[^a-z])low(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'low';
+          else if (/(?:^|[^a-z])minimal(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'minimal';
+          else if (/(?:^|[^a-z])max(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'max';
+
+          // Sort longest base names first so "Orchestrator (Neon)" matches before shorter substrings
+          const sortedBases = baseModels.slice().sort((a, b) => String(b.name || '').length - String(a.name || '').length);
+          for (const bm of sortedBases) {
+            if (!bm || !bm.name || !Array.isArray(bm.efforts) || bm.efforts.length === 0) continue;
+            const bmNorm = String(bm.name).toLowerCase().replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim();
+            if (normalizedText.includes(bmNorm)) {
+              if (bm.efforts.length === 1) {
+                return bm.efforts[0].id;
+              }
+              if (detectedEffortKey) {
+                const effMatch = bm.efforts.find(e => String(e.label || '').toLowerCase() === detectedEffortKey || String(e.id || '').toLowerCase().endsWith('-' + detectedEffortKey));
+                if (effMatch) return effMatch.id;
+              }
+              const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+              if (saved && saved.planner) {
+                const savedMatch = bm.efforts.find(e => e.id === saved.planner);
+                if (savedMatch) return savedMatch.id;
+              }
+              const highDefault = bm.efforts.find(e => String(e.label || '').toLowerCase() === 'high');
+              return (highDefault || bm.efforts[0]).id;
+            }
+          }
+
+          // 3. Legacy fuzzy keyword fallback
+          if (text.includes('orchestrator')) {
+            if (text.includes('neon')) return 'gemini-pro-orchestrator-neon';
+            return 'gemini-pro-orchestrator-g1-pro';
+          }
           if (text.includes('gpt-oss') || text.includes('120b')) return 'gpt-oss-120b-medium';
 
           let basePrefix = null;
-          if (text.includes('argon')) basePrefix = 'gemini-4-argon-';
+          if (text.includes('neon')) basePrefix = 'gemini-4-neon-';
+          else if (text.includes('argon')) basePrefix = 'gemini-4-argon-';
           else if (text.includes('hydrogen')) basePrefix = 'gemini-4-hydrogen-';
           else if (text.includes('3.8') && text.includes('flash')) basePrefix = 'gemini-3.8-flash-';
           else if (text.includes('opus')) basePrefix = 'claude-opus-5-5-';
@@ -2032,12 +2267,7 @@ class ModLoader {
 
           if (!basePrefix) return null;
 
-          let effort = null;
-          if (/(?:^|[^a-z])xhigh(?:$|[^a-z])/i.test(text)) effort = 'xhigh';
-          else if (/(?:^|[^a-z])high(?:$|[^a-z])/i.test(text)) effort = 'high';
-          else if (/(?:^|[^a-z])(?:medium|med)(?:$|[^a-z])/i.test(text)) effort = 'medium';
-          else if (/(?:^|[^a-z])low(?:$|[^a-z])/i.test(text)) effort = 'low';
-
+          let effort = detectedEffortKey;
           if (!effort) {
             const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
             if (saved && saved.planner && saved.planner.startsWith(basePrefix)) {
@@ -2048,7 +2278,6 @@ class ModLoader {
           }
 
           const candidateId = basePrefix + effort;
-          const catalog = window.__MODEL_CATALOG || [];
           const found = catalog.find(m => m.id === candidateId);
           return found ? found.id : null;
         };
@@ -2056,6 +2285,344 @@ class ModLoader {
         window.__nativeModelSyncTimers = window.__nativeModelSyncTimers || [];
         window.__nativeModelSyncInProgress = false;
         window.__nativeModelSyncToken = window.__nativeModelSyncToken || 0;
+
+        window.__getNativeModelContext = function(triggerEl) {
+          try {
+            const el = triggerEl || (() => {
+              const list = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+              return list[list.length - 1] || list[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
+            })();
+            if (!el) return null;
+            const reactKey = Object.keys(el).find(k => k.startsWith('__reactFiber'));
+            if (!reactKey) return null;
+            let cur = el[reactKey];
+            let depth = 0;
+            while (cur && depth < 35) {
+              const val = cur.memoizedProps && cur.memoizedProps.value;
+              if (val && Array.isArray(val.modelOptions) && val.modelOptions.length > 0) {
+                return val;
+              }
+              cur = cur.return;
+              depth++;
+            }
+          } catch (e) {}
+          return null;
+        };
+
+        window.__isNativeSelectorLocked = function() {
+          const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+          if (!saved) return true;
+          if (saved.enabled === false) return false;
+          if (saved.plannerSyncBroken === true) return false;
+          return saved.lockNative !== false;
+        };
+
+        window.__installNativeModelLockGuard = function(triggerEl) {
+          if (!triggerEl || typeof triggerEl.removeEventListener !== 'function') return;
+          // Soft-lock policy: never block pointer or keyboard interaction on the native chatbox model selector.
+          // Clean up any legacy capture-phase blocking listeners from earlier versions.
+          if (triggerEl.__antigravityLockGuard) {
+            for (const evName of ['click', 'mousedown', 'pointerdown', 'keydown']) {
+              try {
+                triggerEl.removeEventListener(evName, triggerEl.__antigravityLockGuard, true);
+              } catch (e) {}
+            }
+            triggerEl.__antigravityLockGuard = null;
+          }
+        };
+
+        window.__syncPlannerSyncButtons = function() {
+          const synced = window.__isNativeSelectorLocked();
+          const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+          const plannerId = (saved && saved.planner) || 'gemini-4-argon-high';
+          const plannerModel = (typeof window.__getModelById === 'function') ? window.__getModelById(plannerId) : null;
+          const plannerName = (plannerModel && plannerModel.name) || plannerId;
+          const plannerShort = (plannerModel && plannerModel.shortName) || plannerName;
+          const overrideId = saved && saved.nativeOverrideModel;
+          const overrideModel = (overrideId && typeof window.__getModelById === 'function') ? window.__getModelById(overrideId) : null;
+          const overrideLabel = (overrideModel && overrideModel.shortName) || overrideId || '';
+
+          const menubarTitle = synced
+            ? ('Chat synced with Planner (' + plannerName + ') - Click to re-sync')
+            : ('Sync broken' + (overrideLabel ? ' (chat: ' + overrideLabel + ')' : '') + ' - Click to sync chat back to Planner (' + plannerName + ')');
+
+          const chatTitle = 'Sync chat model back to Planner (' + plannerName + ')';
+
+          // 1. Update menubar Sync Planner button(s)
+          document.querySelectorAll('.antigravity-planner-sync-btn, #antigravity-planner-sync-btn').forEach(btn => {
+            const nextState = synced ? 'synced' : 'desynced';
+            if (btn.getAttribute('data-sync-state') !== nextState) {
+              btn.setAttribute('data-sync-state', nextState);
+            }
+            if (btn.getAttribute('aria-pressed') !== (synced ? 'true' : 'false')) {
+              btn.setAttribute('aria-pressed', synced ? 'true' : 'false');
+            }
+            if (btn.getAttribute('title') !== menubarTitle) {
+              btn.setAttribute('title', menubarTitle);
+            }
+            if (btn.classList) {
+              btn.classList.toggle('is-synced', synced);
+              btn.classList.toggle('is-desynced', !synced);
+            }
+          });
+
+          // 2. Highlight menubar Planner button subtly when sync is broken
+          document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="planner"]').forEach(btn => {
+            if (btn.classList) {
+              btn.classList.toggle('is-desynced', !synced);
+            }
+          });
+
+          // 3. Ensure and update inline chatbox Sync Plan button next to each native model selector
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          if (!triggers.length) {
+            const single = document.querySelector('button[data-testid="model-selector-trigger"]');
+            if (single) triggers.push(single);
+          }
+
+          triggers.forEach(trigger => {
+            const parent = trigger && trigger.parentElement;
+            if (!parent) return;
+            if (parent.closest && parent.closest('[role="dialog"], [role="menu"], .agy-overlay')) return;
+            const row = (parent.closest && parent.closest('.flex.items-center')) || parent;
+            const slotContainer = row && typeof row.querySelector === 'function'
+              ? row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')
+              : null;
+            const host = slotContainer || row;
+            if (!host) return;
+
+            let chatBtn = (typeof host.querySelector === 'function')
+              ? host.querySelector('.antigravity-chat-planner-sync-btn')
+              : null;
+
+            if (!chatBtn && typeof document.createElement === 'function') {
+              chatBtn = document.createElement('button');
+              chatBtn.setAttribute('type', 'button');
+              chatBtn.setAttribute('class', 'antigravity-chat-planner-sync-btn');
+              chatBtn.setAttribute('aria-label', 'Sync chat model to Planner');
+              chatBtn.setAttribute('data-antigravity-internal', 'true');
+              chatBtn.innerHTML = '<svg aria-hidden="true" class="chat-planner-sync-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg><span class="chat-planner-sync-label">Sync Plan</span>';
+              if (slotContainer) {
+                if (typeof slotContainer.prepend === 'function') {
+                  slotContainer.prepend(chatBtn);
+                } else if (typeof slotContainer.insertBefore === 'function' && slotContainer.firstElementChild) {
+                  slotContainer.insertBefore(chatBtn, slotContainer.firstElementChild);
+                } else if (typeof slotContainer.appendChild === 'function') {
+                  slotContainer.appendChild(chatBtn);
+                }
+              } else if (typeof trigger.after === 'function') {
+                trigger.after(chatBtn);
+              } else if (typeof host.appendChild === 'function') {
+                host.appendChild(chatBtn);
+              }
+            }
+
+            if (chatBtn) {
+              const nextState = synced ? 'synced' : 'desynced';
+              if (chatBtn.getAttribute('data-sync-state') !== nextState) {
+                chatBtn.setAttribute('data-sync-state', nextState);
+              }
+              if (chatBtn.getAttribute('data-planner-model') !== plannerId) {
+                chatBtn.setAttribute('data-planner-model', plannerId);
+              }
+              if (chatBtn.getAttribute('title') !== chatTitle) {
+                chatBtn.setAttribute('title', chatTitle);
+              }
+              chatBtn.hidden = synced;
+              if (chatBtn.classList) {
+                chatBtn.classList.toggle('is-desynced', !synced);
+              }
+              const labelEl = typeof chatBtn.querySelector === 'function'
+                ? chatBtn.querySelector('.chat-planner-sync-label')
+                : null;
+              const expectedLabel = 'Sync: ' + plannerShort;
+              if (labelEl && labelEl.textContent !== expectedLabel) {
+                labelEl.textContent = expectedLabel;
+              }
+            }
+          });
+        };
+
+        window.__applyNativeModelSelectorLock = function() {
+          const synced = window.__isNativeSelectorLocked();
+          const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+          const plannerId = (saved && saved.planner) || 'gemini-4-argon-high';
+          const plannerModel = (typeof window.__getModelById === 'function') ? window.__getModelById(plannerId) : null;
+          const plannerLabel = (plannerModel && plannerModel.shortName) || plannerId;
+
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          if (!triggers.length) {
+            const single = document.querySelector('button[data-testid="model-selector-trigger"]');
+            if (single) triggers.push(single);
+          }
+          triggers.forEach(trigger => {
+            if (typeof window.__installNativeModelLockGuard === 'function') {
+              window.__installNativeModelLockGuard(trigger);
+            }
+            if (trigger.removeAttribute) {
+              trigger.removeAttribute('aria-disabled');
+            }
+            if (synced) {
+              if (trigger.setAttribute) {
+                trigger.setAttribute('data-antigravity-locked', 'true');
+                trigger.setAttribute('data-antigravity-sync', 'synced');
+                trigger.setAttribute('title', 'Synced with Planner Slot (' + plannerLabel + ') — click to override');
+              }
+              if (trigger.classList) {
+                if (typeof trigger.classList.add === 'function') trigger.classList.add('antigravity-native-model-locked');
+                if (typeof trigger.classList.remove === 'function') trigger.classList.remove('antigravity-native-model-desynced');
+              }
+            } else {
+              if (trigger.removeAttribute) {
+                trigger.removeAttribute('data-antigravity-locked');
+              }
+              if (trigger.setAttribute) {
+                trigger.setAttribute('data-antigravity-sync', 'desynced');
+                trigger.setAttribute('title', 'Out of sync with Planner (' + plannerLabel + ') — click Sync Plan to restore');
+              }
+              if (trigger.classList) {
+                if (typeof trigger.classList.remove === 'function') trigger.classList.remove('antigravity-native-model-locked');
+                if (typeof trigger.classList.add === 'function') trigger.classList.add('antigravity-native-model-desynced');
+              }
+            }
+          });
+          if (typeof window.__syncPlannerSyncButtons === 'function') {
+            window.__syncPlannerSyncButtons();
+          }
+          return synced;
+        };
+
+        window.__breakNativePlannerSync = function(overrideModelId) {
+          const current = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+          const nextOverride = overrideModelId || null;
+          const alreadyBroken = (
+            current.lockNative === false &&
+            current.plannerSyncBroken === true &&
+            (current.nativeOverrideModel || null) === nextOverride
+          );
+          if (alreadyBroken) {
+            if (typeof window.__applyNativeModelSelectorLock === 'function') {
+              window.__applyNativeModelSelectorLock();
+            }
+            return false;
+          }
+
+          current.lockNative = false;
+          current.plannerSyncBroken = true;
+          current.nativeOverrideModel = nextOverride;
+          current.updatedAt = Date.now();
+          try {
+            localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+          } catch (e) {}
+
+          if (typeof window.__applyNativeModelSelectorLock === 'function') {
+            window.__applyNativeModelSelectorLock();
+          }
+
+          // Update dropdown toggle button if Planner dropdown is currently open
+          const portal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          const lockToggleBtn = portal && typeof portal.querySelector === 'function'
+            ? portal.querySelector('.model-slot-lock-toggle')
+            : null;
+          if (lockToggleBtn) {
+            if (lockToggleBtn.classList) {
+              lockToggleBtn.classList.remove('locked');
+              lockToggleBtn.classList.add('desynced');
+            }
+            lockToggleBtn.setAttribute('data-locked', 'false');
+            lockToggleBtn.setAttribute('aria-pressed', 'false');
+            lockToggleBtn.setAttribute('title', 'Sync broken by manual chat selection. Click to sync back to Planner slot.');
+            const lbl = typeof lockToggleBtn.querySelector === 'function' ? lockToggleBtn.querySelector('.model-lock-label') : null;
+            if (lbl) lbl.textContent = 'Sync Planner';
+          }
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  planner: current.planner,
+                  builder: current.builder,
+                  enabled: current.enabled !== false,
+                  lockNative: false,
+                  plannerSyncBroken: true,
+                  nativeOverrideModel: nextOverride
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+
+          return true;
+        };
+
+        window.__syncPlannerModelToChat = function() {
+          const current = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+          current.lockNative = true;
+          current.plannerSyncBroken = false;
+          current.nativeOverrideModel = null;
+          current.updatedAt = Date.now();
+          try {
+            localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+          } catch (e) {}
+
+          if (typeof window.__applyNativeModelSelectorLock === 'function') {
+            window.__applyNativeModelSelectorLock();
+          }
+          if (current.planner && typeof window.__syncNativeModelSelector === 'function') {
+            window.__syncNativeModelSelector(current.planner);
+          }
+
+          // Update dropdown toggle button if Planner dropdown is currently open
+          const portal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          const lockToggleBtn = portal && typeof portal.querySelector === 'function'
+            ? portal.querySelector('.model-slot-lock-toggle')
+            : null;
+          if (lockToggleBtn) {
+            if (lockToggleBtn.classList) {
+              lockToggleBtn.classList.add('locked');
+              lockToggleBtn.classList.remove('desynced');
+            }
+            lockToggleBtn.setAttribute('data-locked', 'true');
+            lockToggleBtn.setAttribute('aria-pressed', 'true');
+            lockToggleBtn.setAttribute('title', 'Chat synced with Planner slot. Change model in chat anytime to override.');
+            const lbl = typeof lockToggleBtn.querySelector === 'function' ? lockToggleBtn.querySelector('.model-lock-label') : null;
+            if (lbl) lbl.textContent = 'Chat Synced';
+          }
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  planner: current.planner,
+                  builder: current.builder,
+                  enabled: current.enabled !== false,
+                  lockNative: true,
+                  plannerSyncBroken: false,
+                  nativeOverrideModel: null
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+
+          return true;
+        };
+
+        window.__toggleNativeModelLock = function() {
+          const isCurrentlySynced = window.__isNativeSelectorLocked();
+          if (!isCurrentlySynced) {
+            window.__syncPlannerModelToChat();
+            return true;
+          }
+          window.__breakNativePlannerSync(null);
+          return false;
+        };
 
         window.__syncNativeModelSelector = function(modelId) {
           if (!modelId) return false;
@@ -2069,6 +2636,40 @@ class ModLoader {
           const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
           const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
           if (!activeTrigger) return false;
+
+          // Primary path: invoke Antigravity's native React Context setSelectedModel directly (0ms, zero flicker, works while locked)
+          const nativeCtx = (typeof window.__getNativeModelContext === 'function')
+            ? window.__getNativeModelContext(activeTrigger)
+            : null;
+          if (nativeCtx && typeof nativeCtx.setSelectedModel === 'function' && Array.isArray(nativeCtx.modelOptions)) {
+            const matchedOpt = nativeCtx.modelOptions.find(opt => opt && !opt.disabled && (opt.modelId === targetId || opt.id === targetId))
+              || nativeCtx.modelOptions.find(opt => {
+                if (!opt || opt.disabled || !opt.label) return false;
+                const lbl = String(opt.label).toLowerCase();
+                const hasB = lbl.includes(target.base.toLowerCase());
+                const hasE = target.effort ? lbl.includes('(' + target.effort.toLowerCase() + ')') : true;
+                return hasB && hasE;
+              });
+            if (matchedOpt) {
+              const currentNativeId = nativeCtx.selectedModel && (nativeCtx.selectedModel.modelId || nativeCtx.selectedModel.id);
+              if (currentNativeId === matchedOpt.modelId) {
+                return true;
+              }
+              const token = ++window.__nativeModelSyncToken;
+              window.__nativeModelSyncInProgress = true;
+              try {
+                nativeCtx.setSelectedModel(matchedOpt);
+              } finally {
+                const settleTimer = setTimeout(() => {
+                  if (window.__nativeModelSyncToken === token) {
+                    window.__nativeModelSyncInProgress = false;
+                  }
+                }, 120);
+                window.__nativeModelSyncTimers.push(settleTimer);
+              }
+              return true;
+            }
+          }
 
           const matchesEffortText = (text, effort) => {
             if (!effort) return true;
@@ -2165,56 +2766,71 @@ class ModLoader {
           const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
           if (!activeTrigger) return false;
 
-          const detectedId = window.__resolveModelIdFromNativeText
-            ? window.__resolveModelIdFromNativeText(activeTrigger.textContent || '')
+          const nativeCtx = (typeof window.__getNativeModelContext === 'function')
+            ? window.__getNativeModelContext(activeTrigger)
             : null;
+          const ctxModelId = nativeCtx && nativeCtx.selectedModel && (nativeCtx.selectedModel.modelId || nativeCtx.selectedModel.id);
+          const detectedId = ctxModelId || (window.__resolveModelIdFromNativeText
+            ? window.__resolveModelIdFromNativeText(activeTrigger.textContent || '')
+            : null);
           if (!detectedId) return false;
 
           const current = (typeof window.__getSavedModelSlots === 'function')
             ? window.__getSavedModelSlots()
             : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
 
-          const plannerBtns = Array.from(document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="planner"]'));
-          const btnAlreadySynced = plannerBtns.length > 0 && plannerBtns.every(btn => btn.getAttribute('data-model-id') === detectedId);
-          if (current.planner === detectedId && btnAlreadySynced) {
+          if (!current.planner) return false;
+
+          // If user manually picked a different model in the chatbox selector,
+          // preserve the Planner slot and break synchronization instead of overwriting Planner or snapping back.
+          if (detectedId !== current.planner) {
+            if (typeof window.__breakNativePlannerSync === 'function') {
+              return window.__breakNativePlannerSync(detectedId);
+            }
             return false;
           }
 
-          current.planner = detectedId;
-          current.updatedAt = Date.now();
-          try {
-            localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
-          } catch (e) {}
-
-          if (typeof window.__updateMenubarSlotButtons === 'function') {
-            window.__updateMenubarSlotButtons(
-              typeof window.__getActiveMenubarSlotModels === 'function'
-                ? window.__getActiveMenubarSlotModels()
-                : current
-            );
+          // If the chatbox selector matches the Planner model again while desynced, restore synchronized state cleanly.
+          if (current.lockNative === false || current.plannerSyncBroken === true) {
+            current.lockNative = true;
+            current.plannerSyncBroken = false;
+            current.nativeOverrideModel = null;
+            current.updatedAt = Date.now();
+            try {
+              localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+            } catch (e) {}
+            if (typeof window.__applyNativeModelSelectorLock === 'function') {
+              window.__applyNativeModelSelectorLock();
+            }
+            try {
+              if (typeof fetch === 'function') {
+                fetch('http://127.0.0.1:53912/model-slots', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    planner: current.planner,
+                    builder: current.builder,
+                    enabled: current.enabled !== false,
+                    lockNative: true,
+                    plannerSyncBroken: false,
+                    nativeOverrideModel: null
+                  })
+                }).catch(function() {});
+              }
+            } catch (e) {}
+            return true;
           }
 
-          try {
-            if (typeof fetch === 'function') {
-              fetch('http://127.0.0.1:53912/model-slots', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  planner: current.planner,
-                  builder: current.builder,
-                  enabled: current.enabled !== false
-                })
-              }).catch(function() {});
-            }
-          } catch (e) {}
-
-          return true;
+          return false;
         };
 
         window.__observedNativeTriggerSet = new WeakSet();
         window.__observedNativeTriggersCount = 0;
 
         window.__observeNativeModelSelector = function() {
+          if (typeof window.__applyNativeModelSelectorLock === 'function') {
+            window.__applyNativeModelSelectorLock();
+          }
           if (typeof MutationObserver !== 'function') return;
           const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
           if (!triggers.length) {
@@ -2236,6 +2852,7 @@ class ModLoader {
             window.__antigravityNativeModelObserver.disconnect();
           }
           window.__antigravityNativeModelObserver = new MutationObserver(() => {
+            if (window.__nativeModelSyncInProgress) return;
             if (typeof window.__syncPlannerFromNativeSelector === 'function') {
               window.__syncPlannerFromNativeSelector();
             }
@@ -2257,6 +2874,11 @@ class ModLoader {
           if (!role || !modelId) return;
           const current = window.__getSavedModelSlots();
           current[role] = modelId;
+          if (role === 'planner') {
+            current.lockNative = true;
+            current.plannerSyncBroken = false;
+            current.nativeOverrideModel = null;
+          }
           current.updatedAt = Date.now();
           try {
             localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
@@ -2286,8 +2908,13 @@ class ModLoader {
             window.__syncSubagentModelBadges();
           }
 
-          if (role === 'planner' && typeof window.__syncNativeModelSelector === 'function') {
-            window.__syncNativeModelSelector(modelId);
+          if (role === 'planner') {
+            if (typeof window.__applyNativeModelSelectorLock === 'function') {
+              window.__applyNativeModelSelectorLock();
+            }
+            if (typeof window.__syncNativeModelSelector === 'function') {
+              window.__syncNativeModelSelector(modelId);
+            }
           }
 
           try {
@@ -2298,7 +2925,10 @@ class ModLoader {
                 body: JSON.stringify({
                   planner: current.planner,
                   builder: current.builder,
-                  enabled: current.enabled !== false
+                  enabled: current.enabled !== false,
+                  lockNative: current.lockNative !== false,
+                  plannerSyncBroken: current.plannerSyncBroken === true,
+                  nativeOverrideModel: current.nativeOverrideModel || null
                 })
               }).catch(function() {});
             }
@@ -2336,6 +2966,13 @@ class ModLoader {
           }
           document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
 
+          const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+          if (pwPortal) {
+            pwPortal.classList.remove('open');
+            pwPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+
           let portal = document.getElementById('antigravity-model-slot-dropdown-portal');
           if (!portal) {
             portal = document.createElement('div');
@@ -2351,6 +2988,9 @@ class ModLoader {
           portal.__currentBtn = null;
 
           if (!isCurrentOpen) {
+            if (typeof window.__discoverNativeModelCatalog === 'function') {
+              window.__discoverNativeModelCatalog();
+            }
             btn.classList.add('open');
             portal.__currentBtn = btn;
 
@@ -2360,8 +3000,51 @@ class ModLoader {
             const currentSelectedId = savedSlots[slotRole] || btn.getAttribute('data-model-id');
 
             if (window.__renderModelSlotDropdownHtml) {
-              portal.innerHTML = window.__renderModelSlotDropdownHtml(slotRole, currentSelectedId, window.__BASE_MODELS || window.__MODEL_CATALOG);
+              const lockNative = (typeof window.__isNativeSelectorLocked === 'function') ? window.__isNativeSelectorLocked() : true;
+              portal.innerHTML = window.__renderModelSlotDropdownHtml(
+                slotRole,
+                currentSelectedId,
+                window.__BASE_MODELS || window.__MODEL_CATALOG,
+                { lockNative }
+              );
             }
+
+            const lockToggleBtn = portal.querySelector('.model-slot-lock-toggle');
+            if (lockToggleBtn) {
+              lockToggleBtn.onclick = (ev) => {
+                ev.stopPropagation();
+                ev.preventDefault();
+                if (typeof window.__syncPlannerModelToChat === 'function') {
+                  window.__syncPlannerModelToChat();
+                  lockToggleBtn.classList.add('locked');
+                  lockToggleBtn.classList.remove('desynced');
+                  lockToggleBtn.setAttribute('data-locked', 'true');
+                  lockToggleBtn.setAttribute('aria-pressed', 'true');
+                  lockToggleBtn.setAttribute('title', 'Chat synced with Planner slot. Change model in chat anytime to override.');
+                  const lbl = lockToggleBtn.querySelector('.model-lock-label');
+                  if (lbl) lbl.textContent = 'Chat Synced';
+                }
+              };
+            }
+
+            portal.querySelectorAll('.model-pack-header').forEach(header => {
+              header.onclick = (ev) => {
+                ev.stopPropagation();
+                ev.preventDefault();
+                const pack = header.closest('.model-pack');
+                if (!pack) return;
+                const willExpand = !pack.classList.contains('expanded');
+                portal.querySelectorAll('.model-pack.expanded').forEach(other => {
+                  other.classList.remove('expanded');
+                  const oh = other.querySelector('.model-pack-header');
+                  if (oh) oh.setAttribute('aria-expanded', 'false');
+                });
+                if (willExpand) {
+                  pack.classList.add('expanded');
+                  header.setAttribute('aria-expanded', 'true');
+                }
+              };
+            });
 
             portal.querySelectorAll('.model-effort-option, .model-slot-option').forEach(opt => {
               opt.onclick = (ev) => {
@@ -2674,6 +3357,10 @@ class ModLoader {
           document.querySelectorAll('.antigravity-model-slots-group').forEach(b => {
             b.style.display = modelSlotsEnabled ? 'inline-flex' : 'none';
           });
+          const pitWallEnabled = localStorage.getItem('__antigravity_mod_enabled_pit-wall') !== 'false';
+          document.querySelectorAll('.antigravity-pit-wall-btn').forEach(b => {
+            b.style.display = pitWallEnabled ? 'inline-flex' : 'none';
+          });
         };
 
         window.__toggleModsManagerPanel = function(e, btnEl) {
@@ -2698,6 +3385,13 @@ class ModLoader {
             tachPortal.__currentBadge = null;
           }
           document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+          const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+          if (pwPortal) {
+            pwPortal.classList.remove('open');
+            pwPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
 
           let portal = document.getElementById('antigravity-mods-manager-portal');
           if (!portal) {
@@ -2786,6 +3480,16 @@ class ModLoader {
               };
             }
 
+            const pitWallEnabled = localStorage.getItem('__antigravity_mod_enabled_pit-wall') !== 'false';
+            const pitWallInput = portal.querySelector('#mod-toggle-pit-wall');
+            if (pitWallInput) {
+              pitWallInput.checked = pitWallEnabled;
+              pitWallInput.onchange = (ev) => {
+                localStorage.setItem('__antigravity_mod_enabled_pit-wall', ev.target.checked);
+                window.__applyModsVisibility();
+              };
+            }
+
             const daemonInput = portal.querySelector('#mod-toggle-daemon');
             const daemonPill = portal.querySelector('#daemon-status-pill');
             if (daemonInput) {
@@ -2820,6 +3524,229 @@ class ModLoader {
             const clampedLeft = Math.max(10, Math.min(window.innerWidth - portalWidth - 10, rect.left));
             portal.style.left = clampedLeft + 'px';
             portal.classList.add('open');
+          }
+        };
+
+        window.__hidePitWallTooltip = function() {
+          const tip = document.getElementById('antigravity-pit-wall-tooltip');
+          if (tip) {
+            tip.classList.remove('visible');
+            tip.setAttribute('aria-hidden', 'true');
+            if (typeof tip.hidePopover === 'function') {
+              try { tip.hidePopover(); } catch {}
+            }
+          }
+        };
+
+        window.__togglePitWallModal = function(e, btnEl) {
+          if (e) {
+            e.stopPropagation();
+            e.preventDefault();
+          }
+          const btn = btnEl || (e ? e.currentTarget : document.getElementById('antigravity-pit-wall-trigger'));
+          let portal = document.getElementById('antigravity-pit-wall-portal');
+          if (!portal) {
+            portal = document.createElement('div');
+            portal.id = 'antigravity-pit-wall-portal';
+            portal.className = 'antigravity-pit-wall-portal';
+            document.body.appendChild(portal);
+          }
+
+          const isCurrentOpen = portal.classList.contains('open');
+
+          const agentPortal = document.getElementById('antigravity-agent-dropdown-portal');
+          if (agentPortal) {
+            agentPortal.classList.remove('open');
+            agentPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+
+          const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+          if (tachPortal) {
+            tachPortal.classList.remove('open');
+            tachPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+          const msPortal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          if (msPortal) {
+            msPortal.classList.remove('open');
+            msPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+
+          const mPortal = document.getElementById('antigravity-mods-manager-portal');
+          if (mPortal) {
+            mPortal.classList.remove('open');
+            mPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+
+          document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+          portal.classList.remove('open');
+          portal.__currentBtn = null;
+          if (typeof window.__hidePitWallTooltip === 'function') {
+            window.__hidePitWallTooltip();
+          }
+
+          const bindPitWallClose = () => {
+            const closeBtn = portal.querySelector('#antigravity-pit-wall-close');
+            if (closeBtn) {
+              closeBtn.onclick = (ev) => {
+                if (ev) {
+                  ev.stopPropagation();
+                  ev.preventDefault();
+                }
+                portal.classList.remove('open');
+                portal.__currentBtn = null;
+                if (typeof window.__hidePitWallTooltip === 'function') {
+                  window.__hidePitWallTooltip();
+                }
+                document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+              };
+            }
+          };
+
+          const bindPitWallTooltips = (pwPortal) => {
+            if (!pwPortal || pwPortal.__pitWallTipsBound) return;
+            pwPortal.__pitWallTipsBound = true;
+
+            const escTip = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+            const showTip = (target) => {
+              if (!target) return;
+              const rawTip = target.getAttribute('data-pw-tip');
+              if (!rawTip) return;
+              let tipData;
+              try {
+                tipData = JSON.parse(rawTip);
+              } catch {
+                return;
+              }
+              const tip = pwPortal.querySelector('#antigravity-pit-wall-tooltip') || document.getElementById('antigravity-pit-wall-tooltip');
+              if (!tip) return;
+
+              const titleHtml = tipData.title ? ('<div class="pit-wall-tip-title">' + escTip(tipData.title) + '</div>') : '';
+              const rowsHtml = Array.isArray(tipData.rows)
+                ? ('<div class="pit-wall-tip-rows">' + tipData.rows.map(function(r) {
+                    return '<div class="pit-wall-tip-row">' +
+                      '<span class="pit-wall-tip-label">' + escTip(r.label) + '</span>' +
+                      '<span class="pit-wall-tip-val' + (r.accent ? ' accent' : '') + '">' + escTip(r.val) + '</span>' +
+                    '</div>';
+                  }).join('') + '</div>')
+                : '';
+
+              tip.innerHTML = titleHtml + rowsHtml;
+
+              let rect = { top: 100, left: 100, width: 20, height: 20, bottom: 120, right: 120 };
+              if (typeof target.getBoundingClientRect === 'function') {
+                try {
+                  const r = target.getBoundingClientRect();
+                  if (r && (r.width || r.height || r.top || r.left || r.bottom || r.right)) {
+                    rect = {
+                      top: r.top ?? 100,
+                      left: r.left ?? 100,
+                      width: r.width ?? 20,
+                      height: r.height ?? 20,
+                      bottom: r.bottom ?? ((r.top ?? 100) + (r.height ?? 20)),
+                      right: r.right ?? ((r.left ?? 100) + (r.width ?? 20))
+                    };
+                  }
+                } catch {}
+              }
+
+              let tipW = tip.offsetWidth || 220;
+              let tipH = tip.offsetHeight || 120;
+              tip.style.display = 'block';
+              if (tip.offsetWidth) tipW = tip.offsetWidth;
+              if (tip.offsetHeight) tipH = tip.offsetHeight;
+
+              const winW = (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : 1280;
+              let top = rect.top - tipH - 10;
+              let placement = 'top';
+              if (top < 8) {
+                top = rect.bottom + 10;
+                placement = 'bottom';
+              }
+
+              const targetCenter = rect.left + (rect.width / 2);
+              let left = targetCenter - (tipW / 2);
+              left = Math.max(10, Math.min(winW - tipW - 10, left));
+
+              const caretOffset = Math.max(12, Math.min(tipW - 12, targetCenter - left));
+              tip.setAttribute('data-placement', placement);
+              if (typeof tip.style.setProperty === 'function') {
+                tip.style.setProperty('--pw-tip-caret-left', caretOffset + 'px');
+              }
+              tip.style.top = top + 'px';
+              tip.style.left = left + 'px';
+
+              tip.classList.add('visible');
+              tip.setAttribute('aria-hidden', 'false');
+              if (typeof tip.showPopover === 'function') {
+                try { tip.showPopover(); } catch {}
+              }
+            };
+
+            const handlePointerEnter = (ev) => {
+              const target = ev.target && typeof ev.target.closest === 'function' ? ev.target.closest('[data-pw-tip]') : null;
+              if (target) {
+                showTip(target);
+              } else {
+                if (typeof window.__hidePitWallTooltip === 'function') window.__hidePitWallTooltip();
+              }
+            };
+
+            const handlePointerLeave = (ev) => {
+              const rel = ev.relatedTarget && typeof ev.relatedTarget.closest === 'function' ? ev.relatedTarget.closest('[data-pw-tip]') : null;
+              if (!rel && typeof window.__hidePitWallTooltip === 'function') {
+                window.__hidePitWallTooltip();
+              }
+            };
+
+            pwPortal.addEventListener('mouseover', handlePointerEnter);
+            pwPortal.addEventListener('focusin', handlePointerEnter);
+            pwPortal.addEventListener('mouseout', handlePointerLeave);
+            pwPortal.addEventListener('focusout', (ev) => {
+              const rel = ev.relatedTarget && typeof ev.relatedTarget.closest === 'function' ? ev.relatedTarget.closest('[data-pw-tip]') : null;
+              if (!rel && typeof window.__hidePitWallTooltip === 'function') {
+                window.__hidePitWallTooltip();
+              }
+            });
+            pwPortal.addEventListener('mouseleave', () => {
+              if (typeof window.__hidePitWallTooltip === 'function') {
+                window.__hidePitWallTooltip();
+              }
+            });
+          };
+
+          if (!isCurrentOpen) {
+            if (btn) btn.classList.add('open');
+            portal.__currentBtn = btn || null;
+            if (typeof window.__renderPitWallModalHtml === 'function') {
+              portal.innerHTML = window.__renderPitWallModalHtml(window.__antigravityPitWall || {});
+            }
+            bindPitWallClose();
+            bindPitWallTooltips(portal);
+            portal.classList.add('open');
+
+            if (typeof fetch === 'function') {
+              try {
+                fetch('http://127.0.0.1:53912/pit-wall')
+                  .then(r => (r && r.ok ? r.json() : null))
+                  .then(json => {
+                    if (json && json.status === 'ok' && json.pitWall) {
+                      window.__antigravityPitWall = json.pitWall;
+                      if (portal.classList.contains('open') && typeof window.__renderPitWallModalHtml === 'function') {
+                        portal.innerHTML = window.__renderPitWallModalHtml(json.pitWall);
+                        bindPitWallClose();
+                        bindPitWallTooltips(portal);
+                      }
+                    }
+                  })
+                  .catch(() => {});
+              } catch (err) {}
+            }
           }
         };
 
@@ -3629,6 +4556,13 @@ class ModLoader {
           }
           document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
 
+          const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+          if (pwPortal) {
+            pwPortal.classList.remove('open');
+            pwPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+
 
           let portal = document.getElementById('antigravity-tachometer-popover-portal');
           if (!portal) {
@@ -4047,6 +4981,30 @@ class ModLoader {
             document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
           }
 
+          const isPitWallBtn = clickTarget.closest('.antigravity-pit-wall-btn');
+          const isPitWallPortal = clickTarget.closest('#antigravity-pit-wall-portal');
+          if (!isPitWallBtn && !isPitWallPortal) {
+            const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+            if (pwPortal) {
+              pwPortal.classList.remove('open');
+              pwPortal.__currentBtn = null;
+              if (typeof window.__hidePitWallTooltip === 'function') {
+                window.__hidePitWallTooltip();
+              }
+            }
+            document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+          }
+
+          const plannerSyncBtn = clickTarget.closest('.antigravity-planner-sync-btn, .antigravity-chat-planner-sync-btn');
+          if (plannerSyncBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof window.__syncPlannerModelToChat === 'function') {
+              window.__syncPlannerModelToChat();
+            }
+            return;
+          }
+
           const modelSlotBtn = clickTarget.closest('.antigravity-model-slot-btn');
           if (modelSlotBtn) {
             const role = modelSlotBtn.getAttribute('data-slot-role');
@@ -4106,6 +5064,16 @@ class ModLoader {
               msPortal.__currentBtn = null;
             }
             document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+
+            const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+            if (pwPortal) {
+              pwPortal.classList.remove('open');
+              pwPortal.__currentBtn = null;
+              if (typeof window.__hidePitWallTooltip === 'function') {
+                window.__hidePitWallTooltip();
+              }
+            }
+            document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
           }
         };
 
@@ -4211,6 +5179,14 @@ class ModLoader {
             btn.__modsClickBound = true;
             btn.addEventListener('click', (e) => {
               window.__toggleModsManagerPanel(e, btn);
+            });
+          });
+
+          document.querySelectorAll('.antigravity-pit-wall-btn').forEach(btn => {
+            if (btn.__pitWallClickBound) return;
+            btn.__pitWallClickBound = true;
+            btn.addEventListener('click', (e) => {
+              window.__togglePitWallModal(e, btn);
             });
           });
 
@@ -4404,8 +5380,9 @@ class ModLoader {
           return Boolean(
             node.classList?.contains('antigravity-slot-container') ||
             node.classList?.contains('antigravity-voice-dock') ||
+            node.classList?.contains('antigravity-chat-planner-sync-btn') ||
             (typeof node.id === 'string' && node.id.startsWith('antigravity-')) ||
-            node.closest?.('.antigravity-slot-container, .antigravity-voice-dock, [id^="antigravity-"]')
+            node.closest?.('.antigravity-slot-container, .antigravity-voice-dock, .antigravity-chat-planner-sync-btn, [id^="antigravity-"]')
           );
         };
 
@@ -4463,7 +5440,10 @@ class ModLoader {
               }
             }
             if (!missingSlot) {
-              const sidebarSlot = document.querySelector('.shrink-0 > .bg-sidebar');
+              const sidebarSlot = document.querySelector('.shrink-0 > .bg-sidebar') ||
+                                  document.querySelector('.shrink-0.bg-sidebar .flex.items-center.bg-sidebar') ||
+                                  document.querySelector('.shrink-0 .flex.items-center.bg-sidebar') ||
+                                  document.querySelector('.shrink-0.bg-sidebar');
               if (sidebarSlot && !document.querySelector('.antigravity-slot-menubar-actions, #antigravity-slot-menubar-actions')) {
                 missingSlot = true;
               }
@@ -4486,10 +5466,23 @@ class ModLoader {
         });
 
         window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
+        if (typeof window.__discoverNativeModelCatalog === 'function') {
+          window.__discoverNativeModelCatalog();
+        }
+        if (typeof window.__applyNativeModelSelectorLock === 'function') {
+          const isLocked = window.__applyNativeModelSelectorLock();
+          if (isLocked && typeof window.__getNativeModelContext === 'function' && window.__getNativeModelContext()) {
+            const initialSlots = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+            if (initialSlots && initialSlots.planner && typeof window.__syncNativeModelSelector === 'function') {
+              window.__syncNativeModelSelector(initialSlots.planner);
+            }
+          }
+        }
         return {
           success: true,
           selectedAgentsMap: localStorage.getItem('__antigravity_selected_agents_map'),
-          modelSlots: localStorage.getItem('__antigravity_model_slots')
+          modelSlots: localStorage.getItem('__antigravity_model_slots'),
+          discoveredModelCatalog: window.__DISCOVERED_MODEL_CATALOG || null
         };
       })();
     `;
@@ -4519,6 +5512,8 @@ class TelemetryService {
     this.tokenLimit = options.tokenLimit ?? 1_000_000;
     this.charsPerToken = options.charsPerToken ?? 3.8;
     this.parseCache = new Map();
+    this.pitWallCache = { ts: 0, data: null };
+    this.pitWallFileCache = new Map();
   }
 
   /**
@@ -4551,6 +5546,21 @@ class TelemetryService {
       .replace(/[`'"]/g, '')
       .replace(/\.\s*$/, '')
       .trim();
+  }
+
+  /**
+   * Validates whether a candidate model string is a realistic model identifier or junk.
+   * @param {string} [rawName='']
+   * @returns {boolean}
+   */
+  isValidModelName(rawName = '') {
+    if (!rawName || typeof rawName !== 'string') return false;
+    const trimmed = rawName.trim();
+    if (!trimmed || trimmed.length > 48) return false;
+    const lower = trimmed.toLowerCase();
+    if (['none', 'null', 'undefined', 'unknown', 'default', 'fakemodel'].includes(lower)) return false;
+    if (/fakemodel|[\\{};=<>]/i.test(trimmed)) return false;
+    return true;
   }
 
   /**
@@ -4698,9 +5708,220 @@ class TelemetryService {
   }
 
   /**
+   * Resolves display palette, short name, and quota pool classification for a model name.
+   * @param {string} [modelName='']
+   * @returns {{ color: string, shortName: string, poolId: 'gemini_unified'|'argon_weekly'|'third_party', poolLabel: string }}
+   */
+  resolveModelVisualMeta(modelName = '') {
+    const cleaned = this.sanitizeModelName(modelName) || 'Gemini 3.8 Flash';
+    const lower = cleaned.toLowerCase();
+
+    let color = '#94a3b8';
+    let poolId = 'gemini_unified';
+    let poolLabel = 'Gemini Unificado';
+
+    if (/argon|g1-pro/i.test(lower)) {
+      color = '#38bdf8';
+      poolId = 'argon_weekly';
+      poolLabel = 'Argon Semanal';
+    } else if (/opus/i.test(lower)) {
+      color = '#c084fc';
+      poolId = 'third_party';
+      poolLabel = 'Claude / GPT-OSS';
+    } else if (/sonnet|claude/i.test(lower)) {
+      color = '#a78bfa';
+      poolId = 'third_party';
+      poolLabel = 'Claude / GPT-OSS';
+    } else if (/gpt-oss|gpt|120b/i.test(lower)) {
+      color = '#f472b6';
+      poolId = 'third_party';
+      poolLabel = 'Claude / GPT-OSS';
+    } else if (/neon/i.test(lower)) {
+      color = '#a3e635';
+    } else if (/hydrogen/i.test(lower)) {
+      color = '#34d399';
+    } else if (/flash|gemini/i.test(lower)) {
+      color = '#fbbf24';
+    }
+
+    let shortName = cleaned;
+    if (/orchestrator/i.test(lower)) {
+      shortName = lower.includes('neon') ? 'Orch. Neon' : 'Orchestrator';
+    } else {
+      shortName = cleaned
+        .replace(/^Gemini\s+4\s+/i, '')
+        .replace(/^Gemini\s+([\d.]+)\s+Flash/i, 'Flash $1')
+        .replace(/^Claude\s+/i, '')
+        .replace(/\(([^)]+)\)/g, (_, eff) => {
+          const e = eff.trim();
+          return /^medium$/i.test(e) ? 'Med' : e;
+        })
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (/^GPT-OSS/i.test(shortName)) {
+        shortName = 'GPT-OSS 120B';
+      }
+    }
+
+    return { color, shortName, poolId, poolLabel };
+  }
+
+  /**
+   * Builds a 100-cell Claude-style waffle grid representing session context usage vs tokenLimit.
+   * @param {number} estTokens
+   * @param {Object} breakdown
+   * @returns {Array<{ index: number, key: string, label: string, color: string, tokens: number, pct: number }>}
+   */
+  buildWaffleCells(estTokens = 0, breakdown = {}) {
+    const limit = Math.max(1, this.tokenLimit || 1_000_000);
+    const cellSize = limit / 100;
+    const bd = breakdown || {};
+
+    const categories = [
+      { key: 'user', label: 'Prompts', color: '#38bdf8', tokens: bd.user?.tokens || 0 },
+      { key: 'model', label: 'Replies', color: '#a855f7', tokens: bd.model?.tokens || 0 },
+      { key: 'thinking', label: 'Thinking', color: '#ec4899', tokens: bd.thinking?.tokens || 0 },
+      { key: 'tools', label: 'Tools', color: '#f59e0b', tokens: bd.tools?.tokens || 0 },
+      { key: 'mcp', label: 'MCP', color: '#10b981', tokens: bd.mcp?.tokens || 0 },
+      { key: 'other', label: 'Context', color: '#64748b', tokens: bd.other?.tokens || 0 }
+    ];
+
+    const knownSum = categories.reduce((acc, c) => acc + c.tokens, 0);
+    if (estTokens > knownSum) {
+      categories[5].tokens += (estTokens - knownSum);
+    }
+
+    let usedCells = estTokens > 0 ? Math.min(100, Math.round(estTokens / cellSize)) : 0;
+    if (estTokens > 0 && usedCells === 0) usedCells = 1;
+
+    const counts = categories.map(c => {
+      const share = estTokens > 0 ? (c.tokens / estTokens) * usedCells : 0;
+      return { ...c, exact: share, cells: Math.floor(share) };
+    });
+
+    let allocated = counts.reduce((acc, c) => acc + c.cells, 0);
+    const remainders = [...counts]
+      .filter(c => c.tokens > 0)
+      .sort((a, b) => (b.exact - Math.floor(b.exact)) - (a.exact - Math.floor(a.exact)));
+
+    let idx = 0;
+    while (allocated < usedCells && remainders.length > 0) {
+      remainders[idx % remainders.length].cells++;
+      allocated++;
+      idx++;
+    }
+
+    const cells = [];
+    for (const c of counts) {
+      const pct = estTokens > 0 ? Number(((c.tokens / limit) * 100).toFixed(1)) : 0;
+      for (let i = 0; i < c.cells && cells.length < 100; i++) {
+        cells.push({
+          index: cells.length,
+          key: c.key,
+          label: c.label,
+          color: c.color,
+          tokens: c.tokens,
+          pct
+        });
+      }
+    }
+
+    const freeTokens = Math.max(0, limit - estTokens);
+    const freePct = Number(((freeTokens / limit) * 100).toFixed(1));
+    while (cells.length < 100) {
+      cells.push({
+        index: cells.length,
+        key: 'free',
+        label: 'Libre',
+        color: 'rgba(255, 255, 255, 0.08)',
+        tokens: freeTokens,
+        pct: freePct
+      });
+    }
+
+    return cells;
+  }
+
+  /**
+   * Aggregates chatModels entries into the 3 Antigravity quota pools.
+   * @param {Array<Object>} chatModels
+   * @returns {Array<Object>}
+   */
+  buildPoolsSummary(chatModels = []) {
+    const pools = {
+      gemini_unified: { id: 'gemini_unified', label: 'Gemini Unificado', accent: '#a3e635', tokens: 0, displayTokens: '0', pct: 0, models: [] },
+      argon_weekly: { id: 'argon_weekly', label: 'Argon Semanal', accent: '#38bdf8', tokens: 0, displayTokens: '0', pct: 0, models: [] },
+      third_party: { id: 'third_party', label: 'Claude / GPT-OSS', accent: '#c084fc', tokens: 0, displayTokens: '0', pct: 0, models: [] }
+    };
+
+    const list = Array.isArray(chatModels) ? chatModels : [];
+    const total = list.reduce((acc, m) => acc + (m.tokens || 0), 0);
+
+    for (const m of list) {
+      const meta = (m.poolId && m.color && m.shortName)
+        ? m
+        : this.resolveModelVisualMeta(m.modelName);
+      const pool = pools[meta.poolId] || pools.gemini_unified;
+      const t = m.tokens || 0;
+      pool.tokens += t;
+      pool.models.push({
+        modelName: m.modelName,
+        shortName: m.shortName || meta.shortName,
+        color: m.color || meta.color,
+        tokens: t,
+        displayTokens: m.displayTokens || this.formatTokens(t),
+        pct: total > 0 ? Math.round((t / total) * 100) : 0
+      });
+    }
+
+    return Object.values(pools).map(p => ({
+      ...p,
+      displayTokens: this.formatTokens(p.tokens),
+      pct: total > 0 ? Math.round((p.tokens / total) * 100) : 0
+    }));
+  }
+
+  /**
+   * Extracts { fromModel, toModel } from a <USER_SETTINGS_CHANGE> block when present.
+   * Supports both `<USER_SETTINGS_CHANGE>Model Selection from "A" to "B"</USER_SETTINGS_CHANGE>`
+   * and `The user changed setting \`Model Selection\` from A to B.` formats, including dotted versions.
+   * @param {string} content
+   * @returns {{ fromModel: string|null, toModel: string|null }}
+   */
+  extractModelSelectionChange(content) {
+    if (typeof content !== 'string' || !content.includes('<USER_SETTINGS_CHANGE>')) {
+      return { fromModel: null, toModel: null };
+    }
+    const sectionMatch = content.match(/<USER_SETTINGS_CHANGE>([\s\S]*?)<\/USER_SETTINGS_CHANGE>/i);
+    const settingsBlock = sectionMatch ? sectionMatch[1] : content;
+    const match = settingsBlock.match(
+      /(?:The user changed setting\s+)?[`'"]?Model Selection[`'"]?\s+from\s+(?:"([^"]+)"|'([^']+)'|`([^`]+)`|(.+?))\s+to\s+(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([^\n<]+?)(?:\.(?=\s|$)|\s*$))/i
+    );
+    if (!match) {
+      return { fromModel: null, toModel: null };
+    }
+    const rawFrom = (match[1] || match[2] || match[3] || match[4] || '').trim();
+    const rawTo = (match[5] || match[6] || match[7] || match[8] || '').trim();
+    const sanitizedFrom = rawFrom ? this.sanitizeModelName(rawFrom) : '';
+    const sanitizedTo = rawTo ? this.sanitizeModelName(rawTo) : '';
+    return {
+      fromModel: this.isValidModelName(sanitizedFrom) ? sanitizedFrom : null,
+      toModel: this.isValidModelName(sanitizedTo) ? sanitizedTo : null
+    };
+  }
+
+  /**
    * Default empty telemetry snapshot.
    */
   getEmptySnapshot() {
+    const emptyBreakdown = {
+      user: { tokens: 0, pct: 0 },
+      model: { tokens: 0, pct: 0 },
+      thinking: { tokens: 0, pct: 0 },
+      tools: { tokens: 0, pct: 0 },
+      mcp: { tokens: 0, pct: 0 },
+      other: { tokens: 0, pct: 0 }
+    };
     return {
       estTokens: 0,
       pct: '0.0',
@@ -4710,6 +5931,8 @@ class TelemetryService {
       compactions: [],
       chatModels: [],
       subagents: [],
+      waffleCells: this.buildWaffleCells(0, emptyBreakdown),
+      poolsSummary: this.buildPoolsSummary([]),
       modelQuota: {
         hasDualLimit: true,
         modelName: 'Gemini 3.8 Flash',
@@ -4724,14 +5947,7 @@ class TelemetryService {
         singleLabel: 'Cuota Disponible',
         usagePct: 100
       },
-      breakdown: {
-        user: { tokens: 0, pct: 0 },
-        model: { tokens: 0, pct: 0 },
-        thinking: { tokens: 0, pct: 0 },
-        tools: { tokens: 0, pct: 0 },
-        mcp: { tokens: 0, pct: 0 },
-        other: { tokens: 0, pct: 0 }
-      }
+      breakdown: emptyBreakdown
     };
   }
 
@@ -5240,6 +6456,7 @@ class TelemetryService {
       const chatModels = [];
       for (const [modelName, data] of combinedLedger.entries()) {
         const { family, hasDualLimit, rollingCeiling, weeklyCeiling } = this.classifyModelFamily(modelName);
+        const visualMeta = this.resolveModelVisualMeta(modelName);
         const chatRollingPct = hasDualLimit && rollingCeiling > 0
           ? Math.min(100, Math.round((data.tokens / rollingCeiling) * 100))
           : 0;
@@ -5249,6 +6466,10 @@ class TelemetryService {
 
         chatModels.push({
           modelName,
+          shortName: visualMeta.shortName,
+          color: visualMeta.color,
+          poolId: visualMeta.poolId,
+          poolLabel: visualMeta.poolLabel,
           family,
           hasDualLimit,
           directTokens: data.directTokens,
@@ -5276,6 +6497,8 @@ class TelemetryService {
         directStepEntries: rawParsed.stepEntries,
         stepEntries: combinedStepEntries,
         chatModels,
+        waffleCells: this.buildWaffleCells(rawParsed.estTokens, rawParsed.breakdown),
+        poolsSummary: this.buildPoolsSummary(chatModels),
         subagents,
         modelQuota,
         breakdown: rawParsed.breakdown
@@ -5527,6 +6750,808 @@ class TelemetryService {
       // Gracefully prevent background hook crashes
     }
     return metrics;
+  }
+
+  /**
+   * Resolves list API pricing ($ per 1M input/output tokens) and canonical base name for Pit Wall analytics.
+   * @param {string} [modelName='']
+   * @returns {{ baseName: string, compactName: string, packId: string, packLabel: string, packColor: string, inputPerM: number, cacheReadPerM: number, outputPerM: number }}
+   */
+  resolveModelPricing(modelName = '') {
+    const cleaned = this.sanitizeModelName(modelName) || 'Gemini 3.8 Flash';
+    const lower = cleaned.toLowerCase();
+
+    let baseName = '';
+    let compactName = '';
+    let packId = 'other';
+    let packLabel = 'Otros';
+    let packColor = '#94a3b8';
+    let inputPerM = 1.25;
+    let outputPerM = 5;
+
+    if (/orchestrator/i.test(lower)) {
+      packId = 'orchestrators';
+      packLabel = 'Orquestadores';
+      packColor = '#38bdf8';
+      inputPerM = 10;
+      outputPerM = 40;
+      if (/neon/i.test(lower)) {
+        baseName = 'Orchestrator (Neon)';
+        compactName = 'Neon';
+      } else {
+        baseName = 'Orchestrator (Argon)';
+        compactName = 'Argon';
+      }
+    } else if (/opus/i.test(lower)) {
+      baseName = 'Claude Opus 5.5';
+      compactName = 'Opus 5.5';
+      packId = 'claude';
+      packLabel = 'Claude';
+      packColor = '#c084fc';
+      inputPerM = 15;
+      outputPerM = 75;
+    } else if (/sonnet/i.test(lower)) {
+      baseName = 'Claude Sonnet 5.5';
+      compactName = 'Sonnet 5.5';
+      packId = 'claude';
+      packLabel = 'Claude';
+      packColor = '#c084fc';
+      inputPerM = 3;
+      outputPerM = 15;
+    } else if (/argon/i.test(lower)) {
+      baseName = 'Gemini 4 Argon';
+      compactName = '4 Argon';
+      packId = 'gemini';
+      packLabel = 'Gemini';
+      packColor = '#a3e635';
+      inputPerM = 15;
+      outputPerM = 75;
+    } else if (/neon/i.test(lower)) {
+      baseName = 'Gemini 4 Neon';
+      compactName = '4 Neon';
+      packId = 'gemini';
+      packLabel = 'Gemini';
+      packColor = '#a3e635';
+      inputPerM = 10;
+      outputPerM = 40;
+    } else if (/hydrogen/i.test(lower)) {
+      baseName = 'Gemini 4 Hydrogen';
+      compactName = '4 Hydrogen';
+      packId = 'gemini';
+      packLabel = 'Gemini';
+      packColor = '#a3e635';
+      inputPerM = 3;
+      outputPerM = 15;
+    } else if (/gpt-oss|120b/i.test(lower)) {
+      baseName = 'GPT-OSS 120B';
+      compactName = 'GPT-OSS 120B';
+      packId = 'openai-oss';
+      packLabel = 'OpenAI OSS';
+      packColor = '#f472b6';
+      inputPerM = 2;
+      outputPerM = 8;
+    } else if (/flash/i.test(lower)) {
+      baseName = 'Gemini 3.8 Flash';
+      compactName = '3.8 Flash';
+      packId = 'gemini';
+      packLabel = 'Gemini';
+      packColor = '#a3e635';
+      inputPerM = 1.25;
+      outputPerM = 5;
+    } else {
+      baseName = cleaned
+        .replace(/\s*\((?:Low|Medium|Med|High|XHigh|Minimal|Max|Standard)\)\s*$/i, '')
+        .trim() || cleaned;
+      compactName = baseName;
+      packId = 'other';
+      packLabel = 'Otros';
+      packColor = '#94a3b8';
+      inputPerM = 1.25;
+      outputPerM = 5;
+    }
+
+    const cacheReadPerM = Number((inputPerM * 0.1).toFixed(4));
+    return { baseName, compactName, packId, packLabel, packColor, inputPerM, cacheReadPerM, outputPerM };
+  }
+
+  /**
+   * Aggregates all-time Pit Wall metrics (stretches, hours worked, day streaks, consistency heatmap,
+   * and API price cost estimates across every conversation in brainDir).
+   * @param {Object} [options={}]
+   * @param {boolean} [options.bypassCache=false]
+   * @param {number} [options.now=Date.now()]
+   * @returns {Object}
+   */
+  getPitWallMetrics(options = {}) {
+    const now = options.now ?? Date.now();
+    if (!options.bypassCache && this.pitWallCache.data && (now - this.pitWallCache.ts) < 15_000) {
+      return this.pitWallCache.data;
+    }
+
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const toLocalDateKey = (ms) => {
+      const d = new Date(ms);
+      return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    };
+    const monthsShort = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    const monthsLong = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    const daysShort = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+
+    const formatShortDate = (ms) => {
+      const d = new Date(ms);
+      return `${monthsShort[d.getMonth()]} ${d.getDate()}`;
+    };
+    const formatLongDate = (ms) => {
+      const d = new Date(ms);
+      return `${d.getDate()} de ${monthsLong[d.getMonth()]} de ${d.getFullYear()}`;
+    };
+    const formatFullDate = (ms) => {
+      const d = new Date(ms);
+      return `${daysShort[d.getDay()]}, ${d.getDate()} ${monthsShort[d.getMonth()]} ${d.getFullYear()}`;
+    };
+    const formatDuration = (hours) => {
+      const totalMins = Math.max(0, Math.round((Number(hours) || 0) * 60));
+      const h = Math.floor(totalMins / 60);
+      const m = totalMins % 60;
+      if (h > 0 && m > 0) return `${h}h ${m}m`;
+      if (h > 0) return `${h}h`;
+      return `${m}m`;
+    };
+    const formatStretchStart = (ms) => {
+      const d = new Date(ms);
+      return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    };
+    const formatBigTokens = (n) => {
+      const num = Number(n) || 0;
+      if (num >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(1).replace(/\.0$/, '')}B`;
+      if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+      if (num >= 1_000) return `${(num / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
+      return String(Math.round(num));
+    };
+    const formatUsd = (val) => `$${Math.round(val || 0).toLocaleString('en-US')}`;
+    const formatExactUsd = (val) => '$' + Number(val || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    const allTimestamps = [];
+    const dailyCostMap = new Map();
+    const dailyHoursMap = new Map();
+    const daySessionsMap = new Map();
+    const modelStatsMap = new Map();
+    let totalTokens = 0;
+    let writtenTokens = 0;
+    let totalUncachedInputTokens = 0;
+    let totalCacheReadTokens = 0;
+    let totalCostUsd = 0;
+    let totalSessions = 0;
+
+    try {
+      if (fs.existsSync(this.brainDir)) {
+        const dirs = fs.readdirSync(this.brainDir)
+          .filter(d => /^[0-9a-fA-F-]{8,}$/.test(d))
+          .map(d => {
+            const logsDir = path.join(this.brainDir, d, '.system_generated', 'logs');
+            const compactPath = path.join(logsDir, 'transcript.jsonl');
+            const fullPath = path.join(logsDir, 'transcript_full.jsonl');
+            let targetPath = '';
+            let mtimeMs = 0;
+            let size = 0;
+            try {
+              if (fs.existsSync(compactPath)) {
+                const st = fs.statSync(compactPath);
+                targetPath = compactPath;
+                mtimeMs = st.mtimeMs;
+                size = st.size;
+              } else if (fs.existsSync(fullPath)) {
+                const st = fs.statSync(fullPath);
+                targetPath = fullPath;
+                mtimeMs = st.mtimeMs;
+                size = st.size;
+              }
+            } catch {}
+            return { id: d, targetPath, mtimeMs, size };
+          })
+          .filter(item => item.targetPath && item.size > 0)
+          .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+        totalSessions = dirs.length;
+
+        for (const item of dirs) {
+          let summary;
+          const cached = this.pitWallFileCache.get(item.targetPath);
+          if (cached && cached.mtimeMs === item.mtimeMs && cached.size === item.size) {
+            summary = cached.summary;
+          } else {
+            summary = this._parseTranscriptForPitWall(item.targetPath, toLocalDateKey);
+            this.pitWallFileCache.set(item.targetPath, { mtimeMs: item.mtimeMs, size: item.size, summary });
+          }
+
+          if (!summary) continue;
+          totalTokens += summary.totalTokens || 0;
+          writtenTokens += summary.writtenTokens || 0;
+          totalUncachedInputTokens += summary.totalUncachedInputTokens || 0;
+          totalCacheReadTokens += summary.totalCacheReadTokens || 0;
+          totalCostUsd += summary.totalCostUsd || 0;
+
+          for (const ts of summary.timestamps) {
+            allTimestamps.push(ts);
+          }
+
+          const sessionDays = summary.sessionDays || Object.keys(summary.dailyStats || summary.dailyCosts || {});
+          for (const dayKey of sessionDays) {
+            daySessionsMap.set(dayKey, (daySessionsMap.get(dayKey) || 0) + 1);
+          }
+
+          const statsToIterate = summary.dailyStats || summary.dailyCosts || {};
+          for (const [dayKey, dStat] of Object.entries(statsToIterate)) {
+            if (!dailyCostMap.has(dayKey)) {
+              dailyCostMap.set(dayKey, {
+                mainCostUsd: 0,
+                bgCostUsd: 0,
+                totalCostUsd: 0,
+                tokens: 0,
+                uncachedInput: 0,
+                cacheRead: 0,
+                output: 0
+              });
+            }
+            const dc = dailyCostMap.get(dayKey);
+            dc.mainCostUsd += dStat.mainCostUsd || 0;
+            dc.bgCostUsd += dStat.bgCostUsd || 0;
+            dc.totalCostUsd += (dStat.mainCostUsd || 0) + (dStat.bgCostUsd || 0);
+            dc.tokens += dStat.tokens || 0;
+            dc.uncachedInput += dStat.uncachedInput || 0;
+            dc.cacheRead += dStat.cacheRead || 0;
+            dc.output += dStat.output || 0;
+          }
+
+          if (summary.modelStats) {
+            for (const [mName, mStat] of Object.entries(summary.modelStats)) {
+              if (!modelStatsMap.has(mName)) {
+                modelStatsMap.set(mName, {
+                  costUsd: 0,
+                  tokens: 0,
+                  uncachedInput: 0,
+                  cacheRead: 0,
+                  output: 0,
+                  packId: mStat.packId,
+                  packLabel: mStat.packLabel,
+                  packColor: mStat.packColor,
+                  compactName: mStat.compactName,
+                  inputPerM: mStat.inputPerM,
+                  cacheReadPerM: mStat.cacheReadPerM,
+                  outputPerM: mStat.outputPerM
+                });
+              }
+              const ms = modelStatsMap.get(mName);
+              ms.costUsd += mStat.costUsd || 0;
+              ms.tokens += mStat.tokens || 0;
+              ms.uncachedInput += mStat.uncachedInput || 0;
+              ms.cacheRead += mStat.cacheRead || 0;
+              ms.output += mStat.output || 0;
+            }
+          } else if (summary.modelCosts) {
+            for (const [mName, mCost] of Object.entries(summary.modelCosts)) {
+              if (!modelStatsMap.has(mName)) {
+                const pricing = this.resolveModelPricing(mName);
+                modelStatsMap.set(mName, {
+                  costUsd: 0,
+                  tokens: 0,
+                  uncachedInput: 0,
+                  cacheRead: 0,
+                  output: 0,
+                  packId: pricing.packId,
+                  packLabel: pricing.packLabel,
+                  packColor: pricing.packColor,
+                  compactName: pricing.compactName,
+                  inputPerM: pricing.inputPerM,
+                  cacheReadPerM: pricing.cacheReadPerM,
+                  outputPerM: pricing.outputPerM
+                });
+              }
+              modelStatsMap.get(mName).costUsd += mCost;
+            }
+          }
+        }
+      }
+    } catch {
+      // Keep graceful empty metrics
+    }
+
+    // Merge global timestamps across sessions into contiguous stretches (gap <= 20 minutes)
+    const GAP_MS = 20 * 60 * 1000;
+    const MIN_EVENT_MS = 2.5 * 60 * 1000;
+    allTimestamps.sort((a, b) => a - b);
+
+    const intervals = [];
+    if (allTimestamps.length > 0) {
+      let curStart = allTimestamps[0];
+      let curEnd = allTimestamps[0];
+      for (let i = 1; i < allTimestamps.length; i++) {
+        const ts = allTimestamps[i];
+        if (ts - curEnd <= GAP_MS) {
+          curEnd = ts;
+        } else {
+          intervals.push({ start: curStart, end: Math.max(curEnd, curStart + MIN_EVENT_MS) });
+          curStart = ts;
+          curEnd = ts;
+        }
+      }
+      intervals.push({ start: curStart, end: Math.max(curEnd, curStart + MIN_EVENT_MS) });
+    }
+
+    let totalDurationMs = 0;
+    for (const iv of intervals) {
+      const dur = Math.max(MIN_EVENT_MS, iv.end - iv.start);
+      totalDurationMs += dur;
+
+      // Distribute interval duration across local calendar days it touches
+      let cursor = iv.start;
+      const effectiveEnd = iv.start + dur;
+      while (cursor < effectiveEnd) {
+        const d = new Date(cursor);
+        const nextMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
+        const sliceEnd = Math.min(effectiveEnd, nextMidnight);
+        const dayKey = toLocalDateKey(cursor);
+        dailyHoursMap.set(dayKey, (dailyHoursMap.get(dayKey) || 0) + ((sliceEnd - cursor) / 3_600_000));
+        cursor = sliceEnd;
+      }
+    }
+
+    const totalHours = Number((totalDurationMs / 3_600_000).toFixed(1));
+    const lastInterval = intervals.length > 0 ? intervals[intervals.length - 1] : null;
+    const currentStretchHours = lastInterval
+      ? Number(((lastInterval.end - lastInterval.start) / 3_600_000).toFixed(1))
+      : 0;
+    const isStretchActive = lastInterval ? (now - lastInterval.end) <= GAP_MS : false;
+    const currentStretchSub = lastInterval
+      ? `${isStretchActive ? 'activo, desde' : 'último bloque'} ${formatStretchStart(lastInterval.start)}`
+      : 'sin actividad reciente';
+
+    const activeDayKeys = Array.from(new Set([
+      ...Array.from(dailyHoursMap.keys()),
+      ...Array.from(dailyCostMap.keys())
+    ])).sort();
+
+    const activeDaysCount = activeDayKeys.length;
+    const avgHoursPerDay = activeDaysCount > 0 ? Number((totalHours / activeDaysCount).toFixed(1)) : 0;
+    const firstSessionDate = allTimestamps.length > 0 ? formatLongDate(allTimestamps[0]) : formatLongDate(now);
+
+    // Day streaks (best run & current streak up to today/yesterday)
+    const activeSet = new Set(activeDayKeys);
+    let bestStreak = 0;
+    let runStreak = 0;
+    if (activeDayKeys.length > 0) {
+      let prevDayMs = null;
+      for (const dk of activeDayKeys) {
+        const [yy, mm, dd] = dk.split('-').map(Number);
+        const dayMs = new Date(yy, mm - 1, dd).getTime();
+        if (prevDayMs !== null && Math.round((dayMs - prevDayMs) / 86_400_000) === 1) {
+          runStreak++;
+        } else {
+          runStreak = 1;
+        }
+        if (runStreak > bestStreak) bestStreak = runStreak;
+        prevDayMs = dayMs;
+      }
+    }
+
+    let currentStreak = 0;
+    const todayDate = new Date(now);
+    let checkDate = new Date(todayDate.getFullYear(), todayDate.getMonth(), todayDate.getDate());
+    if (!activeSet.has(toLocalDateKey(checkDate.getTime()))) {
+      checkDate.setDate(checkDate.getDate() - 1);
+    }
+    while (activeSet.has(toLocalDateKey(checkDate.getTime()))) {
+      currentStreak++;
+      checkDate.setDate(checkDate.getDate() - 1);
+    }
+
+    // Last 60 days series
+    const last60Days = [];
+    const todayStart = new Date(todayDate.getFullYear(), todayDate.getMonth(), todayDate.getDate());
+    for (let i = 59; i >= 0; i--) {
+      const d = new Date(todayStart);
+      d.setDate(d.getDate() - i);
+      const ms = d.getTime();
+      const key = toLocalDateKey(ms);
+      const hrs = Number((dailyHoursMap.get(key) || 0).toFixed(4));
+      const costObj = dailyCostMap.get(key) || {
+        mainCostUsd: 0,
+        bgCostUsd: 0,
+        totalCostUsd: 0,
+        tokens: 0,
+        uncachedInput: 0,
+        cacheRead: 0,
+        output: 0
+      };
+      last60Days.push({
+        date: key,
+        label: formatShortDate(ms),
+        fullDate: formatFullDate(ms),
+        hours: hrs,
+        durationLabel: formatDuration(hrs),
+        sessions: daySessionsMap.get(key) || 0,
+        tokens: costObj.tokens || 0,
+        uncachedInput: costObj.uncachedInput || 0,
+        cacheRead: costObj.cacheRead || 0,
+        output: costObj.output || 0,
+        mainCostUsd: Number(costObj.mainCostUsd.toFixed(2)),
+        bgCostUsd: Number(costObj.bgCostUsd.toFixed(2)),
+        totalCostUsd: Number(costObj.totalCostUsd.toFixed(2))
+      });
+    }
+
+    // Consistency heatmap grid (last 20 weeks, Monday..Sunday)
+    const numWeeks = 20;
+    const todayDowMon0 = (todayStart.getDay() + 6) % 7; // Mon=0 .. Sun=6
+    const currentWeekMon = new Date(todayStart);
+    currentWeekMon.setDate(currentWeekMon.getDate() - todayDowMon0);
+    const firstWeekMon = new Date(currentWeekMon);
+    firstWeekMon.setDate(firstWeekMon.getDate() - ((numWeeks - 1) * 7));
+
+    const consistencyWeeks = [];
+    let lastMonthSeen = -1;
+    for (let w = 0; w < numWeeks; w++) {
+      const weekMon = new Date(firstWeekMon);
+      weekMon.setDate(weekMon.getDate() + w * 7);
+      const mIdx = weekMon.getMonth();
+      const monthLabel = mIdx !== lastMonthSeen ? monthsShort[mIdx] : '';
+      lastMonthSeen = mIdx;
+
+      const days = [];
+      for (let dow = 0; dow < 7; dow++) {
+        const cellDate = new Date(weekMon);
+        cellDate.setDate(cellDate.getDate() + dow);
+        const ms = cellDate.getTime();
+        const isFuture = ms > todayStart.getTime();
+        const key = toLocalDateKey(ms);
+        const hrsRaw = isFuture ? 0 : (dailyHoursMap.get(key) || 0);
+        const hours = isFuture ? 0 : Number(hrsRaw.toFixed(2));
+        const costObj = isFuture ? null : dailyCostMap.get(key);
+        let level = 0;
+        if (!isFuture && hours > 0) {
+          if (hours > 6) level = 4;
+          else if (hours > 3) level = 3;
+          else if (hours > 1) level = 2;
+          else level = 1;
+        }
+        days.push({
+          date: key,
+          fullDate: formatFullDate(ms),
+          hours,
+          durationLabel: formatDuration(hrsRaw),
+          sessions: isFuture ? 0 : (daySessionsMap.get(key) || 0),
+          tokens: costObj ? (costObj.tokens || 0) : 0,
+          totalCostUsd: costObj ? Number(costObj.totalCostUsd.toFixed(2)) : 0,
+          level,
+          isFuture
+        });
+      }
+      consistencyWeeks.push({ monthLabel, days });
+    }
+
+    // Cost by model sorted descending (up to 10 models with spend > 0)
+    const sortedModels = Array.from(modelStatsMap.entries())
+      .map(([name, entry]) => ({ name, ...entry }))
+      .filter(e => e.costUsd > 0)
+      .sort((a, b) => b.costUsd - a.costUsd);
+
+    const modelsToUse = sortedModels.length > 0
+      ? sortedModels
+      : Array.from(modelStatsMap.entries()).map(([name, entry]) => ({ name, ...entry })).sort((a, b) => b.costUsd - a.costUsd);
+
+    const maxModelCost = modelsToUse.length > 0 ? Math.max(0.0001, modelsToUse[0].costUsd) : 1;
+    const costByModel = modelsToUse.slice(0, 10).map((entry, idx) => {
+      const pricing = this.resolveModelPricing(entry.name);
+      return {
+        name: entry.name,
+        compactName: entry.compactName || pricing.compactName,
+        packId: entry.packId || pricing.packId,
+        packLabel: entry.packLabel || pricing.packLabel,
+        packColor: entry.packColor || pricing.packColor,
+        costUsd: Math.round(entry.costUsd),
+        exactCostUsd: Number(entry.costUsd.toFixed(2)),
+        displayCost: entry.costUsd > 0 && entry.costUsd < 10 ? formatExactUsd(entry.costUsd) : formatUsd(entry.costUsd),
+        exactDisplayCost: formatExactUsd(entry.costUsd),
+        pctOfTotal: Number(((entry.costUsd / Math.max(0.0001, totalCostUsd)) * 100).toFixed(1)),
+        pctOfMax: Math.max(2, Math.round((entry.costUsd / maxModelCost) * 100)),
+        tokens: entry.tokens || 0,
+        uncachedInput: entry.uncachedInput || 0,
+        cacheRead: entry.cacheRead || 0,
+        output: entry.output || 0,
+        inputPerM: entry.inputPerM ?? pricing.inputPerM,
+        cacheReadPerM: entry.cacheReadPerM ?? pricing.cacheReadPerM,
+        outputPerM: entry.outputPerM ?? pricing.outputPerM,
+        isTop: idx === 0
+      };
+    });
+
+    // Group models by 4 Planner packages (costByModelPacks)
+    const packsMap = new Map();
+    for (const m of costByModel) {
+      const pId = m.packId || 'other';
+      if (!packsMap.has(pId)) {
+        packsMap.set(pId, {
+          packId: pId,
+          packLabel: m.packLabel || 'Otros',
+          packColor: m.packColor || '#94a3b8',
+          costUsd: 0,
+          exactCostUsd: 0,
+          tokens: 0,
+          uncachedInput: 0,
+          cacheRead: 0,
+          output: 0,
+          modelCount: 0,
+          models: []
+        });
+      }
+      const p = packsMap.get(pId);
+      p.costUsd += m.costUsd || 0;
+      p.exactCostUsd = Number((p.exactCostUsd + (m.exactCostUsd || 0)).toFixed(2));
+      p.tokens += m.tokens || 0;
+      p.uncachedInput += m.uncachedInput || 0;
+      p.cacheRead += m.cacheRead || 0;
+      p.output += m.output || 0;
+      p.modelCount++;
+      p.models.push(m);
+    }
+
+    const sortedPacks = Array.from(packsMap.values()).sort((a, b) => b.exactCostUsd - a.exactCostUsd);
+    const maxPackCost = sortedPacks.length > 0 ? Math.max(0.0001, sortedPacks[0].exactCostUsd) : 1;
+    const costByModelPacks = sortedPacks.map(p => {
+      p.models.sort((a, b) => (b.exactCostUsd || 0) - (a.exactCostUsd || 0));
+      return {
+        ...p,
+        displayCost: p.exactCostUsd > 0 && p.exactCostUsd < 10 ? formatExactUsd(p.exactCostUsd) : formatUsd(p.exactCostUsd),
+        exactDisplayCost: formatExactUsd(p.exactCostUsd),
+        pctOfTotal: Number(((p.exactCostUsd / Math.max(0.0001, totalCostUsd)) * 100).toFixed(1)),
+        pctOfMax: Math.max(2, Math.round((p.exactCostUsd / maxPackCost) * 100))
+      };
+    });
+
+    const result = {
+      currentStreak,
+      bestStreak,
+      totalHours,
+      exactTotalHours: Number((totalDurationMs / 3_600_000).toFixed(4)),
+      exactTotalDurationLabel: formatDuration(totalDurationMs / 3_600_000),
+      activeDaysCount,
+      firstSessionDate,
+      avgHoursPerDay,
+      currentStretchHours,
+      exactCurrentStretchDurationLabel: formatDuration(lastInterval ? (lastInterval.end - lastInterval.start) / 3_600_000 : 0),
+      currentStretchSub,
+      isStretchActive,
+      totalCostUsd: Math.round(totalCostUsd),
+      exactTotalCostUsd: Number(totalCostUsd.toFixed(2)),
+      displayTotalCost: formatUsd(totalCostUsd),
+      exactDisplayTotalCost: formatExactUsd(totalCostUsd),
+      totalTokens,
+      uncachedInputTokens: totalUncachedInputTokens,
+      cacheReadTokens: totalCacheReadTokens,
+      displayTotalTokens: formatBigTokens(totalTokens),
+      writtenTokens,
+      displayWrittenTokens: formatBigTokens(writtenTokens),
+      totalSessions,
+      last60Days,
+      consistencyWeeks,
+      costByModel,
+      costByModelPacks,
+      updatedAt: now
+    };
+
+    this.pitWallCache = { ts: now, data: result };
+    return result;
+  }
+
+  /**
+   * Parses a single transcript into compact Pit Wall timeline & cost aggregates for caching.
+   * @private
+   */
+  _parseTranscriptForPitWall(filePath, toLocalDateKey) {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const lines = content.split('\n');
+      const parsedLines = [];
+
+      let hasExactTokenTelemetry = false;
+      let firstFromModel = '';
+      let firstObjModel = '';
+
+      // Pass 1: Parse JSON and detect exact telemetry capability and initial model
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        let obj;
+        try {
+          obj = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        parsedLines.push({ obj, rawLine });
+
+        if (obj.input_tokens !== undefined || obj.output_tokens !== undefined) {
+          hasExactTokenTelemetry = true;
+        }
+
+        if (!firstFromModel) {
+          const { fromModel } = this.extractModelSelectionChange(obj.content);
+          if (fromModel) {
+            firstFromModel = fromModel;
+          }
+        }
+
+        if (!firstObjModel && typeof obj.model === 'string' && obj.model.trim()) {
+          const sanitized = this.sanitizeModelName(obj.model);
+          if (this.isValidModelName(sanitized)) {
+            firstObjModel = sanitized;
+          }
+        }
+      }
+
+      const initialModel = (firstFromModel && this.isValidModelName(firstFromModel))
+        ? firstFromModel
+        : ((firstObjModel && this.isValidModelName(firstObjModel)) ? firstObjModel : 'Gemini 3.8 Flash');
+
+      // Pass 2: Aggregate timestamps, tokens, and pricing with model state tracking
+      const timestamps = [];
+      const sessionDays = new Set();
+      const dailyCosts = {};
+      const dailyStats = {};
+      const modelCosts = {};
+      const modelStats = {};
+      let totalUncachedInputTokens = 0;
+      let totalCacheReadTokens = 0;
+      let totalTokens = 0;
+      let writtenTokens = 0;
+      let totalCostUsd = 0;
+      let detectedModel = initialModel;
+      let subagentWindowSteps = 0;
+
+      for (const { obj, rawLine } of parsedLines) {
+        const { toModel } = this.extractModelSelectionChange(obj.content);
+        if (toModel) {
+          detectedModel = toModel;
+        }
+
+        if (typeof obj.model === 'string' && obj.model.trim()) {
+          const sanitized = this.sanitizeModelName(obj.model);
+          if (this.isValidModelName(sanitized)) {
+            detectedModel = sanitized;
+          }
+        }
+
+        const activeModel = (this.isValidModelName(detectedModel) ? this.sanitizeModelName(detectedModel) : '') || 'Gemini 3.8 Flash';
+        const pricing = this.resolveModelPricing(activeModel);
+
+        let tsMs = obj.created_at ? Date.parse(obj.created_at) : NaN;
+        if (!Number.isFinite(tsMs)) {
+          tsMs = 0;
+        } else {
+          timestamps.push(tsMs);
+        }
+
+        let uncachedInputTok = 0;
+        let cacheReadTok = 0;
+        let outputTok = 0;
+
+        if (obj.input_tokens !== undefined || obj.output_tokens !== undefined) {
+          uncachedInputTok = Number(obj.input_tokens) || 0;
+          cacheReadTok = Number(obj.cache_read_tokens) || 0;
+          outputTok = Number(obj.output_tokens) || 0;
+        } else if (!hasExactTokenTelemetry) {
+          const thinkingLen = typeof obj.thinking === 'string' ? obj.thinking.length : 0;
+          const contentLen = typeof obj.content === 'string' ? obj.content.length : 0;
+          const toolCallsLen = obj.tool_calls ? JSON.stringify(obj.tool_calls).length : 0;
+          const approx = Math.round(Math.max(rawLine.length, contentLen + thinkingLen + toolCallsLen) / this.charsPerToken);
+          if (obj.type === 'PLANNER_RESPONSE') {
+            outputTok = approx;
+          } else {
+            uncachedInputTok = approx;
+          }
+        } else {
+          uncachedInputTok = 0;
+          cacheReadTok = 0;
+          outputTok = 0;
+        }
+
+        const stepTokens = uncachedInputTok + cacheReadTok + outputTok;
+        const stepCost = ((uncachedInputTok / 1e6) * pricing.inputPerM) +
+          ((cacheReadTok / 1e6) * pricing.cacheReadPerM) +
+          ((outputTok / 1e6) * pricing.outputPerM);
+
+        totalUncachedInputTokens += uncachedInputTok;
+        totalCacheReadTokens += cacheReadTok;
+        totalTokens += stepTokens;
+        writtenTokens += outputTok;
+        totalCostUsd += stepCost;
+
+        let isBackground = subagentWindowSteps > 0;
+        if (Array.isArray(obj.tool_calls) && obj.tool_calls.some(tc => tc.name === 'invoke_subagent' || tc.name === 'swarm')) {
+          isBackground = true;
+          subagentWindowSteps = 2;
+        } else if (subagentWindowSteps > 0) {
+          subagentWindowSteps--;
+        }
+
+        if (tsMs > 0) {
+          const dayKey = toLocalDateKey(tsMs);
+          sessionDays.add(dayKey);
+
+          if (!dailyStats[dayKey]) {
+            dailyStats[dayKey] = {
+              mainCostUsd: 0,
+              bgCostUsd: 0,
+              totalCostUsd: 0,
+              tokens: 0,
+              uncachedInput: 0,
+              cacheRead: 0,
+              output: 0
+            };
+          }
+          const ds = dailyStats[dayKey];
+          if (isBackground) {
+            ds.bgCostUsd += stepCost;
+          } else {
+            ds.mainCostUsd += stepCost;
+          }
+          ds.totalCostUsd = ds.mainCostUsd + ds.bgCostUsd;
+          ds.tokens += stepTokens;
+          ds.uncachedInput += uncachedInputTok;
+          ds.cacheRead += cacheReadTok;
+          ds.output += outputTok;
+
+          if (!dailyCosts[dayKey]) {
+            dailyCosts[dayKey] = { mainCostUsd: 0, bgCostUsd: 0 };
+          }
+          if (isBackground) {
+            dailyCosts[dayKey].bgCostUsd += stepCost;
+          } else {
+            dailyCosts[dayKey].mainCostUsd += stepCost;
+          }
+        }
+
+        if (!modelStats[pricing.baseName]) {
+          modelStats[pricing.baseName] = {
+            costUsd: 0,
+            tokens: 0,
+            uncachedInput: 0,
+            cacheRead: 0,
+            output: 0,
+            packId: pricing.packId,
+            packLabel: pricing.packLabel,
+            packColor: pricing.packColor,
+            compactName: pricing.compactName,
+            inputPerM: pricing.inputPerM,
+            cacheReadPerM: pricing.cacheReadPerM,
+            outputPerM: pricing.outputPerM
+          };
+        }
+        const ms = modelStats[pricing.baseName];
+        ms.costUsd += stepCost;
+        ms.tokens += stepTokens;
+        ms.uncachedInput += uncachedInputTok;
+        ms.cacheRead += cacheReadTok;
+        ms.output += outputTok;
+
+        modelCosts[pricing.baseName] = (modelCosts[pricing.baseName] || 0) + stepCost;
+      }
+
+      return {
+        timestamps,
+        sessionDays: Array.from(sessionDays),
+        dailyCosts,
+        dailyStats,
+        modelCosts,
+        modelStats,
+        totalUncachedInputTokens,
+        totalCacheReadTokens,
+        totalTokens,
+        writtenTokens,
+        totalCostUsd
+      };
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -6701,6 +8726,7 @@ class AgentSyncServer {
    * @param {string} [options.host] Host address (default 127.0.0.1)
    * @param {string} [options.configPath] Path to active_agents.json
    * @param {string} [options.modelSlotsPath] Path to model_slots.json
+   * @param {string} [options.modelCatalogPath] Path to model_catalog.json
    * @param {VcsOrchestrator} [options.vcsOrchestrator] Custom VCS orchestrator
    * @param {string} [options.repoPath] Path to git repository
    */
@@ -6711,6 +8737,8 @@ class AgentSyncServer {
     this.brainDir = options.brainDir || path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
     this.sessionRepos = new Map();
     this.modelSlotsPath = options.modelSlotsPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'model_slots.json');
+    this.modelCatalogPath = options.modelCatalogPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'model_catalog.json');
+    this.telemetryService = options.telemetryService || null;
     this.repoPath = options.repoPath || process.cwd();
     this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ repoPath: this.repoPath });
     this.server = null;
@@ -6944,6 +8972,83 @@ class AgentSyncServer {
   }
 
   /**
+   * Reads discovered live model catalog from disk or returns an empty snapshot.
+   * @returns {Object}
+   */
+  readModelCatalog() {
+    const empty = {
+      source: 'fallback',
+      baseModels: [],
+      modelCatalog: [],
+      disabledModels: [],
+      totalBaseModels: 0,
+      totalModels: 0,
+      updatedAt: 0
+    };
+    try {
+      if (fs.existsSync(this.modelCatalogPath)) {
+        const raw = fs.readFileSync(this.modelCatalogPath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return {
+            ...empty,
+            ...parsed,
+            baseModels: Array.isArray(parsed.baseModels) ? parsed.baseModels : [],
+            modelCatalog: Array.isArray(parsed.modelCatalog) ? parsed.modelCatalog : [],
+            disabledModels: Array.isArray(parsed.disabledModels) ? parsed.disabledModels : []
+          };
+        }
+      }
+    } catch {}
+    return empty;
+  }
+
+  /**
+   * Saves discovered model catalog to disk atomically.
+   * @param {Object} data
+   */
+  writeModelCatalog(data) {
+    try {
+      const dir = path.dirname(this.modelCatalogPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const tmpPath = `${this.modelCatalogPath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+      fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+      fs.renameSync(tmpPath, this.modelCatalogPath);
+    } catch {
+      try {
+        fs.writeFileSync(this.modelCatalogPath, JSON.stringify(data, null, 2), 'utf-8');
+      } catch {}
+    }
+  }
+
+  /**
+   * Updates and persists the live discovered model catalog.
+   * @param {Object} payload
+   * @returns {Object|null}
+   */
+  updateModelCatalog(payload = {}) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+    const baseModels = Array.isArray(payload.baseModels) ? payload.baseModels : [];
+    const modelCatalog = Array.isArray(payload.modelCatalog) ? payload.modelCatalog : [];
+    const disabledModels = Array.isArray(payload.disabledModels) ? payload.disabledModels : [];
+    if (baseModels.length === 0 && modelCatalog.length === 0) return null;
+
+    const updated = {
+      source: typeof payload.source === 'string' && payload.source ? payload.source : 'native-react-context',
+      baseModels,
+      modelCatalog,
+      disabledModels,
+      totalBaseModels: baseModels.length,
+      totalModels: modelCatalog.length,
+      updatedAt: Date.now()
+    };
+    this.writeModelCatalog(updated);
+    return updated;
+  }
+
+  /**
    * Reads saved model slots for a specific subagent sessionId, or all sessions map if omitted.
    * @param {string} [sessionId]
    * @returns {Object|null}
@@ -7134,6 +9239,51 @@ class AgentSyncServer {
           const data = this.readActiveAgents();
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(data));
+          return;
+        }
+
+        if (req.method === 'GET' && req.url === '/model-catalog') {
+          const data = this.readModelCatalog();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(data));
+          return;
+        }
+
+        if (req.method === 'GET' && (req.url === '/pit-wall' || req.url.startsWith('/pit-wall?'))) {
+          const metrics = (this.telemetryService && typeof this.telemetryService.getPitWallMetrics === 'function')
+            ? this.telemetryService.getPitWallMetrics()
+            : null;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', pitWall: metrics }));
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/model-catalog') {
+          let body = '';
+          let exceeded = false;
+          req.on('data', chunk => {
+            body += chunk;
+            if (body.length > 131072) {
+              exceeded = true;
+              res.writeHead(413, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Payload too large' }));
+              req.destroy();
+            }
+          });
+          req.on('end', () => {
+            if (exceeded || res.writableEnded) return;
+            try {
+              const payload = JSON.parse(body || '{}');
+              const catalog = this.updateModelCatalog(payload);
+              if (catalog) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, catalog }));
+                return;
+              }
+            } catch {}
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid model catalog payload' }));
+          });
           return;
         }
 
@@ -7605,7 +9755,7 @@ class ModHost {
     this.slotManager = options.slotManager || new SlotManager();
     this.modLoader = options.modLoader || new ModLoader({ slotManager: this.slotManager });
     this.telemetryService = options.telemetryService || new TelemetryService();
-    this.syncServer = options.syncServer || new AgentSyncServer();
+    this.syncServer = options.syncServer || new AgentSyncServer({ telemetryService: this.telemetryService });
     this.gitService = options.gitService || new GitService();
     this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ gitService: this.gitService });
     this.portResolver = options.portResolver || new CdpPortResolver();
@@ -7845,12 +9995,18 @@ class ModHost {
 
     const activeAgents = this.syncServer.readActiveAgents();
     const modelSlots = this.syncServer.readModelSlots();
+    const modelCatalog = this.syncServer.readModelCatalog();
+    const pitWall = (this.telemetryService && typeof this.telemetryService.getPitWallMetrics === 'function')
+      ? this.telemetryService.getPitWallMetrics()
+      : null;
 
     const hostContext = {
       telemetry: primaryMetric,
       allMetrics,
       activeAgents,
       modelSlots,
+      modelCatalog,
+      pitWall,
       ...vcsOverview,
       timestamp: Date.now()
     };
@@ -7899,6 +10055,14 @@ class ModHost {
         if (parsedSlots && typeof parsedSlots === 'object') {
           this.syncServer.updateModelSlots(parsedSlots);
         }
+      }
+    } catch {}
+
+    // Sync discovered live model catalog from renderer React context to disk
+    try {
+      const discovered = evalRes?.value?.discoveredModelCatalog;
+      if (discovered && typeof discovered === 'object' && Array.isArray(discovered.baseModels) && discovered.baseModels.length > 0) {
+        this.syncServer.updateModelCatalog(discovered);
       }
     } catch {}
 
@@ -8114,10 +10278,68 @@ function renderPopoverHtml(metric) {
     ? m.subagents.length
     : chatModels.reduce((sum, cm) => sum + (Array.isArray(cm.subagents) ? cm.subagents.length : 0), 0);
 
+  const resolveLocalVisualMeta = (rawName) => {
+    const cleaned = cleanModelName(rawName) || 'Gemini 3.8 Flash';
+    const lower = cleaned.toLowerCase();
+    let color = '#94a3b8';
+    let poolId = 'gemini_unified';
+    let poolLabel = 'Gemini Unificado';
+
+    if (/argon|g1-pro/i.test(lower)) {
+      color = '#38bdf8';
+      poolId = 'argon_weekly';
+      poolLabel = 'Argon Semanal';
+    } else if (/opus/i.test(lower)) {
+      color = '#c084fc';
+      poolId = 'third_party';
+      poolLabel = 'Claude / GPT-OSS';
+    } else if (/sonnet|claude/i.test(lower)) {
+      color = '#a78bfa';
+      poolId = 'third_party';
+      poolLabel = 'Claude / GPT-OSS';
+    } else if (/gpt-oss|gpt|120b/i.test(lower)) {
+      color = '#f472b6';
+      poolId = 'third_party';
+      poolLabel = 'Claude / GPT-OSS';
+    } else if (/neon/i.test(lower)) {
+      color = '#a3e635';
+    } else if (/hydrogen/i.test(lower)) {
+      color = '#34d399';
+    } else if (/flash|gemini/i.test(lower)) {
+      color = '#fbbf24';
+    }
+
+    let shortName = cleaned;
+    if (/orchestrator/i.test(lower)) {
+      shortName = lower.includes('neon') ? 'Orch. Neon' : 'Orchestrator';
+    } else {
+      shortName = cleaned
+        .replace(/^Gemini\s+4\s+/i, '')
+        .replace(/^Gemini\s+([\d.]+)\s+Flash/i, 'Flash $1')
+        .replace(/^Claude\s+/i, '')
+        .replace(/\(([^)]+)\)/g, (_, eff) => {
+          const e = eff.trim();
+          return /^medium$/i.test(e) ? 'Med' : e;
+        })
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (/^GPT-OSS/i.test(shortName)) {
+        shortName = 'GPT-OSS 120B';
+      }
+    }
+
+    return { color, shortName, poolId, poolLabel };
+  };
+
   let chatModelsLedgerHtml = '';
   if (chatModels.length > 0) {
     const modelRowsHtml = chatModels.map((cm) => {
+      const meta = resolveLocalVisualMeta(cm.modelName);
+      const dotColor = cm.color || meta.color;
+      const displayName = escapeHtml(cm.shortName || cleanModelName(cm.modelName) || 'Gemini');
+      const fullName = escapeHtml(cleanModelName(cm.modelName) || displayName);
       const safeName = escapeHtml(cleanModelName(cm.modelName) || 'Gemini');
+      const safePool = escapeHtml(cm.poolLabel || meta.poolLabel);
       const quotaShareText = cm.hasDualLimit
         ? `5h:${cm.chatRollingPct}% · 7d:${cm.chatWeeklyPct}%`
         : `7d:${cm.chatWeeklyPct}%`;
@@ -8126,11 +10348,12 @@ function renderPopoverHtml(metric) {
       if (modelSubs.length === 0) {
         return `
           <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 10px; padding: 3px 0; border-top: 1px dashed rgba(255, 255, 255, 0.06); color: #d4d4d8; white-space: nowrap;">
-            <span style="display: flex; align-items: center; gap: 4px; font-weight: 500; color: #e4e4e7; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-              ${icon('bot', 12, '#38bdf8')} ${safeName}
+            <span style="display: flex; align-items: center; gap: 5px; font-weight: 500; color: #e4e4e7; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${fullName} · ${safePool}">
+              <span style="width: 6px; height: 6px; border-radius: 9999px; background: ${dotColor}; box-shadow: 0 0 5px ${dotColor}88; flex-shrink: 0;"></span>
+              <span style="overflow: hidden; text-overflow: ellipsis;">${displayName}</span>
             </span>
             <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
-              ${cm.displayTokens} <span style="color: #38bdf8; font-weight: 600;">(${quotaShareText})</span>
+              ${cm.displayTokens} <span style="color: ${dotColor}; font-weight: 600;">(${quotaShareText})</span>
             </span>
           </div>
         `;
@@ -8139,14 +10362,14 @@ function renderPopoverHtml(metric) {
       const subagentItemsHtml = modelSubs.map((sub) => {
         const subRole = escapeHtml(sub.role || sub.typeName || 'Subagent');
         const modeLabel = sub.isInherited ? 'inherit' : escapeHtml(sub.requestedModel || 'explicit');
-        const dotColor = getSubagentStatusColor(sub.status);
+        const subDotColor = getSubagentStatusColor(sub.status);
         const subTokensText = escapeHtml(sub.displayTokens || formatCompactTokens(sub.tokens));
         const indentPrefix = (Number(sub.depth) || 0) > 0 ? '↳ ' : '';
 
         return `
           <div style="display: flex; justify-content: space-between; align-items: center; gap: 5px; font-size: 9.5px; padding: 1.5px 2px; color: #d4d4d8; white-space: nowrap;">
             <span style="display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden;">
-              <span style="width: 5px; height: 5px; border-radius: 9999px; background: ${dotColor}; flex-shrink: 0;"></span>
+              <span style="width: 5px; height: 5px; border-radius: 9999px; background: ${subDotColor}; flex-shrink: 0;"></span>
               <span style="overflow: hidden; text-overflow: ellipsis; color: #e4e4e7;">${indentPrefix}${subRole}</span>
             </span>
             <span style="display: flex; align-items: center; gap: 4px; flex-shrink: 0; font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; font-size: 9px; color: #a1a1aa;">
@@ -8160,14 +10383,14 @@ function renderPopoverHtml(metric) {
       return `
         <details class="tach-model-details" data-model-key="${safeName}">
           <summary class="tach-model-summary">
-            <span style="display: flex; align-items: center; gap: 4px; font-weight: 500; color: #e4e4e7; min-width: 0; overflow: hidden;">
+            <span style="display: flex; align-items: center; gap: 4px; font-weight: 500; color: #e4e4e7; min-width: 0; overflow: hidden;" title="${fullName} · ${safePool}">
               ${icon('chevron-right', 11, 'currentColor')}
-              ${icon('bot', 12, '#38bdf8')}
-              <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 112px;">${safeName}</span>
+              <span style="width: 6px; height: 6px; border-radius: 9999px; background: ${dotColor}; box-shadow: 0 0 5px ${dotColor}88; flex-shrink: 0;"></span>
+              <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 112px;">${displayName}</span>
               <span style="padding: 0 5px; border-radius: 9999px; background: rgba(56, 189, 248, 0.14); color: #38bdf8; font-size: 8.5px; font-weight: 600; flex-shrink: 0;">${modelSubs.length} sub</span>
             </span>
             <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
-              ${cm.displayTokens} <span style="color: #38bdf8; font-weight: 600;">(${quotaShareText})</span>
+              ${cm.displayTokens} <span style="color: ${dotColor}; font-weight: 600;">(${quotaShareText})</span>
             </span>
           </summary>
           <div class="tach-subagent-list">
@@ -8191,6 +10414,118 @@ function renderPopoverHtml(metric) {
       </div>
     `;
   }
+
+  // Claude-style 10x10 Waffle Grid + 3 Quota Pools
+  const buildLocalWaffleCells = () => {
+    if (Array.isArray(m.waffleCells) && m.waffleCells.length === 100) {
+      return m.waffleCells;
+    }
+    const limit = 1_000_000;
+    const est = Number(m.estTokens) || ((user.tokens || 0) + (model.tokens || 0) + (thinking.tokens || 0) + (tools.tokens || 0) + (mcp.tokens || 0));
+    const cats = [
+      { key: 'user', label: 'Prompts', color: '#38bdf8', tokens: user.tokens || 0 },
+      { key: 'model', label: 'Replies', color: '#a855f7', tokens: model.tokens || 0 },
+      { key: 'thinking', label: 'Thinking', color: '#ec4899', tokens: thinking.tokens || 0 },
+      { key: 'tools', label: 'Tools', color: '#f59e0b', tokens: tools.tokens || 0 },
+      { key: 'mcp', label: 'MCP', color: '#10b981', tokens: mcp.tokens || 0 }
+    ];
+    const known = cats.reduce((s, c) => s + c.tokens, 0);
+    if (est > known) {
+      cats.push({ key: 'other', label: 'Context', color: '#64748b', tokens: est - known });
+    }
+    let used = est > 0 ? Math.min(100, Math.round(est / 10_000)) : 0;
+    if (est > 0 && used === 0) used = 1;
+    const counts = cats.map(c => {
+      const exact = est > 0 ? (c.tokens / est) * used : 0;
+      return { ...c, exact, cells: Math.floor(exact) };
+    });
+    let alloc = counts.reduce((s, c) => s + c.cells, 0);
+    const rem = counts.filter(c => c.tokens > 0).sort((a, b) => (b.exact - Math.floor(b.exact)) - (a.exact - Math.floor(a.exact)));
+    let idx = 0;
+    while (alloc < used && rem.length > 0) {
+      rem[idx % rem.length].cells++;
+      alloc++;
+      idx++;
+    }
+    const cells = [];
+    for (const c of counts) {
+      const pct = est > 0 ? Number(((c.tokens / limit) * 100).toFixed(1)) : 0;
+      for (let i = 0; i < c.cells && cells.length < 100; i++) {
+        cells.push({ key: c.key, label: c.label, color: c.color, tokens: c.tokens, pct });
+      }
+    }
+    const freeTokens = Math.max(0, limit - est);
+    const freePct = Number(((freeTokens / limit) * 100).toFixed(1));
+    while (cells.length < 100) {
+      cells.push({ key: 'free', label: 'Libre', color: 'rgba(255, 255, 255, 0.08)', tokens: freeTokens, pct: freePct });
+    }
+    return cells;
+  };
+
+  const buildLocalPoolsSummary = () => {
+    if (Array.isArray(m.poolsSummary) && m.poolsSummary.length === 3) {
+      return m.poolsSummary;
+    }
+    const poolMap = {
+      gemini_unified: { id: 'gemini_unified', label: 'Gemini Unificado', accent: '#a3e635', tokens: 0, pct: 0 },
+      argon_weekly: { id: 'argon_weekly', label: 'Argon Semanal', accent: '#38bdf8', tokens: 0, pct: 0 },
+      third_party: { id: 'third_party', label: 'Claude / GPT-OSS', accent: '#c084fc', tokens: 0, pct: 0 }
+    };
+    const total = chatModels.reduce((s, cm) => s + (cm.tokens || 0), 0);
+    for (const cm of chatModels) {
+      const meta = resolveLocalVisualMeta(cm.modelName);
+      const pid = cm.poolId || meta.poolId;
+      const target = poolMap[pid] || poolMap.gemini_unified;
+      target.tokens += (cm.tokens || 0);
+    }
+    return Object.values(poolMap).map(p => ({
+      ...p,
+      displayTokens: formatCompactTokens(p.tokens),
+      pct: total > 0 ? Math.round((p.tokens / total) * 100) : 0
+    }));
+  };
+
+  const waffleCells = buildLocalWaffleCells();
+  const poolsSummary = buildLocalPoolsSummary();
+
+  const waffleCellsHtml = waffleCells.map((cell) => {
+    const cColor = cell.color || 'rgba(255, 255, 255, 0.08)';
+    const cTitle = `${cell.label || 'Block'} · ${formatCompactTokens(cell.tokens || 0)} (${cell.pct ?? 0}%)`;
+    return `<div class="antigravity-waffle-cell" style="width: 7px; height: 7px; border-radius: 1.5px; background: ${cColor};" title="${cTitle}"></div>`;
+  }).join('');
+
+  const poolsRowsHtml = poolsSummary.map((pool) => `
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px; font-size: 9.5px; padding: 2px 5px; background: rgba(255, 255, 255, 0.025); border-radius: 5px; white-space: nowrap;">
+      <span style="display: flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; color: #d4d4d8;">
+        <span style="width: 5px; height: 5px; border-radius: 9999px; background: ${pool.accent}; flex-shrink: 0;"></span>
+        <span style="overflow: hidden; text-overflow: ellipsis;">${pool.label}</span>
+      </span>
+      <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9px; flex-shrink: 0;">
+        <strong style="color: #e4e4e7;">${pool.displayTokens}</strong> <span style="color: ${pool.accent};">(${pool.pct}%)</span>
+      </span>
+    </div>
+  `).join('');
+
+  const waffleSectionHtml = `
+    <div class="antigravity-waffle-card" style="margin-bottom: 10px; padding: 8px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+        <span style="font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600;">
+          Claude Context Grid (100 Bloques)
+        </span>
+        <span style="font-size: 9px; font-family: ${FONT_MONO}; color: #a1a1aa;">
+          ${m.pct}% / 1M
+        </span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 9px;">
+        <div class="antigravity-waffle-grid" style="display: grid; grid-template-columns: repeat(10, 7px); gap: 1.5px; flex-shrink: 0;">
+          ${waffleCellsHtml}
+        </div>
+        <div class="antigravity-pools-summary" style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px;">
+          ${poolsRowsHtml}
+        </div>
+      </div>
+    </div>
+  `;
 
   let modelQuotaHtml = '';
   if (quota) {
@@ -8330,6 +10665,8 @@ function renderPopoverHtml(metric) {
       </div>
 
       ${modelQuotaHtml}
+
+      ${waffleSectionHtml}
 
       ${compactionsHtml}
 
@@ -9402,6 +11739,28 @@ function renderModsManagerPanelHtml() {
         </div>
         <label class="mod-switch">
           <input type="checkbox" id="mod-toggle-model-slots" data-mod="model-slots" checked>
+          <span class="mod-slider"></span>
+        </label>
+      </div>
+
+      <!-- Mod Card: Pit Wall Analytics -->
+      <div class="mod-card">
+        <div class="mod-info">
+          <div class="mod-icon-box slots-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 3v18h18"></path>
+              <rect x="7" y="10" width="3" height="7" rx="1"></rect>
+              <rect x="12" y="6" width="3" height="11" rx="1"></rect>
+              <rect x="17" y="13" width="3" height="4" rx="1"></rect>
+            </svg>
+          </div>
+          <div class="mod-text">
+            <div class="mod-title">Pit Wall Analytics</div>
+            <div class="mod-desc">Dashboard de rachas, horas trabajadas, consistencia y costos API en el menubar.</div>
+          </div>
+        </div>
+        <label class="mod-switch">
+          <input type="checkbox" id="mod-toggle-pit-wall" data-mod="pit-wall" checked>
           <span class="mod-slider"></span>
         </label>
       </div>
@@ -11651,8 +14010,20 @@ class VoiceAssistantMod extends AntigravityMod {
 
 /**
  * Base models grouped with their supported effort levels for hierarchical flyout selection.
+ * Acts as the static fallback before live discovery from Antigravity's native model selector context.
  */
 const BASE_MODELS = [
+  {
+    name: 'Gemini 4 Neon',
+    family: 'Neon',
+    color: '#a3e635',
+    efforts: [
+      { id: 'gemini-4-neon-low', label: 'Low', shortName: 'Neon Low' },
+      { id: 'gemini-4-neon-medium', label: 'Medium', shortName: 'Neon Med' },
+      { id: 'gemini-4-neon-high', label: 'High', shortName: 'Neon High' },
+      { id: 'gemini-4-neon-xhigh', label: 'XHigh', shortName: 'Neon XHigh' }
+    ]
+  },
   {
     name: 'Gemini 4 Argon',
     family: 'Argon',
@@ -11713,6 +14084,14 @@ const BASE_MODELS = [
     ]
   },
   {
+    name: 'Orchestrator (Neon)',
+    family: 'Neon',
+    color: '#a3e635',
+    efforts: [
+      { id: 'gemini-pro-orchestrator-neon', label: 'Standard', shortName: 'Orch. Neon' }
+    ]
+  },
+  {
     name: 'Orchestrator (Argon)',
     family: 'Argon',
     color: '#38bdf8',
@@ -11726,6 +14105,34 @@ const BASE_MODELS = [
  * Full symmetrical catalog of supported models for Planner and Builder slots.
  */
 const MODEL_CATALOG = [
+  {
+    id: 'gemini-4-neon-xhigh',
+    name: 'Gemini 4 Neon (XHigh)',
+    shortName: 'Neon XHigh',
+    family: 'Neon',
+    color: '#a3e635'
+  },
+  {
+    id: 'gemini-4-neon-high',
+    name: 'Gemini 4 Neon (High)',
+    shortName: 'Neon High',
+    family: 'Neon',
+    color: '#a3e635'
+  },
+  {
+    id: 'gemini-4-neon-medium',
+    name: 'Gemini 4 Neon (Medium)',
+    shortName: 'Neon Med',
+    family: 'Neon',
+    color: '#a3e635'
+  },
+  {
+    id: 'gemini-4-neon-low',
+    name: 'Gemini 4 Neon (Low)',
+    shortName: 'Neon Low',
+    family: 'Neon',
+    color: '#a3e635'
+  },
   {
     id: 'gemini-4-argon-high',
     name: 'Gemini 4 Argon (High)',
@@ -11846,6 +14253,13 @@ const MODEL_CATALOG = [
     color: '#f472b6'
   },
   {
+    id: 'gemini-pro-orchestrator-neon',
+    name: 'Orchestrator (Neon)',
+    shortName: 'Orch. Neon',
+    family: 'Neon',
+    color: '#a3e635'
+  },
+  {
     id: 'gemini-pro-orchestrator-g1-pro',
     name: 'Orchestrator (Argon)',
     shortName: 'Orchestrator',
@@ -11853,6 +14267,283 @@ const MODEL_CATALOG = [
     color: '#38bdf8'
   }
 ];
+
+/**
+ * Normalizes live Antigravity native model selector data (modelOptions, effortIndex, groups)
+ * into canonical BASE_MODELS, MODEL_CATALOG, and disabledModels collections.
+ * Self-contained so it can be serialized and injected directly into the Electron renderer.
+ * @param {Array<Object>} rawOptions
+ * @param {Map|Object|null} [effortIndex]
+ * @param {Array<Object>} [groups]
+ * @returns {{ baseModels: Array<Object>, modelCatalog: Array<Object>, disabledModels: Array<Object>, totalBaseModels: number, totalModels: number }}
+ */
+function normalizeNativeModelCatalog(rawOptions = [], effortIndex = null, groups = []) {
+  const effortOrder = {
+    minimal: 0,
+    low: 1,
+    medium: 2,
+    high: 3,
+    xhigh: 4,
+    max: 5,
+    standard: 6
+  };
+  const effortDisplay = {
+    minimal: 'Minimal',
+    low: 'Low',
+    medium: 'Medium',
+    high: 'High',
+    xhigh: 'XHigh',
+    max: 'Max',
+    standard: 'Standard'
+  };
+  const effortShort = {
+    minimal: 'Min',
+    low: 'Low',
+    medium: 'Med',
+    high: 'High',
+    xhigh: 'XHigh',
+    max: 'Max',
+    standard: ''
+  };
+  const fallbackPalette = ['#22d3ee', '#fb923c', '#f43f5e', '#818cf8', '#2dd4bf', '#e879f9'];
+
+  const resolveStyle = (baseName) => {
+    const lower = String(baseName || '').toLowerCase();
+    if (lower.includes('neon')) return { family: 'Neon', color: '#a3e635' };
+    if (lower.includes('argon')) return { family: 'Argon', color: '#38bdf8' };
+    if (lower.includes('hydrogen')) return { family: 'Hydrogen', color: '#34d399' };
+    if (lower.includes('carbon')) return { family: 'Carbon', color: '#94a3b8' };
+    if (lower.includes('flash')) return { family: 'Gemini 3.8', color: '#fbbf24' };
+    if (lower.includes('opus')) return { family: 'Claude', color: '#c084fc' };
+    if (lower.includes('sonnet')) return { family: 'Claude', color: '#a78bfa' };
+    if (lower.includes('claude')) return { family: 'Claude', color: '#c084fc' };
+    if (lower.includes('gpt-oss') || lower.includes('openai')) return { family: 'OpenAI OSS', color: '#f472b6' };
+    let hash = 0;
+    for (let i = 0; i < lower.length; i++) {
+      hash = ((hash << 5) - hash + lower.charCodeAt(i)) | 0;
+    }
+    const color = fallbackPalette[Math.abs(hash) % fallbackPalette.length];
+    return { family: String(baseName || 'Custom').split(/\s+/)[0] || 'Custom', color };
+  };
+
+  const makeShortBase = (baseName, modelId) => {
+    const name = String(baseName || '').trim();
+    if (modelId === 'gemini-pro-orchestrator-g1-pro') return 'Orchestrator';
+    const orchMatch = name.match(/^Orchestrator\s*\(([^)]+)\)$/i);
+    if (orchMatch) return `Orch. ${orchMatch[1].trim()}`;
+    if (/^Gemini\s+4\s+/i.test(name)) return name.replace(/^Gemini\s+4\s+/i, '').trim();
+    if (/^Gemini\s+([\d.]+)\s+Flash$/i.test(name)) {
+      const m = name.match(/^Gemini\s+([\d.]+)\s+Flash$/i);
+      return `Flash ${m[1]}`;
+    }
+    if (/^Claude\s+/i.test(name)) return name.replace(/^Claude\s+/i, '').trim();
+    return name;
+  };
+
+  const parseLabelAndEffort = (rawLabel, rawEffortHint) => {
+    const label = String(rawLabel || '').trim();
+    const hint = rawEffortHint ? String(rawEffortHint).trim().toLowerCase() : '';
+    const knownEfforts = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+    const parenMatch = label.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
+    if (parenMatch) {
+      const candidateBase = parenMatch[1].trim();
+      const candidateEffort = parenMatch[2].trim();
+      const lowerEff = candidateEffort.toLowerCase();
+      if (knownEfforts.includes(lowerEff) || (hint && lowerEff === hint)) {
+        return {
+          baseName: candidateBase,
+          effortKey: lowerEff,
+          effortLabel: effortDisplay[lowerEff] || candidateEffort
+        };
+      }
+    }
+    if (hint && knownEfforts.includes(hint)) {
+      return {
+        baseName: label,
+        effortKey: hint,
+        effortLabel: effortDisplay[hint] || hint
+      };
+    }
+    return {
+      baseName: label,
+      effortKey: 'standard',
+      effortLabel: 'Standard'
+    };
+  };
+
+  const combinedRaw = [];
+  const seenIds = new Set();
+  const pushOption = (opt) => {
+    if (!opt || typeof opt !== 'object') return;
+    const id = String(opt.modelId || opt.id || '').trim();
+    if (!id || seenIds.has(id)) return;
+    seenIds.add(id);
+    combinedRaw.push(opt);
+  };
+
+  if (Array.isArray(rawOptions)) {
+    for (const opt of rawOptions) pushOption(opt);
+  }
+  if (Array.isArray(groups)) {
+    for (const grp of groups) {
+      if (grp && Array.isArray(grp.options)) {
+        for (const opt of grp.options) pushOption(opt);
+      }
+    }
+  }
+
+  const disabledModels = [];
+  const baseMap = new Map();
+  const baseOrder = [];
+
+  const ensureBase = (baseName, description, tagTitle) => {
+    if (!baseMap.has(baseName)) {
+      const style = resolveStyle(baseName);
+      baseMap.set(baseName, {
+        name: baseName,
+        family: style.family,
+        color: style.color,
+        tagTitle: tagTitle || '',
+        description: description || '',
+        efforts: []
+      });
+      baseOrder.push(baseName);
+    } else {
+      const entry = baseMap.get(baseName);
+      if (!entry.description && description) entry.description = description;
+      if (!entry.tagTitle && tagTitle) entry.tagTitle = tagTitle;
+    }
+    return baseMap.get(baseName);
+  };
+
+  // Preserve group display order for base models first
+  if (Array.isArray(groups)) {
+    for (const grp of groups) {
+      if (!grp || !Array.isArray(grp.options)) continue;
+      for (const opt of grp.options) {
+        if (!opt || opt.disabled) continue;
+        const parsed = parseLabelAndEffort(opt.label || opt.name, opt.effort || opt.effortLabel);
+        if (parsed.baseName) {
+          ensureBase(parsed.baseName, opt.tagDescription || '', opt.tagTitle || '');
+        }
+      }
+    }
+  }
+
+  // Build lookup of effort hints from Antigravity's native effortIndex if provided
+  const effortHintById = new Map();
+  if (effortIndex && typeof effortIndex === 'object') {
+    const entries = effortIndex instanceof Map
+      ? Array.from(effortIndex.entries())
+      : Object.entries(effortIndex);
+    for (const [baseKey, list] of entries) {
+      if (list instanceof Map) {
+        for (const [effKey, item] of list.entries()) {
+          if (item && (item.modelId || item.id)) {
+            effortHintById.set(String(item.modelId || item.id), { baseName: baseKey, effort: effKey });
+          }
+        }
+      } else if (Array.isArray(list)) {
+        for (const item of list) {
+          if (item && (item.modelId || item.id)) {
+            effortHintById.set(String(item.modelId || item.id), {
+              baseName: baseKey,
+              effort: item.effort || item.effortLabel || ''
+            });
+          }
+        }
+      }
+    }
+  }
+
+  for (const opt of combinedRaw) {
+    const id = String(opt.modelId || opt.id || '').trim();
+    const rawLabel = String(opt.label || opt.name || id).trim();
+    if (opt.disabled) {
+      disabledModels.push({
+        id,
+        name: rawLabel,
+        tagTitle: String(opt.tagTitle || 'Unavailable'),
+        description: String(opt.tagDescription || '')
+      });
+      continue;
+    }
+
+    const hint = effortHintById.get(id);
+    const parsed = parseLabelAndEffort(rawLabel, hint ? hint.effort : (opt.effort || opt.effortLabel));
+    const hintBase = (hint && hint.baseName) ? String(hint.baseName).trim() : '';
+    const isSlugHint = /^[a-z0-9._-]+$/.test(hintBase) && !/\s/.test(hintBase);
+    const baseName = (!isSlugHint && hintBase) ? hintBase : (parsed.baseName || hintBase);
+    const baseEntry = ensureBase(baseName, opt.tagDescription || '', opt.tagTitle || '');
+
+    if (!baseEntry.efforts.some(e => e.id === id)) {
+      const shortBase = makeShortBase(baseName, id);
+      const effShort = effortShort[parsed.effortKey] !== undefined ? effortShort[parsed.effortKey] : parsed.effortLabel;
+      const isSingleStandalone = parsed.effortKey === 'standard' || /^GPT-OSS/i.test(baseName);
+      const shortName = isSingleStandalone ? shortBase : `${shortBase} ${effShort}`.trim();
+
+      baseEntry.efforts.push({
+        id,
+        label: parsed.effortLabel,
+        shortName,
+        effortKey: parsed.effortKey,
+        nativeLabel: rawLabel,
+        value: typeof opt.value === 'number' ? opt.value : undefined
+      });
+    }
+  }
+
+  const baseModels = [];
+  const modelCatalog = [];
+
+  for (const baseName of baseOrder) {
+    const entry = baseMap.get(baseName);
+    if (!entry || entry.efforts.length === 0) continue;
+
+    entry.efforts.sort((a, b) => {
+      const oa = effortOrder[a.effortKey] ?? 99;
+      const ob = effortOrder[b.effortKey] ?? 99;
+      if (oa !== ob) return oa - ob;
+      return a.label.localeCompare(b.label);
+    });
+
+    const cleanEfforts = entry.efforts.map(e => ({
+      id: e.id,
+      label: e.label,
+      shortName: e.shortName
+    }));
+
+    baseModels.push({
+      name: entry.name,
+      family: entry.family,
+      color: entry.color,
+      ...(entry.tagTitle ? { tagTitle: entry.tagTitle } : {}),
+      ...(entry.description ? { description: entry.description } : {}),
+      efforts: cleanEfforts
+    });
+
+    // Populate flat catalog with highest effort first for consistent default lookup
+    for (let i = entry.efforts.length - 1; i >= 0; i--) {
+      const e = entry.efforts[i];
+      const fullName = e.nativeLabel || (e.effortKey === 'standard' ? entry.name : `${entry.name} (${e.label})`);
+      modelCatalog.push({
+        id: e.id,
+        name: fullName,
+        shortName: e.shortName,
+        family: entry.family,
+        color: entry.color
+      });
+    }
+  }
+
+  return {
+    baseModels,
+    modelCatalog,
+    disabledModels,
+    totalBaseModels: baseModels.length,
+    totalModels: modelCatalog.length
+  };
+}
 
 /**
  * Default assignments for Planner and Builder slots.
@@ -11910,22 +14601,29 @@ function getModelById(modelId, catalog) {
 }
 
 /**
- * Renders the dual menubar buttons for Planner and Builder slots.
+ * Renders the dual menubar buttons for Planner and Builder slots
+ * along with the Planner-to-Chat synchronization button.
  * @param {Object} [slots=DEFAULT_MODEL_SLOTS]
+ * @param {Array<Object>} [catalog]
  * @returns {string}
  */
-function renderModelSlotsMenubarHtml(slots = DEFAULT_MODEL_SLOTS) {
+function renderModelSlotsMenubarHtml(slots = DEFAULT_MODEL_SLOTS, catalog) {
   const currentSlots = slots || DEFAULT_MODEL_SLOTS;
   const plannerId = currentSlots.planner || DEFAULT_MODEL_SLOTS.planner;
   const builderId = currentSlots.builder || DEFAULT_MODEL_SLOTS.builder;
-  const planner = getModelById(plannerId);
-  const builder = getModelById(builderId);
+  const planner = getModelById(plannerId, catalog);
+  const builder = getModelById(builderId, catalog);
+  const isSynced = currentSlots.lockNative !== false && !currentSlots.plannerSyncBroken;
+  const syncTitle = isSynced
+    ? `Chat synced with Planner (${planner.name}) - Click to re-sync`
+    : `Sync broken - Click to sync chat back to Planner (${planner.name})`;
 
   return `
     <div class="antigravity-model-slots-group" id="antigravity-model-slots-group">
       <button 
+        type="button"
         id="antigravity-model-slot-planner" 
-        class="antigravity-model-slot-btn" 
+        class="antigravity-model-slot-btn${isSynced ? '' : ' is-desynced'}" 
         data-slot-role="planner" 
         data-model-id="${planner.id}" 
         title="Planner Model: ${planner.name}"
@@ -11935,7 +14633,19 @@ function renderModelSlotsMenubarHtml(slots = DEFAULT_MODEL_SLOTS) {
         <span class="model-slot-value">${planner.shortName}</span>
         <span class="model-slot-caret">▼</span>
       </button>
+      <button
+        type="button"
+        id="antigravity-planner-sync-btn"
+        class="antigravity-planner-sync-btn ${isSynced ? 'is-synced' : 'is-desynced'}"
+        data-sync-state="${isSynced ? 'synced' : 'desynced'}"
+        aria-pressed="${isSynced ? 'true' : 'false'}"
+        aria-label="Sync chat model with Planner"
+        title="${syncTitle}"
+      >
+        <svg aria-hidden="true" class="planner-sync-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
+      </button>
       <button 
+        type="button"
         id="antigravity-model-slot-builder" 
         class="antigravity-model-slot-btn" 
         data-slot-role="builder" 
@@ -11952,63 +14662,193 @@ function renderModelSlotsMenubarHtml(slots = DEFAULT_MODEL_SLOTS) {
 }
 
 /**
- * Renders hierarchical dropdown markup with base models and flyout effort submenus.
+ * Packages base models into compact provider/family packs for collapsible accordion rendering.
+ * Self-contained so it can be serialized into the Electron renderer.
+ * @param {Array<Object>} baseModels
+ * @returns {Array<{ id: string, label: string, color: string, models: Array<Object> }>}
+ */
+function groupBaseModelsIntoPacks(baseModels = []) {
+  const list = Array.isArray(baseModels) ? baseModels : [];
+  const packMap = new Map();
+  const packOrder = [];
+
+  const classifyPack = (bm) => {
+    const name = String(bm?.name || '');
+    const lower = name.toLowerCase();
+    const fam = String(bm?.family || '').toLowerCase();
+    if (lower.startsWith('orchestrator')) {
+      return { id: 'orchestrators', label: 'Orchestrators', color: '#38bdf8' };
+    }
+    if (lower.startsWith('gemini') || fam === 'neon' || fam === 'carbon' || fam === 'argon' || fam === 'hydrogen' || fam.includes('gemini')) {
+      return { id: 'gemini', label: 'Gemini', color: '#a3e635' };
+    }
+    if (lower.startsWith('claude') || fam === 'claude') {
+      return { id: 'claude', label: 'Claude', color: '#c084fc' };
+    }
+    if (lower.includes('gpt-oss') || fam.includes('openai')) {
+      return { id: 'openai-oss', label: 'OpenAI OSS', color: '#f472b6' };
+    }
+    const label = bm?.family || name.split(/\s+/)[0] || 'Other';
+    const id = label.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'other';
+    return { id, label, color: bm?.color || '#38bdf8' };
+  };
+
+  const formatCompactName = (bm, packId) => {
+    const name = String(bm?.name || '').trim();
+    if (packId === 'gemini') {
+      return name.replace(/^Gemini\s+/i, '').trim() || name;
+    }
+    if (packId === 'orchestrators') {
+      const m = name.match(/^Orchestrator\s*\(([^)]+)\)$/i);
+      return m ? m[1].trim() : name;
+    }
+    if (packId === 'claude') {
+      return name.replace(/^Claude\s+/i, '').trim() || name;
+    }
+    return name;
+  };
+
+  for (const bm of list) {
+    if (!bm || !Array.isArray(bm.efforts) || bm.efforts.length === 0) continue;
+    const meta = classifyPack(bm);
+    if (!packMap.has(meta.id)) {
+      packMap.set(meta.id, {
+        id: meta.id,
+        label: meta.label,
+        color: meta.color,
+        models: []
+      });
+      packOrder.push(meta.id);
+    }
+    packMap.get(meta.id).models.push({
+      ...bm,
+      compactName: formatCompactName(bm, meta.id)
+    });
+  }
+
+  return packOrder.map(id => packMap.get(id));
+}
+
+/**
+ * Renders packaged hierarchical dropdown markup with collapsible family packs and flyout effort submenus.
  * @param {'planner'|'builder'} role
  * @param {string} selectedModelId
  * @param {Array<Object>} [catalog=BASE_MODELS]
+ * @param {Object} [options]
+ * @param {boolean} [options.lockNative=true]
  * @returns {string} Clean HTML without any emojis
  */
-function renderModelSlotDropdownHtml(role, selectedModelId, catalog) {
+function renderModelSlotDropdownHtml(role, selectedModelId, catalog, options = {}) {
   const baseModels = (catalog && Array.isArray(catalog) && catalog[0] && catalog[0].efforts)
     ? catalog
     : ((typeof window !== 'undefined' && window.__BASE_MODELS) || BASE_MODELS);
   const isPlanner = role === 'planner';
   const headerTitle = isPlanner ? 'Select Planner Model' : 'Select Builder Model';
   const roleLabel = isPlanner ? 'PLANNER' : 'BUILDER';
-  const roleDesc = isPlanner ? 'Deep reasoning, architecture & plan creation' : 'Fast code generation, edits & execution';
+  const roleDesc = isPlanner ? 'Architecture, planning & chat sync' : 'Fast code edits & subagents';
+  const lockNative = options.lockNative !== false;
 
-  const rowsHtml = baseModels.map(bm => {
-    const activeEffort = bm.efforts.find(e => e.id === selectedModelId);
-    const isModelActive = Boolean(activeEffort);
-    const singleEffortId = bm.efforts.length === 1 ? bm.efforts[0].id : '';
+  const packFn = typeof groupBaseModelsIntoPacks === 'function'
+    ? groupBaseModelsIntoPacks
+    : (typeof window !== 'undefined' && typeof window.__groupBaseModelsIntoPacks === 'function'
+      ? window.__groupBaseModelsIntoPacks
+      : null);
 
-    const effortOptionsHtml = bm.efforts.map(eff => {
-      const isEffortActive = eff.id === selectedModelId;
+  const packs = packFn
+    ? packFn(baseModels)
+    : [{ id: 'all', label: 'Models', color: '#38bdf8', models: baseModels.map(m => ({ ...m, compactName: m.name })) }];
+
+  const packsHtml = packs.map((pack, idx) => {
+    let activeModelInPack = null;
+    for (const bm of pack.models) {
+      const found = bm.efforts.find(e => e.id === selectedModelId);
+      if (found) {
+        activeModelInPack = { bm, eff: found };
+        break;
+      }
+    }
+    const isExpanded = Boolean(activeModelInPack) || (idx === 0 && !packs.some(p => p.models.some(m => m.efforts.some(e => e.id === selectedModelId))));
+
+    const rowsHtml = pack.models.map(bm => {
+      const activeEffort = bm.efforts.find(e => e.id === selectedModelId);
+      const isModelActive = Boolean(activeEffort);
+      const singleEffortId = bm.efforts.length === 1 ? bm.efforts[0].id : '';
+      const displayName = bm.compactName || bm.name;
+
+      const effortOptionsHtml = bm.efforts.map(eff => {
+        const isEffortActive = eff.id === selectedModelId;
+        return `
+          <button 
+            type="button" 
+            class="model-effort-option${isEffortActive ? ' active' : ''}" 
+            data-slot-role="${role}" 
+            data-model-id="${eff.id}" 
+            title="${bm.name} - ${eff.label}"
+          >
+            <span class="model-effort-name">${eff.label}</span>
+            <span class="model-effort-check">${isEffortActive ? '✓' : ''}</span>
+          </button>
+        `.trim();
+      }).join('\n');
+
       return `
-        <button 
-          type="button" 
-          class="model-effort-option${isEffortActive ? ' active' : ''}" 
-          data-slot-role="${role}" 
-          data-model-id="${eff.id}" 
-          title="${bm.name} - ${eff.label}"
+        <div 
+          class="model-slot-row${isModelActive ? ' active' : ''}" 
+          data-slot-role="${role}"
+          ${singleEffortId ? `data-model-id="${singleEffortId}"` : ''}
+          data-base-model="${bm.name}"
         >
-          <span class="model-effort-name">${eff.label}</span>
-          <span class="model-effort-check">${isEffortActive ? '✓' : ''}</span>
-        </button>
+          <div class="model-slot-row-left">
+            <span class="model-slot-row-dot" style="background-color: ${bm.color}; box-shadow: 0 0 6px ${bm.color}66;"></span>
+            <span class="model-slot-row-name">${displayName}</span>
+          </div>
+          <div class="model-slot-row-right">
+            ${activeEffort ? `<span class="model-slot-active-badge">${activeEffort.label}</span>` : ''}
+            <span class="model-slot-chevron">&#8250;</span>
+          </div>
+          <div class="model-slot-submenu">
+            ${effortOptionsHtml}
+          </div>
+        </div>
       `.trim();
     }).join('\n');
 
     return `
-      <div 
-        class="model-slot-row${isModelActive ? ' active' : ''}" 
-        data-slot-role="${role}"
-        ${singleEffortId ? `data-model-id="${singleEffortId}"` : ''}
-        data-base-model="${bm.name}"
-      >
-        <div class="model-slot-row-left">
-          <span class="model-slot-row-dot" style="background-color: ${bm.color}; box-shadow: 0 0 6px ${bm.color}66;"></span>
-          <span class="model-slot-row-name">${bm.name}</span>
-        </div>
-        <div class="model-slot-row-right">
-          ${activeEffort ? `<span class="model-slot-active-badge">${activeEffort.label}</span>` : ''}
-          <span class="model-slot-chevron">&#8250;</span>
-        </div>
-        <div class="model-slot-submenu">
-          ${effortOptionsHtml}
+      <div class="model-pack${isExpanded ? ' expanded' : ''}${activeModelInPack ? ' has-active' : ''}" data-pack-id="${pack.id}">
+        <button type="button" class="model-pack-header" data-pack-id="${pack.id}" aria-expanded="${isExpanded ? 'true' : 'false'}">
+          <span class="model-pack-header-left">
+            <span class="model-pack-dot" style="background-color: ${pack.color};"></span>
+            <span class="model-pack-title">${pack.label}</span>
+            <span class="model-pack-count">${pack.models.length}</span>
+          </span>
+          <span class="model-pack-header-right">
+            ${activeModelInPack ? `<span class="model-pack-active-pill">${activeModelInPack.eff.shortName}</span>` : ''}
+            <span class="model-pack-caret">&#9656;</span>
+          </span>
+        </button>
+        <div class="model-pack-body">
+          ${rowsHtml}
         </div>
       </div>
     `.trim();
   }).join('\n');
+
+  const lockToggleHtml = isPlanner
+    ? `
+      <button
+        type="button"
+        id="antigravity-model-lock-toggle"
+        class="model-slot-lock-toggle${lockNative ? ' locked' : ' desynced'}"
+        data-lock-toggle="true"
+        data-locked="${lockNative ? 'true' : 'false'}"
+        aria-pressed="${lockNative ? 'true' : 'false'}"
+        title="${lockNative ? 'Chat synced with Planner slot. Change model in chat anytime to override.' : 'Sync broken by manual chat selection. Click to sync back to Planner slot.'}"
+      >
+        <span class="model-lock-dot"></span>
+        <span class="model-lock-label">${lockNative ? 'Chat Synced' : 'Sync Planner'}</span>
+      </button>
+    `.trim()
+    : '';
 
   return `
     <div class="model-slot-dropdown-header">
@@ -12016,10 +14856,13 @@ function renderModelSlotDropdownHtml(role, selectedModelId, catalog) {
         <span class="model-slot-dropdown-title">${headerTitle}</span>
         <span class="model-slot-dropdown-role-badge ${role}">${roleLabel}</span>
       </div>
-      <div class="model-slot-dropdown-sub">${roleDesc}</div>
+      <div class="model-slot-dropdown-meta-row">
+        <span class="model-slot-dropdown-sub">${roleDesc}</span>
+        ${lockToggleHtml}
+      </div>
     </div>
     <div class="model-slot-options-list">
-      ${rowsHtml}
+      ${packsHtml}
     </div>
   `.trim();
 }
@@ -12075,7 +14918,7 @@ class ModelSlotsMod extends AntigravityMod {
       priority: 90
     });
 
-    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY PLANNER & BUILDER MODEL SLOTS MOD - STYLES\r\n   ========================================================================= */\r\n\r\n/* Menubar Buttons Container */\r\n#antigravity-model-slots-group,\r\n.antigravity-model-slots-group {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  flex-shrink: 0 !important;\r\n  white-space: nowrap !important;\r\n  transform: none !important;\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n  user-select: none !important;\r\n}\r\n\r\n/* Individual Slot Selector Button */\r\n.antigravity-model-slot-btn {\r\n  height: 26px !important;\r\n  padding: 0 8px !important;\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  color: rgba(255, 255, 255, 0.85) !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  flex-shrink: 0 !important;\r\n  white-space: nowrap !important;\r\n  transition: background-color 0.12s ease, border-color 0.12s ease !important;\r\n  transform: none !important;\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n  user-select: none !important;\r\n  line-height: 1 !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n#antigravity-model-slot-planner,\r\n#antigravity-model-slot-builder {\r\n  flex-shrink: 0 !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.antigravity-model-slot-btn.compact {\r\n  height: 22px !important;\r\n  padding: 2px 6px !important;\r\n  font-size: 11px !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n@media (max-width: 1100px) {\r\n  #antigravity-mod-model-slots .antigravity-model-slot-btn,\r\n  .antigravity-model-slot-btn {\r\n    height: 22px !important;\r\n    padding: 2px 6px !important;\r\n    font-size: 11px !important;\r\n    gap: 4px !important;\r\n  }\r\n\r\n  #antigravity-mod-model-slots .antigravity-model-slot-btn .model-slot-role,\r\n  .antigravity-model-slot-btn .model-slot-role {\r\n    font-size: 9.5px !important;\r\n  }\r\n}\r\n\r\n.antigravity-model-slot-btn:hover {\r\n  background: rgba(255, 255, 255, 0.09) !important;\r\n  border-color: rgba(255, 255, 255, 0.22) !important;\r\n  color: #ffffff !important;\r\n  transform: none !important;\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n}\r\n\r\n.antigravity-model-slot-btn.open {\r\n  background: rgba(255, 255, 255, 0.13) !important;\r\n  border-color: rgba(56, 189, 248, 0.45) !important;\r\n  color: #ffffff !important;\r\n  box-shadow: 0 0 10px rgba(56, 189, 248, 0.15) !important;\r\n}\r\n\r\n/* Menubar Button Elements */\r\n.antigravity-model-slot-btn .model-slot-dot {\r\n  width: 6px !important;\r\n  height: 6px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.antigravity-model-slot-btn .model-slot-role {\r\n  font-weight: 600 !important;\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  text-transform: uppercase !important;\r\n  letter-spacing: 0.3px !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.antigravity-model-slot-btn .model-slot-value {\r\n  font-weight: 500 !important;\r\n  color: #ffffff !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.antigravity-model-slot-btn .model-slot-caret {\r\n  font-size: 8px !important;\r\n  opacity: 0.5 !important;\r\n  pointer-events: none !important;\r\n  margin-left: 1px !important;\r\n}\r\n\r\n/* Floating Portal Dropdown */\r\n.antigravity-model-slot-dropdown-portal {\r\n  position: fixed !important;\r\n  z-index: 1000001 !important;\r\n  width: 250px !important;\r\n  max-height: none !important;\r\n  overflow: visible !important;\r\n  background: #161822 !important;\r\n  background-color: #161822 !important;\r\n  background-image: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  opacity: 1 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 12px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 10px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: none;\r\n  flex-direction: column !important;\r\n  box-sizing: border-box !important;\r\n  animation: modelSlotPopIn 0.15s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n}\r\n\r\n.antigravity-model-slot-dropdown-portal.open {\r\n  display: flex !important;\r\n}\r\n\r\n@keyframes modelSlotPopIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-5px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* Dropdown Header */\r\n.model-slot-dropdown-header {\r\n  padding-bottom: 8px !important;\r\n  margin-bottom: 8px !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.model-slot-dropdown-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.model-slot-dropdown-title {\r\n  font-size: 13px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n}\r\n\r\n.model-slot-dropdown-role-badge {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  letter-spacing: 0.4px !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  text-transform: uppercase !important;\r\n}\r\n\r\n.model-slot-dropdown-role-badge.planner {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.model-slot-dropdown-role-badge.builder {\r\n  background: rgba(52, 211, 153, 0.15) !important;\r\n  color: #34d399 !important;\r\n  border: 1px solid rgba(52, 211, 153, 0.3) !important;\r\n}\r\n\r\n.model-slot-dropdown-sub {\r\n  font-size: 10.5px !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n}\r\n\r\n/* Hierarchical Base Model Options List */\r\n.model-slot-options-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  overflow: visible !important;\r\n}\r\n\r\n/* Base Model Row */\r\n.model-slot-row {\r\n  position: relative !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 6px 8px !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.12s ease !important;\r\n  user-select: none !important;\r\n  font-family: inherit !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.model-slot-row:hover {\r\n  background: rgba(255, 255, 255, 0.07) !important;\r\n  border-color: rgba(255, 255, 255, 0.1) !important;\r\n}\r\n\r\n.model-slot-row.active {\r\n  background: rgba(56, 189, 248, 0.08) !important;\r\n  border-color: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.model-slot-row.open {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.model-slot-row-left {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  min-width: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-row-dot {\r\n  width: 7px !important;\r\n  height: 7px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-row-name {\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-row-right {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-active-badge {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n  letter-spacing: 0.2px !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-chevron {\r\n  font-size: 14px !important;\r\n  line-height: 1 !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n  pointer-events: none !important;\r\n  transition: color 0.12s ease !important;\r\n}\r\n\r\n.model-slot-row:hover .model-slot-chevron,\r\n.model-slot-row.open .model-slot-chevron {\r\n  color: #ffffff !important;\r\n}\r\n\r\n/* Effort Submenu Flyout */\r\n.model-slot-submenu {\r\n  position: absolute !important;\r\n  left: 100% !important;\r\n  top: -4px !important;\r\n  margin-left: 0 !important;\r\n  min-width: 120px !important;\r\n  display: none;\r\n  z-index: 1000002 !important;\r\n  background: #161822 !important;\r\n  background-color: #161822 !important;\r\n  background-image: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  opacity: 1 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.14) !important;\r\n  border-radius: 8px !important;\r\n  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 4px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.model-slot-submenu::before {\r\n  content: \"\";\r\n  position: absolute;\r\n  top: 0;\r\n  bottom: 0;\r\n  left: -8px;\r\n  width: 8px;\r\n}\r\n\r\n.model-slot-row:hover > .model-slot-submenu,\r\n.model-slot-row.open > .model-slot-submenu {\r\n  display: block !important;\r\n}\r\n\r\n.model-slot-submenu.submenu-left {\r\n  right: 100% !important;\r\n  left: auto !important;\r\n  margin-right: 0 !important;\r\n  margin-left: 0 !important;\r\n}\r\n\r\n.model-slot-submenu.submenu-left::before {\r\n  left: auto;\r\n  right: -8px;\r\n}\r\n\r\n/* Effort Level Option Button */\r\n.model-effort-option {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 5px 8px !important;\r\n  margin-bottom: 2px !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 5px !important;\r\n  cursor: pointer !important;\r\n  text-align: left !important;\r\n  font-family: inherit !important;\r\n  box-sizing: border-box !important;\r\n  transition: all 0.12s ease !important;\r\n}\r\n\r\n.model-effort-option:last-child {\r\n  margin-bottom: 0 !important;\r\n}\r\n\r\n.model-effort-option:hover {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: rgba(255, 255, 255, 0.12) !important;\r\n}\r\n\r\n.model-effort-option.active {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  border-color: rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.model-effort-name {\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  color: #ffffff !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-effort-option.active .model-effort-name {\r\n  color: #38bdf8 !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.model-effort-check {\r\n  font-size: 12px !important;\r\n  font-weight: 700 !important;\r\n  color: #38bdf8 !important;\r\n  width: 14px !important;\r\n  text-align: right !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n/* Legacy option styles retained for compatibility */\r\n.model-slot-option {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  width: 100% !important;\r\n  padding: 6px 8px !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  text-align: left !important;\r\n  transition: all 0.12s ease !important;\r\n  user-select: none !important;\r\n  font-family: inherit !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.model-slot-option:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(255, 255, 255, 0.1) !important;\r\n}\r\n\r\n.model-slot-option.active {\r\n  background: rgba(56, 189, 248, 0.1) !important;\r\n  border-color: rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.model-slot-option-dot {\r\n  width: 8px !important;\r\n  height: 8px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-option-info {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 1px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-option-name {\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.model-slot-option-family {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.42) !important;\r\n}\r\n\r\n.model-slot-option-badge {\r\n  font-size: 9.5px !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  color: rgba(255, 255, 255, 0.6) !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-option-check {\r\n  font-size: 12px !important;\r\n  font-weight: 700 !important;\r\n  color: #38bdf8 !important;\r\n  width: 14px !important;\r\n  text-align: center !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n/* Mods Manager Icon Box for Model Slots */\r\n.mod-icon-box.slots-icon {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n/* Subagent Model Pill Badge */\r\n.antigravity-subagent-model-pill {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  height: 18px !important;\r\n  padding: 0 6px !important;\r\n  margin-left: 6px !important;\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  line-height: 1 !important;\r\n  border-radius: 4px !important;\r\n  border: 1px solid !important;\r\n  user-select: none !important;\r\n  vertical-align: middle !important;\r\n  box-sizing: border-box !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.antigravity-subagent-model-pill .subagent-model-dot {\r\n  width: 5px !important;\r\n  height: 5px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.antigravity-subagent-model-pill .subagent-model-label {\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  letter-spacing: 0.2px !important;\r\n  pointer-events: none !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n";
+    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY PLANNER & BUILDER MODEL SLOTS MOD - STYLES\r\n   ========================================================================= */\r\n\r\n/* Menubar Buttons Container */\r\n#antigravity-model-slots-group,\r\n.antigravity-model-slots-group {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  flex-shrink: 0 !important;\r\n  white-space: nowrap !important;\r\n  transform: none !important;\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n  user-select: none !important;\r\n}\r\n\r\n/* Individual Slot Selector Button */\r\n.antigravity-model-slot-btn {\r\n  height: 26px !important;\r\n  padding: 0 8px !important;\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  color: rgba(255, 255, 255, 0.85) !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  flex-shrink: 0 !important;\r\n  white-space: nowrap !important;\r\n  transition: background-color 0.12s ease, border-color 0.12s ease !important;\r\n  transform: none !important;\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n  user-select: none !important;\r\n  line-height: 1 !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n#antigravity-model-slot-planner,\r\n#antigravity-model-slot-builder {\r\n  flex-shrink: 0 !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.antigravity-model-slot-btn.is-desynced {\r\n  border-color: rgba(245, 158, 11, 0.45) !important;\r\n}\r\n\r\n/* Planner-to-Chat Sync Button (Menubar) */\r\n.antigravity-planner-sync-btn {\r\n  height: 26px !important;\r\n  min-width: 26px !important;\r\n  padding: 0 6px !important;\r\n  border-radius: 6px !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.28) !important;\r\n  background: rgba(56, 189, 248, 0.08) !important;\r\n  color: #38bdf8 !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  box-sizing: border-box !important;\r\n  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease !important;\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.antigravity-planner-sync-btn:hover {\r\n  background: rgba(56, 189, 248, 0.16) !important;\r\n  border-color: rgba(56, 189, 248, 0.5) !important;\r\n  color: #7dd3fc !important;\r\n}\r\n\r\n.antigravity-planner-sync-btn:focus-visible {\r\n  outline: 2px solid #38bdf8 !important;\r\n  outline-offset: 2px !important;\r\n}\r\n\r\n.antigravity-planner-sync-btn.is-desynced {\r\n  background: rgba(245, 158, 11, 0.18) !important;\r\n  border-color: rgba(245, 158, 11, 0.55) !important;\r\n  color: #fbbf24 !important;\r\n  box-shadow: 0 0 8px rgba(245, 158, 11, 0.25) !important;\r\n}\r\n\r\n.antigravity-planner-sync-btn.is-desynced:hover {\r\n  background: rgba(245, 158, 11, 0.28) !important;\r\n  border-color: rgba(245, 158, 11, 0.8) !important;\r\n  color: #fde68a !important;\r\n}\r\n\r\n.antigravity-planner-sync-btn .planner-sync-icon {\r\n  pointer-events: none !important;\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-model-slot-btn.compact {\r\n  height: 22px !important;\r\n  padding: 2px 6px !important;\r\n  font-size: 11px !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n@media (max-width: 1100px) {\r\n  #antigravity-mod-model-slots .antigravity-model-slot-btn,\r\n  .antigravity-model-slot-btn {\r\n    height: 22px !important;\r\n    padding: 2px 6px !important;\r\n    font-size: 11px !important;\r\n    gap: 4px !important;\r\n  }\r\n\r\n  #antigravity-mod-model-slots .antigravity-model-slot-btn .model-slot-role,\r\n  .antigravity-model-slot-btn .model-slot-role {\r\n    font-size: 9.5px !important;\r\n  }\r\n}\r\n\r\n.antigravity-model-slot-btn:hover {\r\n  background: rgba(255, 255, 255, 0.09) !important;\r\n  border-color: rgba(255, 255, 255, 0.22) !important;\r\n  color: #ffffff !important;\r\n  transform: none !important;\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n}\r\n\r\n.antigravity-model-slot-btn.open {\r\n  background: rgba(255, 255, 255, 0.13) !important;\r\n  border-color: rgba(56, 189, 248, 0.45) !important;\r\n  color: #ffffff !important;\r\n  box-shadow: 0 0 10px rgba(56, 189, 248, 0.15) !important;\r\n}\r\n\r\n/* Menubar Button Elements */\r\n.antigravity-model-slot-btn .model-slot-dot {\r\n  width: 6px !important;\r\n  height: 6px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.antigravity-model-slot-btn .model-slot-role {\r\n  font-weight: 600 !important;\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  text-transform: uppercase !important;\r\n  letter-spacing: 0.3px !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.antigravity-model-slot-btn .model-slot-value {\r\n  font-weight: 500 !important;\r\n  color: #ffffff !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.antigravity-model-slot-btn .model-slot-caret {\r\n  font-size: 8px !important;\r\n  opacity: 0.5 !important;\r\n  pointer-events: none !important;\r\n  margin-left: 1px !important;\r\n}\r\n\r\n/* Floating Portal Dropdown */\r\n.antigravity-model-slot-dropdown-portal {\r\n  position: fixed !important;\r\n  z-index: 1000001 !important;\r\n  width: 250px !important;\r\n  max-height: none !important;\r\n  overflow: visible !important;\r\n  background: #161822 !important;\r\n  background-color: #161822 !important;\r\n  background-image: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  opacity: 1 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 12px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 10px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: none;\r\n  flex-direction: column !important;\r\n  box-sizing: border-box !important;\r\n  animation: modelSlotPopIn 0.15s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n}\r\n\r\n.antigravity-model-slot-dropdown-portal.open {\r\n  display: flex !important;\r\n}\r\n\r\n@keyframes modelSlotPopIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-5px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* Dropdown Header */\r\n.model-slot-dropdown-header {\r\n  padding-bottom: 8px !important;\r\n  margin-bottom: 8px !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.model-slot-dropdown-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.model-slot-dropdown-title {\r\n  font-size: 13px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n}\r\n\r\n.model-slot-dropdown-role-badge {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  letter-spacing: 0.4px !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  text-transform: uppercase !important;\r\n}\r\n\r\n.model-slot-dropdown-role-badge.planner {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.model-slot-dropdown-role-badge.builder {\r\n  background: rgba(52, 211, 153, 0.15) !important;\r\n  color: #34d399 !important;\r\n  border: 1px solid rgba(52, 211, 153, 0.3) !important;\r\n}\r\n\r\n.model-slot-dropdown-sub {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n}\r\n\r\n.model-slot-dropdown-meta-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 6px !important;\r\n  margin-top: 2px !important;\r\n}\r\n\r\n.model-slot-lock-toggle {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n  font-size: 9.5px !important;\r\n  font-weight: 600 !important;\r\n  cursor: pointer !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  color: rgba(255, 255, 255, 0.65) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  font-family: inherit !important;\r\n  white-space: nowrap !important;\r\n  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease !important;\r\n}\r\n\r\n.model-slot-lock-toggle:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.model-slot-lock-toggle.locked {\r\n  background: rgba(56, 189, 248, 0.14) !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.model-slot-lock-toggle.desynced {\r\n  background: rgba(245, 158, 11, 0.16) !important;\r\n  color: #fbbf24 !important;\r\n  border-color: rgba(245, 158, 11, 0.45) !important;\r\n}\r\n\r\n.model-slot-lock-toggle.desynced:hover {\r\n  background: rgba(245, 158, 11, 0.26) !important;\r\n  border-color: rgba(245, 158, 11, 0.7) !important;\r\n  color: #fde68a !important;\r\n}\r\n\r\n.model-slot-lock-toggle .model-lock-dot {\r\n  width: 5px !important;\r\n  height: 5px !important;\r\n  border-radius: 50% !important;\r\n  background: rgba(255, 255, 255, 0.4) !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-lock-toggle.locked .model-lock-dot {\r\n  background: #38bdf8 !important;\r\n  box-shadow: 0 0 5px #38bdf8 !important;\r\n}\r\n\r\n.model-slot-lock-toggle.desynced .model-lock-dot {\r\n  background: #f59e0b !important;\r\n  box-shadow: 0 0 5px #f59e0b !important;\r\n}\r\n\r\n.model-slot-lock-toggle .model-lock-label {\r\n  pointer-events: none !important;\r\n}\r\n\r\n/* Packaged Collapsible Model Packs */\r\n.model-slot-options-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 4px !important;\r\n  overflow: visible !important;\r\n}\r\n\r\n.model-pack {\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  overflow: visible !important;\r\n}\r\n\r\n.model-pack.has-active {\r\n  border-color: rgba(56, 189, 248, 0.2) !important;\r\n}\r\n\r\n.model-pack-header {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 5px 8px !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n  border-radius: 7px !important;\r\n  cursor: pointer !important;\r\n  color: rgba(255, 255, 255, 0.78) !important;\r\n  font-family: inherit !important;\r\n  box-sizing: border-box !important;\r\n  transition: background-color 0.12s ease !important;\r\n}\r\n\r\n.model-pack-header:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.model-pack-header-left {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  min-width: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-pack-dot {\r\n  width: 6px !important;\r\n  height: 6px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.model-pack-title {\r\n  font-size: 11px !important;\r\n  font-weight: 700 !important;\r\n  letter-spacing: 0.2px !important;\r\n  color: #e2e8f0 !important;\r\n}\r\n\r\n.model-pack-count {\r\n  font-size: 9.5px !important;\r\n  font-weight: 600 !important;\r\n  padding: 0 5px !important;\r\n  border-radius: 999px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: rgba(255, 255, 255, 0.55) !important;\r\n}\r\n\r\n.model-pack-header-right {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-pack-active-pill {\r\n  font-size: 9.5px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  max-width: 90px !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.model-pack-caret {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n  transition: transform 0.12s ease !important;\r\n  display: inline-block !important;\r\n}\r\n\r\n.model-pack.expanded > .model-pack-header .model-pack-caret {\r\n  transform: rotate(90deg) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.model-pack-body {\r\n  display: none !important;\r\n  flex-direction: column !important;\r\n  gap: 1px !important;\r\n  padding: 2px 4px 4px 4px !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.05) !important;\r\n  overflow: visible !important;\r\n}\r\n\r\n.model-pack.expanded > .model-pack-body {\r\n  display: flex !important;\r\n}\r\n\r\n/* Native Chat Model Selector Soft-Locked (Synced) & Desynced States */\r\nbutton[data-testid=\"model-selector-trigger\"].antigravity-native-model-locked {\r\n  cursor: pointer !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\r\n  position: relative !important;\r\n}\r\n\r\nbutton[data-testid=\"model-selector-trigger\"].antigravity-native-model-desynced {\r\n  cursor: pointer !important;\r\n  border: 1px solid rgba(245, 158, 11, 0.55) !important;\r\n  box-shadow: 0 0 8px rgba(245, 158, 11, 0.16) !important;\r\n  position: relative !important;\r\n}\r\n\r\n/* Inline Chatbox Sync-to-Planner Action Button (visible when sync is broken) */\r\n.antigravity-chat-planner-sync-btn {\r\n  display: none !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  gap: 5px !important;\r\n  height: 26px !important;\r\n  min-width: 26px !important;\r\n  padding: 0 8px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(245, 158, 11, 0.16) !important;\r\n  border: 1px solid rgba(245, 158, 11, 0.5) !important;\r\n  color: #fbbf24 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  line-height: 1 !important;\r\n  cursor: pointer !important;\r\n  flex-shrink: 0 !important;\r\n  white-space: nowrap !important;\r\n  box-sizing: border-box !important;\r\n  user-select: none !important;\r\n  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease !important;\r\n  box-shadow: 0 0 8px rgba(245, 158, 11, 0.2) !important;\r\n}\r\n\r\n.antigravity-chat-planner-sync-btn.is-desynced {\r\n  display: inline-flex !important;\r\n}\r\n\r\n.antigravity-chat-planner-sync-btn:hover {\r\n  background: rgba(245, 158, 11, 0.28) !important;\r\n  border-color: rgba(245, 158, 11, 0.8) !important;\r\n  color: #fde68a !important;\r\n  box-shadow: 0 0 12px rgba(245, 158, 11, 0.35) !important;\r\n}\r\n\r\n.antigravity-chat-planner-sync-btn:focus-visible {\r\n  outline: 2px solid #fbbf24 !important;\r\n  outline-offset: 2px !important;\r\n}\r\n\r\n.antigravity-chat-planner-sync-btn .chat-planner-sync-icon,\r\n.antigravity-chat-planner-sync-btn .chat-planner-sync-label {\r\n  pointer-events: none !important;\r\n}\r\n\r\n@media (max-width: 960px) {\r\n  .antigravity-chat-planner-sync-btn {\r\n    padding: 0 6px !important;\r\n  }\r\n  .antigravity-chat-planner-sync-btn .chat-planner-sync-label {\r\n    display: none !important;\r\n  }\r\n}\r\n\r\n/* Base Model Row */\r\n.model-slot-row {\r\n  position: relative !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 6px 8px !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.12s ease !important;\r\n  user-select: none !important;\r\n  font-family: inherit !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.model-slot-row:hover {\r\n  background: rgba(255, 255, 255, 0.07) !important;\r\n  border-color: rgba(255, 255, 255, 0.1) !important;\r\n}\r\n\r\n.model-slot-row.active {\r\n  background: rgba(56, 189, 248, 0.08) !important;\r\n  border-color: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.model-slot-row.open {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.model-slot-row-left {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  min-width: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-row-dot {\r\n  width: 7px !important;\r\n  height: 7px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-row-name {\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-row-right {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-active-badge {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n  letter-spacing: 0.2px !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-chevron {\r\n  font-size: 14px !important;\r\n  line-height: 1 !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n  pointer-events: none !important;\r\n  transition: color 0.12s ease !important;\r\n}\r\n\r\n.model-slot-row:hover .model-slot-chevron,\r\n.model-slot-row.open .model-slot-chevron {\r\n  color: #ffffff !important;\r\n}\r\n\r\n/* Effort Submenu Flyout */\r\n.model-slot-submenu {\r\n  position: absolute !important;\r\n  left: 100% !important;\r\n  top: -4px !important;\r\n  margin-left: 0 !important;\r\n  min-width: 120px !important;\r\n  display: none;\r\n  z-index: 1000002 !important;\r\n  background: #161822 !important;\r\n  background-color: #161822 !important;\r\n  background-image: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  opacity: 1 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.14) !important;\r\n  border-radius: 8px !important;\r\n  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 4px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.model-slot-submenu::before {\r\n  content: \"\";\r\n  position: absolute;\r\n  top: 0;\r\n  bottom: 0;\r\n  left: -8px;\r\n  width: 8px;\r\n}\r\n\r\n.model-slot-row:hover > .model-slot-submenu,\r\n.model-slot-row.open > .model-slot-submenu {\r\n  display: block !important;\r\n}\r\n\r\n.model-slot-submenu.submenu-left {\r\n  right: 100% !important;\r\n  left: auto !important;\r\n  margin-right: 0 !important;\r\n  margin-left: 0 !important;\r\n}\r\n\r\n.model-slot-submenu.submenu-left::before {\r\n  left: auto;\r\n  right: -8px;\r\n}\r\n\r\n/* Effort Level Option Button */\r\n.model-effort-option {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 5px 8px !important;\r\n  margin-bottom: 2px !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 5px !important;\r\n  cursor: pointer !important;\r\n  text-align: left !important;\r\n  font-family: inherit !important;\r\n  box-sizing: border-box !important;\r\n  transition: all 0.12s ease !important;\r\n}\r\n\r\n.model-effort-option:last-child {\r\n  margin-bottom: 0 !important;\r\n}\r\n\r\n.model-effort-option:hover {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: rgba(255, 255, 255, 0.12) !important;\r\n}\r\n\r\n.model-effort-option.active {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  border-color: rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.model-effort-name {\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  color: #ffffff !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-effort-option.active .model-effort-name {\r\n  color: #38bdf8 !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.model-effort-check {\r\n  font-size: 12px !important;\r\n  font-weight: 700 !important;\r\n  color: #38bdf8 !important;\r\n  width: 14px !important;\r\n  text-align: right !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n/* Legacy option styles retained for compatibility */\r\n.model-slot-option {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  width: 100% !important;\r\n  padding: 6px 8px !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  text-align: left !important;\r\n  transition: all 0.12s ease !important;\r\n  user-select: none !important;\r\n  font-family: inherit !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.model-slot-option:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(255, 255, 255, 0.1) !important;\r\n}\r\n\r\n.model-slot-option.active {\r\n  background: rgba(56, 189, 248, 0.1) !important;\r\n  border-color: rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.model-slot-option-dot {\r\n  width: 8px !important;\r\n  height: 8px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-option-info {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 1px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-option-name {\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.model-slot-option-family {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.42) !important;\r\n}\r\n\r\n.model-slot-option-badge {\r\n  font-size: 9.5px !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  color: rgba(255, 255, 255, 0.6) !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-option-check {\r\n  font-size: 12px !important;\r\n  font-weight: 700 !important;\r\n  color: #38bdf8 !important;\r\n  width: 14px !important;\r\n  text-align: center !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n/* Mods Manager Icon Box for Model Slots */\r\n.mod-icon-box.slots-icon {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n/* Subagent Model Pill Badge */\r\n.antigravity-subagent-model-pill {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  height: 18px !important;\r\n  padding: 0 6px !important;\r\n  margin-left: 6px !important;\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  line-height: 1 !important;\r\n  border-radius: 4px !important;\r\n  border: 1px solid !important;\r\n  user-select: none !important;\r\n  vertical-align: middle !important;\r\n  box-sizing: border-box !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.antigravity-subagent-model-pill .subagent-model-dot {\r\n  width: 5px !important;\r\n  height: 5px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.antigravity-subagent-model-pill .subagent-model-label {\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  letter-spacing: 0.2px !important;\r\n  pointer-events: none !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n";
   }
 
   /**
@@ -12085,8 +14928,441 @@ class ModelSlotsMod extends AntigravityMod {
    */
   render(context = {}) {
     const slots = context.slots || context.modelSlots;
+    const catalog = context.modelCatalog?.modelCatalog || context.modelCatalog?.baseModels || undefined;
     return {
-      html: renderModelSlotsMenubarHtml(slots),
+      html: renderModelSlotsMenubarHtml(slots, catalog),
+      css: this.cachedCss
+    };
+  }
+}
+
+
+// ======================= Pit Wall Mod ========================
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
+/**
+ * Renders the compact top menubar trigger button for the Pit Wall analytics modal.
+ * @param {Object} [pitWall={}]
+ * @returns {string}
+ */
+function renderPitWallMenubarButton(pitWall = {}) {
+  const streak = Number(pitWall?.currentStreak || 0);
+  const cost = pitWall?.displayTotalCost || '$0';
+  const titleText = streak > 0
+    ? `Pit Wall Analytics (${streak}-day streak · ${cost} API eq.)`
+    : 'Pit Wall Telemetry & Cost Analytics';
+
+  return `
+    <button
+      type="button"
+      class="antigravity-pit-wall-btn"
+      id="antigravity-pit-wall-trigger"
+      title="${titleText}"
+    >
+      <svg class="pit-wall-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 3v18h18"></path>
+        <rect x="7" y="10" width="3" height="7" rx="1"></rect>
+        <rect x="12" y="6" width="3" height="11" rx="1"></rect>
+        <rect x="17" y="13" width="3" height="4" rx="1"></rect>
+      </svg>
+      <span class="pit-wall-btn-label">Pit Wall</span>
+    </button>
+  `.trim();
+}
+
+/**
+ * Renders the complete Pit Wall analytics dashboard modal HTML.
+ * Strictly self-contained so it can be serialized into the Electron renderer via .toString().
+ * @param {Object} [pitWall={}]
+ * @returns {string}
+ */
+function renderPitWallModalHtml(pitWall = {}) {
+  const esc = (val) => String(val ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+  const fmtInt = (n) => Number(n || 0).toLocaleString('en-US');
+  const fmtUsdExact = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const data = pitWall && typeof pitWall === 'object' ? pitWall : {};
+  const streak = Number(data.currentStreak || 0);
+  const bestStreak = Number(data.bestStreak || 0);
+  const totalHours = Number(data.totalHours || 0).toFixed(1);
+  const activeDays = Number(data.activeDaysCount || 0);
+  const firstDate = esc(data.firstSessionDate || 'today');
+  const avgHours = Number(data.avgHoursPerDay || 0).toFixed(1);
+  const stretchHours = Number(data.currentStretchHours || 0).toFixed(1);
+  const stretchSub = esc(data.currentStretchSub || 'no recent activity');
+  const isStretchActive = Boolean(data.isStretchActive);
+  const displayCost = esc(data.displayTotalCost || '$0');
+  const displayTokens = esc(data.displayTotalTokens || '0');
+  const displayWritten = esc(data.displayWrittenTokens || '0');
+  const totalSessions = Number(data.totalSessions || 0);
+
+  const uncachedTok = Number(data.uncachedInputTokens ?? (Number(data.totalTokens || 0) - Number(data.cacheReadTokens || 0) - Number(data.writtenTokens || 0)));
+  const cacheTok = Number(data.cacheReadTokens || 0);
+  const writtenTok = Number(data.writtenTokens || 0);
+
+  const tipStretch = {
+    title: 'Current Stretch',
+    rows: [
+      { label: 'Active time', val: `${data.exactCurrentStretchDurationLabel || `${stretchHours}h`} (${stretchHours} h)`, accent: true },
+      { label: 'Status', val: isStretchActive ? 'Active session' : 'Idle' },
+      { label: 'Timeline', val: data.currentStretchSub || 'no recent activity' }
+    ]
+  };
+
+  const tipTotalHours = {
+    title: 'Hours Worked (All Time)',
+    rows: [
+      { label: 'Total active time', val: `${data.exactTotalDurationLabel || `${totalHours}h`} (${totalHours} h)`, accent: true },
+      { label: 'Active calendar days', val: `${activeDays} days` },
+      { label: 'Daily average', val: `${avgHours} h / day` },
+      { label: 'First session', val: data.firstSessionDate || 'today' }
+    ]
+  };
+
+  const tipCost = {
+    title: 'Cost at API Prices',
+    rows: [
+      { label: 'Total equivalent', val: data.exactDisplayTotalCost || displayCost, accent: true },
+      { label: 'Cache read pricing', val: '10% of input rate (90% discount)' },
+      { label: 'Plan benefit', val: 'Included with plan' }
+    ]
+  };
+
+  const tipTokens = {
+    title: 'Tokens Processed',
+    rows: [
+      { label: 'Total tokens', val: fmtInt(data.totalTokens), accent: true },
+      { label: 'Uncached input', val: fmtInt(uncachedTok) },
+      { label: 'Cache reads (10% rate)', val: fmtInt(cacheTok) },
+      { label: 'Written by models', val: fmtInt(writtenTok) }
+    ]
+  };
+
+  const tipStreak = {
+    title: 'Day Streak',
+    rows: [
+      { label: 'Current streak', val: `${streak} day${streak === 1 ? '' : 's'}`, accent: true },
+      { label: 'Best record', val: `${bestStreak} days` },
+      { label: 'Total active days', val: `${activeDays} days` }
+    ]
+  };
+
+  const tipSessions = {
+    title: 'Sessions',
+    rows: [
+      { label: 'All-time sessions', val: fmtInt(totalSessions), accent: true },
+      { label: 'Scope', val: 'All projects & workspaces' },
+      { label: 'Aggregation', val: 'Full historical audit' }
+    ]
+  };
+
+  const last60Days = Array.isArray(data.last60Days) && data.last60Days.length > 0
+    ? data.last60Days
+    : Array.from({ length: 60 }, (_, i) => ({
+        date: `d-${i}`,
+        label: i === 0 ? '60d ago' : (i === 59 ? 'Today' : ''),
+        hours: 0,
+        mainCostUsd: 0,
+        bgCostUsd: 0,
+        totalCostUsd: 0
+      }));
+
+  const maxHoursVal = Math.max(10, ...last60Days.map(d => Number(d.hours || 0)));
+  const yHoursCeiling = Math.ceil(maxHoursVal / 5) * 5;
+  const yHoursMid = Math.round(yHoursCeiling / 2);
+
+  const hourBarsHtml = last60Days.map(d => {
+    const h = Number(d.hours || 0);
+    const pct = Math.min(100, Math.round((h / Math.max(1, yHoursCeiling)) * 100));
+    const barHeight = h > 0 ? Math.max(3, pct) : 0;
+    const durLabel = d.durationLabel || `${h.toFixed(1)}h`;
+    const tip = {
+      title: d.fullDate || d.date,
+      rows: [
+        { label: 'Active time', val: `${durLabel} (${h.toFixed(2)} h)`, accent: true },
+        { label: 'Sessions active', val: fmtInt(d.sessions || 0) },
+        { label: 'API cost equivalent', val: fmtUsdExact(d.totalCostUsd || 0) },
+        { label: 'Tokens processed', val: fmtInt(d.tokens || 0) }
+      ]
+    };
+    return `<div class="pit-wall-bar-col" tabindex="0" data-pw-tip="${esc(JSON.stringify(tip))}">
+      <div class="pit-wall-bar-hours" style="height: ${barHeight}%;"></div>
+    </div>`;
+  }).join('');
+
+  const tickIndices = [0, 14, 29, 44, last60Days.length - 1];
+  const dateTicksHtml = tickIndices
+    .filter(idx => idx >= 0 && idx < last60Days.length)
+    .map(idx => `<span>${esc(last60Days[idx].label || last60Days[idx].date)}</span>`)
+    .join('');
+
+  const maxCostDayVal = Math.max(50, ...last60Days.map(d => Number(d.totalCostUsd || 0)));
+  const costStep = maxCostDayVal <= 100 ? 25 : (maxCostDayVal <= 500 ? 100 : Math.ceil(maxCostDayVal / 500) * 100);
+  const yCostCeiling = Math.ceil(maxCostDayVal / costStep) * costStep;
+  const yCostTicks = [
+    `$${yCostCeiling}`,
+    `$${Math.round(yCostCeiling * 0.75)}`,
+    `$${Math.round(yCostCeiling * 0.5)}`,
+    `$${Math.round(yCostCeiling * 0.25)}`,
+    '$0'
+  ];
+
+  const costBarsHtml = last60Days.map(d => {
+    const mainUsd = Number(d.mainCostUsd || 0);
+    const bgUsd = Number(d.bgCostUsd || 0);
+    const totUsd = Number(d.totalCostUsd !== undefined ? d.totalCostUsd : (mainUsd + bgUsd));
+    const totalPct = Math.min(100, (totUsd / Math.max(1, yCostCeiling)) * 100);
+    const mainPct = totUsd > 0 ? (mainUsd / totUsd) * totalPct : 0;
+    const bgPct = totUsd > 0 ? (bgUsd / totUsd) * totalPct : 0;
+    const mainSharePct = totUsd > 0 ? ((mainUsd / totUsd) * 100).toFixed(1) : '0.0';
+    const bgSharePct = totUsd > 0 ? ((bgUsd / totUsd) * 100).toFixed(1) : '0.0';
+    const tip = {
+      title: d.fullDate || d.date,
+      rows: [
+        { label: 'Total API cost', val: fmtUsdExact(totUsd), accent: true },
+        { label: 'Main thread', val: `${fmtUsdExact(mainUsd)} (${mainSharePct}%)` },
+        { label: 'Background agents', val: `${fmtUsdExact(bgUsd)} (${bgSharePct}%)` },
+        { label: 'Tokens processed', val: fmtInt(d.tokens || 0) }
+      ]
+    };
+    return `<div class="pit-wall-bar-col" tabindex="0" data-pw-tip="${esc(JSON.stringify(tip))}">
+      <div class="pit-wall-bar-stack" style="height: ${totUsd > 0 ? Math.max(3, Math.round(totalPct)) : 0}%;">
+        ${bgUsd > 0 ? `<div class="pit-wall-bar-bg" style="height: ${Math.round((bgPct / Math.max(0.01, totalPct)) * 100)}%;"></div>` : ''}
+        <div class="pit-wall-bar-main" style="height: ${Math.round((mainPct / Math.max(0.01, totalPct)) * 100)}%;"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  const weeks = Array.isArray(data.consistencyWeeks) ? data.consistencyWeeks : [];
+  const levelColors = [
+    'rgba(255, 255, 255, 0.05)',
+    '#172554',
+    '#1d4ed8',
+    '#3b82f6',
+    '#60a5fa'
+  ];
+  const monthHeadersHtml = weeks.map(w => `<div class="pit-wall-heatmap-month">${esc(w.monthLabel || '')}</div>`).join('');
+  const heatmapColsHtml = weeks.map(w => {
+    const cells = (w.days || []).map(cell => {
+      const isFuture = Boolean(cell.isFuture);
+      const bg = isFuture ? 'transparent' : (levelColors[cell.level] || levelColors[0]);
+      const border = isFuture ? '1px solid transparent' : '1px solid rgba(255,255,255,0.04)';
+      if (isFuture) {
+        return `<div class="pit-wall-heat-cell" style="background: ${bg}; border: ${border};"></div>`;
+      }
+      const cellHrs = Number(cell.hours || 0);
+      const durLabel = cell.durationLabel || `${cellHrs.toFixed(1)}h`;
+      const tip = {
+        title: cell.fullDate || cell.date,
+        rows: [
+          { label: 'Active time', val: `${durLabel} (${cellHrs.toFixed(2)} h)`, accent: true },
+          { label: 'Sessions active', val: fmtInt(cell.sessions || 0) },
+          { label: 'API cost equivalent', val: fmtUsdExact(cell.totalCostUsd || 0) },
+          { label: 'Tokens processed', val: fmtInt(cell.tokens || 0) }
+        ]
+      };
+      return `<div class="pit-wall-heat-cell" style="background: ${bg}; border: ${border};" tabindex="0" data-pw-tip="${esc(JSON.stringify(tip))}"></div>`;
+    }).join('');
+    return `<div class="pit-wall-heatmap-col">${cells}</div>`;
+  }).join('');
+
+  const costByModel = Array.isArray(data.costByModel) ? data.costByModel : [];
+  const modelRowsHtml = costByModel.length > 0
+    ? costByModel.map(m => {
+        const barColor = m.isTop ? '#60a5fa' : '#71717a';
+        const pct = Math.max(2, Math.min(100, Number(m.pctOfMax || 0)));
+        const costVal = Number(m.exactCostUsd !== undefined ? m.exactCostUsd : (m.costUsd || 0));
+        const pctOfTot = m.pctOfTotal !== undefined
+          ? m.pctOfTotal
+          : (data.totalCostUsd > 0 ? Number(((costVal / data.totalCostUsd) * 100).toFixed(1)) : 0);
+        const tip = {
+          title: m.name,
+          rows: [
+            { label: 'API cost equivalent', val: `${fmtUsdExact(costVal)} (${pctOfTot}%)`, accent: true },
+            { label: 'Total tokens', val: fmtInt(m.tokens || 0) },
+            { label: 'Uncached input', val: fmtInt(m.uncachedInput || 0) },
+            { label: 'Cache reads (10%)', val: fmtInt(m.cacheRead || 0) },
+            { label: 'Output written', val: fmtInt(m.output || 0) },
+            { label: 'Rates (/1M tokens)', val: `$${m.inputPerM ?? 0} in / $${m.cacheReadPerM ?? 0} cache / $${m.outputPerM ?? 0} out` }
+          ]
+        };
+        return `<div class="pit-wall-model-row" tabindex="0" data-pw-tip="${esc(JSON.stringify(tip))}">
+          <span class="pit-wall-model-name">${esc(m.name)}</span>
+          <div class="pit-wall-model-bar-track">
+            <div class="pit-wall-model-bar-fill" style="width: ${pct}%; background: ${barColor};"></div>
+          </div>
+          <span class="pit-wall-model-cost">${esc(m.exactDisplayCost || m.displayCost || '$0')}</span>
+        </div>`;
+      }).join('')
+    : '<div class="pit-wall-empty-note">No model usage recorded yet.</div>';
+
+  return `
+    <div class="pit-wall-modal-shell">
+      <div class="pit-wall-header">
+        <div class="pit-wall-header-text">
+          <h2 class="pit-wall-title">Pit Wall</h2>
+          <p class="pit-wall-subtitle">
+            ${streak}-day streak. ${totalHours} hours of work across ${activeDays} days since ${firstDate}, worth ${displayCost} at API prices.
+          </p>
+        </div>
+        <button type="button" class="pit-wall-close-btn" id="antigravity-pit-wall-close" title="Close Pit Wall"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+      </div>
+
+      <div class="pit-wall-kpi-grid">
+        <div class="pit-wall-kpi-card" tabindex="0" data-pw-tip="${esc(JSON.stringify(tipStretch))}">
+          <div class="pit-wall-kpi-label">Current stretch</div>
+          <div class="pit-wall-kpi-value">${stretchHours} h</div>
+          <div class="pit-wall-kpi-sub">${stretchSub}</div>
+        </div>
+        <div class="pit-wall-kpi-card" tabindex="0" data-pw-tip="${esc(JSON.stringify(tipTotalHours))}">
+          <div class="pit-wall-kpi-label">Hours worked, all time</div>
+          <div class="pit-wall-kpi-value">${totalHours}</div>
+          <div class="pit-wall-kpi-sub">${avgHours} h on an average day</div>
+        </div>
+        <div class="pit-wall-kpi-card" tabindex="0" data-pw-tip="${esc(JSON.stringify(tipCost))}">
+          <div class="pit-wall-kpi-label">Cost at API prices</div>
+          <div class="pit-wall-kpi-value">${displayCost}</div>
+          <div class="pit-wall-kpi-sub">what the plan saved you</div>
+        </div>
+        <div class="pit-wall-kpi-card" tabindex="0" data-pw-tip="${esc(JSON.stringify(tipTokens))}">
+          <div class="pit-wall-kpi-label">Tokens processed</div>
+          <div class="pit-wall-kpi-value">${displayTokens}</div>
+          <div class="pit-wall-kpi-sub">${displayWritten} written by models</div>
+        </div>
+        <div class="pit-wall-kpi-card" tabindex="0" data-pw-tip="${esc(JSON.stringify(tipStreak))}">
+          <div class="pit-wall-kpi-label">Day streak</div>
+          <div class="pit-wall-kpi-value">${streak}</div>
+          <div class="pit-wall-kpi-sub">best run ${bestStreak} days</div>
+        </div>
+        <div class="pit-wall-kpi-card" tabindex="0" data-pw-tip="${esc(JSON.stringify(tipSessions))}">
+          <div class="pit-wall-kpi-label">Sessions</div>
+          <div class="pit-wall-kpi-value">${totalSessions}</div>
+          <div class="pit-wall-kpi-sub">across every project</div>
+        </div>
+      </div>
+
+      <div class="pit-wall-analytics-grid">
+        <div class="pit-wall-panel">
+          <div class="pit-wall-panel-title">Hours worked per day</div>
+          <div class="pit-wall-panel-sub">Last 60 days. Active time: any stretch with no gap over 20 minutes, agents included, parallel sessions counted once.</div>
+          <div class="pit-wall-chart-frame">
+            <div class="pit-wall-y-axis">
+              <span>${yHoursCeiling} h</span>
+              <span>${yHoursMid} h</span>
+              <span>0 h</span>
+            </div>
+            <div class="pit-wall-chart-area">
+              <div class="pit-wall-grid-lines">
+                <div class="pit-wall-grid-line"></div>
+                <div class="pit-wall-grid-line"></div>
+                <div class="pit-wall-grid-line"></div>
+              </div>
+              <div class="pit-wall-bars-row">${hourBarsHtml}</div>
+              <div class="pit-wall-x-axis">${dateTicksHtml}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="pit-wall-panel">
+          <div class="pit-wall-panel-title">Consistency</div>
+          <div class="pit-wall-panel-sub">Last 20 weeks. Brighter blue means more hours.</div>
+          <div class="pit-wall-heatmap-wrap">
+            <div class="pit-wall-heatmap-months-row">
+              <div class="pit-wall-heatmap-day-spacer"></div>
+              <div class="pit-wall-heatmap-months-grid">${monthHeadersHtml}</div>
+            </div>
+            <div class="pit-wall-heatmap-body">
+              <div class="pit-wall-heatmap-days">
+                <span>Mon</span>
+                <span></span>
+                <span>Wed</span>
+                <span></span>
+                <span>Fri</span>
+                <span></span>
+                <span></span>
+              </div>
+              <div class="pit-wall-heatmap-cols">${heatmapColsHtml}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="pit-wall-panel">
+          <div class="pit-wall-panel-title">Cost per day at API prices</div>
+          <div class="pit-wall-panel-sub">Last 60 days, USD. The darker part is background agents.</div>
+          <div class="pit-wall-chart-frame">
+            <div class="pit-wall-y-axis pit-wall-y-axis-cost">
+              ${yCostTicks.map(t => `<span>${esc(t)}</span>`).join('')}
+            </div>
+            <div class="pit-wall-chart-area">
+              <div class="pit-wall-grid-lines">
+                <div class="pit-wall-grid-line"></div>
+                <div class="pit-wall-grid-line"></div>
+                <div class="pit-wall-grid-line"></div>
+                <div class="pit-wall-grid-line"></div>
+                <div class="pit-wall-grid-line"></div>
+              </div>
+              <div class="pit-wall-bars-row">${costBarsHtml}</div>
+              <div class="pit-wall-x-axis">${dateTicksHtml}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="pit-wall-panel">
+          <div class="pit-wall-panel-title">Cost by model</div>
+          <div class="pit-wall-panel-sub">All time, USD, at each model's list price.</div>
+          <div class="pit-wall-models-list">${modelRowsHtml}</div>
+        </div>
+      </div>
+
+      <div id="antigravity-pit-wall-tooltip" class="pit-wall-tooltip" role="tooltip" popover="manual" aria-hidden="true"></div>
+    </div>
+  `.trim();
+}
+
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
+
+
+
+
+
+
+
+
+/**
+ * First-party menubar mod providing all-time Pit Wall telemetry,
+ * active stretches, consistency heatmap, and API cost analytics.
+ */
+class PitWallMod extends AntigravityMod {
+  constructor() {
+    super({
+      id: 'pit-wall',
+      name: 'Pit Wall Telemetry & Cost Analytics',
+      version: '1.0.0',
+      slot: 'menubar-actions',
+      priority: 85
+    });
+
+    this.cachedCss = "/* =========================================================================\n   ANTIGRAVITY PIT WALL ANALYTICS MOD - STYLES\n   ========================================================================= */\n\n/* Menubar Button */\n.antigravity-pit-wall-btn {\n  height: 26px !important;\n  padding: 0 8px !important;\n  font-size: 11.5px !important;\n  font-weight: 500 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  color: rgba(255, 255, 255, 0.85) !important;\n  background: rgba(255, 255, 255, 0.04) !important;\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 5px !important;\n  flex-shrink: 0 !important;\n  white-space: nowrap !important;\n  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease !important;\n  transform: none !important;\n  -webkit-app-region: no-drag !important;\n  app-region: no-drag !important;\n  user-select: none !important;\n  line-height: 1 !important;\n  box-sizing: border-box !important;\n}\n\n.antigravity-pit-wall-btn:hover {\n  background: rgba(255, 255, 255, 0.09) !important;\n  border-color: rgba(96, 165, 250, 0.4) !important;\n  color: #ffffff !important;\n}\n\n.antigravity-pit-wall-btn.open {\n  background: rgba(96, 165, 250, 0.15) !important;\n  border-color: rgba(96, 165, 250, 0.5) !important;\n  color: #93c5fd !important;\n}\n\n.antigravity-pit-wall-btn .pit-wall-btn-icon {\n  width: 13px !important;\n  height: 13px !important;\n  color: #60a5fa !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.antigravity-pit-wall-btn .pit-wall-btn-label {\n  pointer-events: none !important;\n}\n\n/* Floating Modal Portal */\n.antigravity-pit-wall-portal {\n  position: fixed !important;\n  top: 50% !important;\n  left: 50% !important;\n  transform: translate(-50%, -50%) !important;\n  z-index: 1000003 !important;\n  width: min(860px, calc(100vw - 32px)) !important;\n  max-height: calc(100vh - 56px) !important;\n  overflow-y: auto !important;\n  background: #0b0c0f !important;\n  color: #f4f4f5 !important;\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\n  border-radius: 14px !important;\n  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.88), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;\n  padding: 20px 22px !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  display: none;\n  box-sizing: border-box !important;\n}\n\n.antigravity-pit-wall-portal.open {\n  display: block !important;\n}\n\n.antigravity-pit-wall-portal::-webkit-scrollbar {\n  width: 6px;\n}\n\n.antigravity-pit-wall-portal::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.14);\n  border-radius: 999px;\n}\n\n/* Modal Content */\n.pit-wall-modal-shell {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 14px !important;\n}\n\n.pit-wall-header {\n  display: flex !important;\n  align-items: flex-start !important;\n  justify-content: space-between !important;\n  gap: 12px !important;\n}\n\n.pit-wall-title {\n  margin: 0 !important;\n  font-size: 19px !important;\n  font-weight: 700 !important;\n  color: #fafafa !important;\n  letter-spacing: -0.3px !important;\n  line-height: 1.2 !important;\n}\n\n.pit-wall-subtitle {\n  margin: 4px 0 0 0 !important;\n  font-size: 12px !important;\n  color: #a1a1aa !important;\n  line-height: 1.4 !important;\n}\n\n.pit-wall-close-btn {\n  width: 26px !important;\n  height: 26px !important;\n  border-radius: 6px !important;\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\n  background: rgba(255, 255, 255, 0.04) !important;\n  color: #a1a1aa !important;\n  cursor: pointer !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n  font-size: 12px !important;\n  flex-shrink: 0 !important;\n}\n\n.pit-wall-close-btn:hover {\n  background: rgba(255, 255, 255, 0.1) !important;\n  color: #ffffff !important;\n}\n\n/* 6 Top KPI Bento Cards */\n.pit-wall-kpi-grid {\n  display: grid !important;\n  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;\n  gap: 10px !important;\n}\n\n@media (max-width: 720px) {\n  .pit-wall-kpi-grid {\n    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;\n  }\n}\n\n.pit-wall-kpi-card {\n  background: #141519 !important;\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\n  border-radius: 10px !important;\n  padding: 12px 14px !important;\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 4px !important;\n}\n\n.pit-wall-kpi-label {\n  font-size: 11px !important;\n  color: #a1a1aa !important;\n  font-weight: 500 !important;\n}\n\n.pit-wall-kpi-value {\n  font-size: 24px !important;\n  font-weight: 700 !important;\n  color: #ffffff !important;\n  letter-spacing: -0.5px !important;\n  line-height: 1.15 !important;\n  font-variant-numeric: tabular-nums !important;\n}\n\n.pit-wall-kpi-sub {\n  font-size: 10.5px !important;\n  color: #71717a !important;\n}\n\n/* 4 Analytics Panels */\n.pit-wall-analytics-grid {\n  display: grid !important;\n  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;\n  gap: 12px !important;\n}\n\n@media (max-width: 720px) {\n  .pit-wall-analytics-grid {\n    grid-template-columns: 1fr !important;\n  }\n}\n\n.pit-wall-panel {\n  background: #141519 !important;\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\n  border-radius: 10px !important;\n  padding: 14px 16px !important;\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 6px !important;\n  min-width: 0 !important;\n}\n\n.pit-wall-panel-title {\n  font-size: 13.5px !important;\n  font-weight: 600 !important;\n  color: #f4f4f5 !important;\n}\n\n.pit-wall-panel-sub {\n  font-size: 10.5px !important;\n  color: #71717a !important;\n  line-height: 1.35 !important;\n  margin-bottom: 6px !important;\n}\n\n/* 60-Day Vertical Bar Charts */\n.pit-wall-chart-frame {\n  display: flex !important;\n  align-items: stretch !important;\n  gap: 8px !important;\n  height: 140px !important;\n  margin-top: auto !important;\n}\n\n.pit-wall-y-axis {\n  display: flex !important;\n  flex-direction: column !important;\n  justify-content: space-between !important;\n  font-size: 9.5px !important;\n  color: #71717a !important;\n  font-family: ui-monospace, monospace !important;\n  padding-bottom: 18px !important;\n  text-align: right !important;\n  min-width: 30px !important;\n}\n\n.pit-wall-chart-area {\n  position: relative !important;\n  flex: 1 !important;\n  display: flex !important;\n  flex-direction: column !important;\n  min-width: 0 !important;\n}\n\n.pit-wall-grid-lines {\n  position: absolute !important;\n  inset: 0 0 18px 0 !important;\n  display: flex !important;\n  flex-direction: column !important;\n  justify-content: space-between !important;\n  pointer-events: none !important;\n}\n\n.pit-wall-grid-line {\n  width: 100% !important;\n  height: 1px !important;\n  background: rgba(255, 255, 255, 0.06) !important;\n}\n\n.pit-wall-bars-row {\n  position: relative !important;\n  z-index: 1 !important;\n  flex: 1 !important;\n  display: flex !important;\n  align-items: flex-end !important;\n  gap: 2px !important;\n}\n\n.pit-wall-bar-col {\n  flex: 1 !important;\n  height: 100% !important;\n  display: flex !important;\n  align-items: flex-end !important;\n  min-width: 0 !important;\n}\n\n.pit-wall-bar-hours {\n  width: 100% !important;\n  background: #60a5fa !important;\n  border-radius: 2px 2px 0 0 !important;\n  transition: opacity 0.12s ease !important;\n}\n\n.pit-wall-bar-col:hover .pit-wall-bar-hours,\n.pit-wall-bar-col:hover .pit-wall-bar-stack {\n  filter: brightness(1.2) !important;\n}\n\n.pit-wall-bar-stack {\n  width: 100% !important;\n  display: flex !important;\n  flex-direction: column !important;\n  justify-content: flex-end !important;\n  border-radius: 2px 2px 0 0 !important;\n  overflow: hidden !important;\n}\n\n.pit-wall-bar-bg {\n  width: 100% !important;\n  background: #1d4ed8 !important;\n}\n\n.pit-wall-bar-main {\n  width: 100% !important;\n  background: #60a5fa !important;\n}\n\n.pit-wall-x-axis {\n  height: 18px !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  font-size: 9.5px !important;\n  color: #71717a !important;\n  font-family: ui-monospace, monospace !important;\n  padding-top: 4px !important;\n}\n\n/* Consistency Heatmap */\n.pit-wall-heatmap-wrap {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 4px !important;\n  margin: auto 0 !important;\n  overflow-x: auto !important;\n}\n\n.pit-wall-heatmap-months-row {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n}\n\n.pit-wall-heatmap-day-spacer {\n  width: 24px !important;\n  flex-shrink: 0 !important;\n}\n\n.pit-wall-heatmap-months-grid {\n  display: flex !important;\n  gap: 3px !important;\n  flex: 1 !important;\n}\n\n.pit-wall-heatmap-month {\n  width: 11px !important;\n  font-size: 9px !important;\n  color: #71717a !important;\n  white-space: nowrap !important;\n  overflow: visible !important;\n}\n\n.pit-wall-heatmap-body {\n  display: flex !important;\n  align-items: stretch !important;\n  gap: 6px !important;\n}\n\n.pit-wall-heatmap-days {\n  width: 24px !important;\n  display: flex !important;\n  flex-direction: column !important;\n  justify-content: space-between !important;\n  font-size: 9px !important;\n  color: #71717a !important;\n  flex-shrink: 0 !important;\n}\n\n.pit-wall-heatmap-days span {\n  height: 11px !important;\n  line-height: 11px !important;\n}\n\n.pit-wall-heatmap-cols {\n  display: flex !important;\n  gap: 3px !important;\n  flex: 1 !important;\n}\n\n.pit-wall-heatmap-col {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 3px !important;\n}\n\n.pit-wall-heat-cell {\n  width: 11px !important;\n  height: 11px !important;\n  border-radius: 2px !important;\n}\n\n/* Cost by Model Horizontal Bars */\n.pit-wall-models-list {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 8px !important;\n  margin-top: 4px !important;\n}\n\n.pit-wall-model-row {\n  display: grid !important;\n  grid-template-columns: 110px 1fr 48px !important;\n  align-items: center !important;\n  gap: 10px !important;\n  font-size: 11px !important;\n}\n\n.pit-wall-model-name {\n  color: #a1a1aa !important;\n  white-space: nowrap !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n}\n\n.pit-wall-model-bar-track {\n  height: 10px !important;\n  background: rgba(255, 255, 255, 0.04) !important;\n  border-radius: 4px !important;\n  overflow: hidden !important;\n}\n\n.pit-wall-model-bar-fill {\n  height: 100% !important;\n  border-radius: 4px !important;\n}\n\n.pit-wall-model-cost {\n  font-family: ui-monospace, monospace !important;\n  font-size: 11px !important;\n  color: #e4e4e7 !important;\n  text-align: right !important;\n  font-variant-numeric: tabular-nums !important;\n}\n\n.pit-wall-empty-note {\n  font-size: 11px !important;\n  color: #71717a !important;\n  padding: 12px 0 !important;\n}\n\n/* Tooltip & Interactive State Enhancements */\n.pit-wall-tooltip {\n  position: fixed !important;\n  inset: auto !important;\n  margin: 0 !important;\n  display: none !important;\n  z-index: 2147483647 !important;\n  pointer-events: none !important;\n  background: rgba(9, 9, 11, 0.97) !important;\n  border: 1px solid rgba(255, 255, 255, 0.16) !important;\n  border-radius: 8px !important;\n  padding: 8px 10px !important;\n  min-width: 180px !important;\n  max-width: 280px !important;\n  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.72) !important;\n  color: #f4f4f5 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  font-size: 11px !important;\n  line-height: 1.4 !important;\n  box-sizing: border-box !important;\n}\n\n.pit-wall-tooltip.visible,\n.pit-wall-tooltip:popover-open {\n  display: block !important;\n}\n\n.pit-wall-tooltip::after {\n  content: \"\" !important;\n  position: absolute !important;\n  left: var(--pw-tip-caret-left, 50%) !important;\n  transform: translateX(-50%) !important;\n  width: 0 !important;\n  height: 0 !important;\n  border-left: 5px solid transparent !important;\n  border-right: 5px solid transparent !important;\n  pointer-events: none !important;\n}\n\n.pit-wall-tooltip[data-placement=\"top\"]::after {\n  bottom: -5px !important;\n  border-top: 5px solid rgba(9, 9, 11, 0.97) !important;\n  border-bottom: 0 !important;\n}\n\n.pit-wall-tooltip[data-placement=\"bottom\"]::after {\n  top: -5px !important;\n  border-bottom: 5px solid rgba(9, 9, 11, 0.97) !important;\n  border-top: 0 !important;\n}\n\n.pit-wall-tip-title {\n  font-weight: 600 !important;\n  font-size: 11.5px !important;\n  color: #ffffff !important;\n  margin-bottom: 6px !important;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\n  padding-bottom: 4px !important;\n}\n\n.pit-wall-tip-rows {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 3px !important;\n}\n\n.pit-wall-tip-row {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  gap: 12px !important;\n}\n\n.pit-wall-tip-label {\n  color: #a1a1aa !important;\n  font-size: 10.5px !important;\n  white-space: nowrap !important;\n}\n\n.pit-wall-tip-val {\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;\n  font-variant-numeric: tabular-nums !important;\n  font-size: 10.5px !important;\n  color: #f4f4f5 !important;\n  text-align: right !important;\n  white-space: nowrap !important;\n}\n\n.pit-wall-tip-val.accent {\n  color: #60a5fa !important;\n  font-weight: 600 !important;\n}\n\n/* Hover & Focus Highlights */\n.pit-wall-kpi-card {\n  transition: border-color 0.12s ease, background 0.12s ease !important;\n  outline: none !important;\n}\n\n.pit-wall-kpi-card:hover,\n.pit-wall-kpi-card:focus-visible {\n  border-color: rgba(96, 165, 250, 0.35) !important;\n  background: #181920 !important;\n  cursor: default !important;\n}\n\n.pit-wall-bar-col {\n  cursor: pointer !important;\n  outline: none !important;\n}\n\n.pit-wall-bar-col:focus-visible .pit-wall-bar-hours,\n.pit-wall-bar-col:focus-visible .pit-wall-bar-stack {\n  filter: brightness(1.3) !important;\n  outline: 2px solid #60a5fa !important;\n}\n\n.pit-wall-heat-cell {\n  cursor: pointer !important;\n  outline: none !important;\n  transition: filter 0.12s ease !important;\n}\n\n.pit-wall-heat-cell:hover,\n.pit-wall-heat-cell:focus-visible {\n  filter: brightness(1.35) !important;\n  outline: 1.5px solid #60a5fa !important;\n}\n\n.pit-wall-model-row {\n  cursor: pointer !important;\n  padding: 3px 6px !important;\n  border-radius: 6px !important;\n  transition: background 0.12s ease !important;\n  outline: none !important;\n}\n\n.pit-wall-model-row:hover,\n.pit-wall-model-row:focus-visible {\n  background: rgba(255, 255, 255, 0.05) !important;\n}\n";
+  }
+
+  /**
+   * Renders the compact Pit Wall button in the top menubar.
+   * @param {Object} [context]
+   * @returns {{ html: string, css: string }}
+   */
+  render(context = {}) {
+    return {
+      html: renderPitWallMenubarButton(context.pitWall || {}),
       css: this.cachedCss
     };
   }
@@ -12101,6 +15377,7 @@ async function main() {
     host.registerMod(new AgentSelectorMod());
     host.registerMod(new ModsManagerMod());
     host.registerMod(new ModelSlotsMod());
+    host.registerMod(new PitWallMod());
 
     // Lazy VCS: Avoid running 20+ git/gh processes synchronously on every hook execution.
     // Full VCS overview will be fetched on demand by GitGraph via the local HTTP bridge.

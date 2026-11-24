@@ -10,7 +10,8 @@ import { renderPrCiCardHtml } from '../../mods/git-graph/components/PrCiCardHtml
 import { renderGitGraphPanelHtml, escapeGitHtml, getExtClass } from '../../mods/git-graph/components/GitGraphPanelHtml.js';
 import { renderReticleSvg } from '../../mods/agent-selector/components/AgentIcons.js';
 import { formatResetTime, resolveNativeQuotaForModel } from '../services/TelemetryService.js';
-import { BASE_MODELS, MODEL_CATALOG, DEFAULT_MODEL_SLOTS, getModelById, renderModelSlotDropdownHtml, renderSubagentModelPill } from '../../mods/model-slots/components/ModelSlotsHtml.js';
+import { BASE_MODELS, MODEL_CATALOG, DEFAULT_MODEL_SLOTS, getModelById, groupBaseModelsIntoPacks, normalizeNativeModelCatalog, renderModelSlotDropdownHtml, renderSubagentModelPill } from '../../mods/model-slots/components/ModelSlotsHtml.js';
+import { renderPitWallModalHtml } from '../../mods/pit-wall/components/PitWallHtml.js';
 
 /**
  * Discovers, registers, and compiles UI mods into coordinated injection scripts.
@@ -383,6 +384,13 @@ export class ModLoader {
           }
           document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
 
+          const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+          if (pwPortal) {
+            pwPortal.classList.remove('open');
+            pwPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+
           document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
           portal.classList.remove('open');
           portal.__currentBadge = null;
@@ -667,6 +675,8 @@ export class ModLoader {
         window.__resolveNativeQuotaForModel = ${resolveNativeQuotaForModel.toString()};
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
         window.__renderModsManagerPanelHtml = ${renderModsManagerPanelHtml.toString()};
+        window.__renderPitWallModalHtml = ${renderPitWallModalHtml.toString()};
+        window.__antigravityPitWall = ${JSON.stringify(context.pitWall || null)};
         const renderReticleSvg = ${renderReticleSvg.toString()};
         window.__renderReticleSvg = renderReticleSvg;
 
@@ -739,9 +749,19 @@ export class ModLoader {
           }
         };
 
-        window.__BASE_MODELS = ${JSON.stringify(BASE_MODELS)};
-        window.__MODEL_CATALOG = ${JSON.stringify(MODEL_CATALOG)};
+        window.__BASE_MODELS = ${JSON.stringify(
+          (context.modelCatalog && Array.isArray(context.modelCatalog.baseModels) && context.modelCatalog.baseModels.length > 0)
+            ? context.modelCatalog.baseModels
+            : BASE_MODELS
+        )};
+        window.__MODEL_CATALOG = ${JSON.stringify(
+          (context.modelCatalog && Array.isArray(context.modelCatalog.modelCatalog) && context.modelCatalog.modelCatalog.length > 0)
+            ? context.modelCatalog.modelCatalog
+            : MODEL_CATALOG
+        )};
         window.__DEFAULT_MODEL_SLOTS = ${JSON.stringify(DEFAULT_MODEL_SLOTS)};
+        window.__normalizeNativeModelCatalog = ${normalizeNativeModelCatalog.toString()};
+        window.__groupBaseModelsIntoPacks = ${groupBaseModelsIntoPacks.toString()};
         window.__antigravitySubagentSessionSlots = Object.assign(
           window.__antigravitySubagentSessionSlots || {},
           ${JSON.stringify((context.modelSlots && context.modelSlots.sessions) ? context.modelSlots.sessions : {})}
@@ -750,6 +770,128 @@ export class ModLoader {
         window.getModelById = window.__getModelById;
         window.__renderModelSlotDropdownHtml = ${renderModelSlotDropdownHtml.toString()};
         window.__renderSubagentModelPill = ${renderSubagentModelPill.toString()};
+
+        window.__discoverNativeModelCatalog = function(options) {
+          const opts = options || {};
+          try {
+            const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+            const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
+            if (!activeTrigger) return null;
+
+            const reactKey = Object.keys(activeTrigger).find(k => k.startsWith('__reactFiber'));
+            if (!reactKey) return null;
+
+            let cur = activeTrigger[reactKey];
+            let depth = 0;
+            let ctxValue = null;
+            while (cur && depth < 35) {
+              const val = cur.memoizedProps && cur.memoizedProps.value;
+              if (val && Array.isArray(val.modelOptions) && val.modelOptions.length > 0) {
+                ctxValue = val;
+                break;
+              }
+              cur = cur.return;
+              depth++;
+            }
+            if (!ctxValue) return null;
+
+            const rawOptions = ctxValue.modelOptions.map(m => ({
+              modelId: m.modelId || m.id || '',
+              label: m.label || m.name || '',
+              value: m.value,
+              disabled: Boolean(m.disabled),
+              tagTitle: m.tagTitle || '',
+              tagDescription: m.tagDescription || ''
+            }));
+
+            const rawGroups = Array.isArray(ctxValue.groups)
+              ? ctxValue.groups.map(g => ({
+                  groupName: g.groupName || '',
+                  options: Array.isArray(g.options)
+                    ? g.options.map(o => ({
+                        modelId: o.modelId || o.id || '',
+                        label: o.label || o.name || '',
+                        value: o.value,
+                        disabled: Boolean(o.disabled),
+                        tagTitle: o.tagTitle || '',
+                        tagDescription: o.tagDescription || ''
+                      }))
+                    : []
+                }))
+              : [];
+
+            const effortIndexObj = {};
+            const ei = ctxValue.effortIndex;
+            if (ei && typeof ei === 'object') {
+              const entries = (typeof Map === 'function' && ei instanceof Map)
+                ? Array.from(ei.entries())
+                : Object.entries(ei);
+              for (const pair of entries) {
+                const baseKey = pair[0];
+                const effList = pair[1];
+                if (typeof Map === 'function' && effList instanceof Map) {
+                  effortIndexObj[baseKey] = Array.from(effList.entries()).map(ep => ({
+                    effort: ep[0],
+                    modelId: ep[1] && (ep[1].modelId || ep[1].id) || '',
+                    label: ep[1] && (ep[1].label || ep[1].name) || '',
+                    value: ep[1] && ep[1].value,
+                    disabled: Boolean(ep[1] && ep[1].disabled)
+                  }));
+                } else if (Array.isArray(effList)) {
+                  effortIndexObj[baseKey] = effList.map(ev => ({
+                    effort: ev && (ev.effort || ev.effortLabel) || '',
+                    modelId: ev && (ev.modelId || ev.id) || '',
+                    label: ev && (ev.label || ev.name) || '',
+                    value: ev && ev.value,
+                    disabled: Boolean(ev && ev.disabled)
+                  }));
+                }
+              }
+            }
+
+            if (typeof window.__normalizeNativeModelCatalog !== 'function') return null;
+            const normalized = window.__normalizeNativeModelCatalog(rawOptions, effortIndexObj, rawGroups);
+            if (!normalized || !Array.isArray(normalized.baseModels) || normalized.baseModels.length === 0) {
+              return null;
+            }
+
+            const payload = {
+              source: 'native-react-context',
+              ...normalized,
+              discoveredAt: Date.now()
+            };
+
+            const signature = JSON.stringify({
+              models: normalized.modelCatalog.map(m => m.id),
+              disabled: normalized.disabledModels.map(m => m.id)
+            });
+
+            window.__BASE_MODELS = normalized.baseModels;
+            window.__MODEL_CATALOG = normalized.modelCatalog;
+            window.__DISCOVERED_MODEL_CATALOG = payload;
+
+            const changed = window.__lastModelCatalogSignature !== signature;
+            if (changed || opts.forceSync) {
+              window.__lastModelCatalogSignature = signature;
+              if (typeof window.__updateMenubarSlotButtons === 'function' && typeof window.__getActiveMenubarSlotModels === 'function') {
+                window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+              }
+              try {
+                if (typeof fetch === 'function') {
+                  fetch('http://127.0.0.1:53912/model-catalog', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                  }).catch(function() {});
+                }
+              } catch (e) {}
+            }
+
+            return payload;
+          } catch (e) {
+            return null;
+          }
+        };
 
         window.__getSavedModelSlots = function() {
           try {
@@ -927,12 +1069,12 @@ export class ModLoader {
         window.__getSubagentBadges = function() {
           let candidates = [];
           try {
-            candidates = Array.from(document.querySelectorAll('div[title="Subagent"], .text-secondary-foreground:has(> span)'));
+            candidates = Array.from(document.querySelectorAll('div[title="Subagent"], [data-swarm-worker], .text-secondary-foreground:has(> span)'));
           } catch (e) {
-            candidates = Array.from(document.querySelectorAll('div[title="Subagent"], .text-secondary-foreground'));
+            candidates = Array.from(document.querySelectorAll('div[title="Subagent"], [data-swarm-worker], .text-secondary-foreground'));
           }
           return candidates.filter(badge =>
-            Array.from(badge.querySelectorAll('span')).some(s => s.textContent.trim() === 'self')
+            Array.from(badge.querySelectorAll('span')).some(s => /^(self|swarm|builder)$/i.test(String(s.textContent || '').trim()))
           );
         };
 
@@ -1025,7 +1167,7 @@ export class ModLoader {
           const badges = window.__getSubagentBadges ? window.__getSubagentBadges() : [];
 
           badges.forEach(badge => {
-            const selfSpan = Array.from(badge.querySelectorAll('span')).find(s => s.textContent.trim() === 'self');
+            const selfSpan = Array.from(badge.querySelectorAll('span')).find(s => /^(self|swarm|builder)$/i.test(String(s.textContent || '').trim()));
             if (!selfSpan) return;
 
             const sessionId = window.__resolveSubagentSessionId(badge);
@@ -1107,6 +1249,9 @@ export class ModLoader {
           if (typeof window.__syncSubagentModelBadges === 'function') {
             window.__syncSubagentModelBadges();
           }
+          if (typeof window.__syncPlannerSyncButtons === 'function') {
+            window.__syncPlannerSyncButtons();
+          }
         };
 
         window.__resolveNativeModelTarget = function(modelId) {
@@ -1116,14 +1261,37 @@ export class ModLoader {
             : null;
           const effectiveId = (resolved && resolved.id === modelId) ? resolved.id : modelId;
 
+          const baseModels = Array.isArray(window.__BASE_MODELS) ? window.__BASE_MODELS : [];
+          for (const bm of baseModels) {
+            if (!bm || !Array.isArray(bm.efforts)) continue;
+            const foundEff = bm.efforts.find(e => e.id === effectiveId);
+            if (foundEff) {
+              const isDirectSelect =
+                bm.efforts.length === 1 &&
+                (
+                  String(foundEff.label || '').toLowerCase() === 'standard' ||
+                  /^orchestrator/i.test(bm.name) ||
+                  /^gpt-oss/i.test(bm.name)
+                );
+              return {
+                base: bm.name,
+                effort: isDirectSelect ? null : (foundEff.label || null)
+              };
+            }
+          }
+
+          if (effectiveId === 'gemini-pro-orchestrator-neon') {
+            return { base: 'Orchestrator (Neon)', effort: null };
+          }
           if (effectiveId === 'gemini-pro-orchestrator-g1-pro') {
-            return { base: 'Orchestrator', effort: null };
+            return { base: 'Orchestrator (Argon)', effort: null };
           }
           if (effectiveId.startsWith('gpt-oss-120b-')) {
             return { base: 'GPT-OSS 120B', effort: null };
           }
 
           const basePrefixes = [
+            { prefix: 'gemini-4-neon-', base: 'Gemini 4 Neon' },
             { prefix: 'gemini-4-argon-', base: 'Gemini 4 Argon' },
             { prefix: 'gemini-4-hydrogen-', base: 'Gemini 4 Hydrogen' },
             { prefix: 'gemini-3.8-flash-', base: 'Gemini 3.8 Flash' },
@@ -1132,10 +1300,12 @@ export class ModLoader {
           ];
 
           const effortLabels = {
+            minimal: 'Minimal',
             low: 'Low',
             medium: 'Medium',
             high: 'High',
-            xhigh: 'XHigh'
+            xhigh: 'XHigh',
+            max: 'Max'
           };
 
           for (const entry of basePrefixes) {
@@ -1155,11 +1325,61 @@ export class ModLoader {
           const text = rawText.trim().toLowerCase();
           if (!text) return null;
 
-          if (text.includes('orchestrator')) return 'gemini-pro-orchestrator-g1-pro';
+          const normalizedText = text.replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim();
+          const catalog = Array.isArray(window.__MODEL_CATALOG) ? window.__MODEL_CATALOG : [];
+          const baseModels = Array.isArray(window.__BASE_MODELS) ? window.__BASE_MODELS : [];
+
+          // 1. Direct normalized match against live catalog names
+          for (const item of catalog) {
+            if (!item || !item.name) continue;
+            const itemNorm = String(item.name).toLowerCase().replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim();
+            if (itemNorm === normalizedText) {
+              return item.id;
+            }
+          }
+
+          // 2. Dynamic base-model + effort resolution against live BASE_MODELS
+          let detectedEffortKey = null;
+          if (/(?:^|[^a-z])xhigh(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'xhigh';
+          else if (/(?:^|[^a-z])high(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'high';
+          else if (/(?:^|[^a-z])(?:medium|med)(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'medium';
+          else if (/(?:^|[^a-z])low(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'low';
+          else if (/(?:^|[^a-z])minimal(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'minimal';
+          else if (/(?:^|[^a-z])max(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'max';
+
+          // Sort longest base names first so "Orchestrator (Neon)" matches before shorter substrings
+          const sortedBases = baseModels.slice().sort((a, b) => String(b.name || '').length - String(a.name || '').length);
+          for (const bm of sortedBases) {
+            if (!bm || !bm.name || !Array.isArray(bm.efforts) || bm.efforts.length === 0) continue;
+            const bmNorm = String(bm.name).toLowerCase().replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim();
+            if (normalizedText.includes(bmNorm)) {
+              if (bm.efforts.length === 1) {
+                return bm.efforts[0].id;
+              }
+              if (detectedEffortKey) {
+                const effMatch = bm.efforts.find(e => String(e.label || '').toLowerCase() === detectedEffortKey || String(e.id || '').toLowerCase().endsWith('-' + detectedEffortKey));
+                if (effMatch) return effMatch.id;
+              }
+              const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+              if (saved && saved.planner) {
+                const savedMatch = bm.efforts.find(e => e.id === saved.planner);
+                if (savedMatch) return savedMatch.id;
+              }
+              const highDefault = bm.efforts.find(e => String(e.label || '').toLowerCase() === 'high');
+              return (highDefault || bm.efforts[0]).id;
+            }
+          }
+
+          // 3. Legacy fuzzy keyword fallback
+          if (text.includes('orchestrator')) {
+            if (text.includes('neon')) return 'gemini-pro-orchestrator-neon';
+            return 'gemini-pro-orchestrator-g1-pro';
+          }
           if (text.includes('gpt-oss') || text.includes('120b')) return 'gpt-oss-120b-medium';
 
           let basePrefix = null;
-          if (text.includes('argon')) basePrefix = 'gemini-4-argon-';
+          if (text.includes('neon')) basePrefix = 'gemini-4-neon-';
+          else if (text.includes('argon')) basePrefix = 'gemini-4-argon-';
           else if (text.includes('hydrogen')) basePrefix = 'gemini-4-hydrogen-';
           else if (text.includes('3.8') && text.includes('flash')) basePrefix = 'gemini-3.8-flash-';
           else if (text.includes('opus')) basePrefix = 'claude-opus-5-5-';
@@ -1167,12 +1387,7 @@ export class ModLoader {
 
           if (!basePrefix) return null;
 
-          let effort = null;
-          if (/(?:^|[^a-z])xhigh(?:$|[^a-z])/i.test(text)) effort = 'xhigh';
-          else if (/(?:^|[^a-z])high(?:$|[^a-z])/i.test(text)) effort = 'high';
-          else if (/(?:^|[^a-z])(?:medium|med)(?:$|[^a-z])/i.test(text)) effort = 'medium';
-          else if (/(?:^|[^a-z])low(?:$|[^a-z])/i.test(text)) effort = 'low';
-
+          let effort = detectedEffortKey;
           if (!effort) {
             const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
             if (saved && saved.planner && saved.planner.startsWith(basePrefix)) {
@@ -1183,7 +1398,6 @@ export class ModLoader {
           }
 
           const candidateId = basePrefix + effort;
-          const catalog = window.__MODEL_CATALOG || [];
           const found = catalog.find(m => m.id === candidateId);
           return found ? found.id : null;
         };
@@ -1191,6 +1405,344 @@ export class ModLoader {
         window.__nativeModelSyncTimers = window.__nativeModelSyncTimers || [];
         window.__nativeModelSyncInProgress = false;
         window.__nativeModelSyncToken = window.__nativeModelSyncToken || 0;
+
+        window.__getNativeModelContext = function(triggerEl) {
+          try {
+            const el = triggerEl || (() => {
+              const list = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+              return list[list.length - 1] || list[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
+            })();
+            if (!el) return null;
+            const reactKey = Object.keys(el).find(k => k.startsWith('__reactFiber'));
+            if (!reactKey) return null;
+            let cur = el[reactKey];
+            let depth = 0;
+            while (cur && depth < 35) {
+              const val = cur.memoizedProps && cur.memoizedProps.value;
+              if (val && Array.isArray(val.modelOptions) && val.modelOptions.length > 0) {
+                return val;
+              }
+              cur = cur.return;
+              depth++;
+            }
+          } catch (e) {}
+          return null;
+        };
+
+        window.__isNativeSelectorLocked = function() {
+          const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+          if (!saved) return true;
+          if (saved.enabled === false) return false;
+          if (saved.plannerSyncBroken === true) return false;
+          return saved.lockNative !== false;
+        };
+
+        window.__installNativeModelLockGuard = function(triggerEl) {
+          if (!triggerEl || typeof triggerEl.removeEventListener !== 'function') return;
+          // Soft-lock policy: never block pointer or keyboard interaction on the native chatbox model selector.
+          // Clean up any legacy capture-phase blocking listeners from earlier versions.
+          if (triggerEl.__antigravityLockGuard) {
+            for (const evName of ['click', 'mousedown', 'pointerdown', 'keydown']) {
+              try {
+                triggerEl.removeEventListener(evName, triggerEl.__antigravityLockGuard, true);
+              } catch (e) {}
+            }
+            triggerEl.__antigravityLockGuard = null;
+          }
+        };
+
+        window.__syncPlannerSyncButtons = function() {
+          const synced = window.__isNativeSelectorLocked();
+          const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+          const plannerId = (saved && saved.planner) || 'gemini-4-argon-high';
+          const plannerModel = (typeof window.__getModelById === 'function') ? window.__getModelById(plannerId) : null;
+          const plannerName = (plannerModel && plannerModel.name) || plannerId;
+          const plannerShort = (plannerModel && plannerModel.shortName) || plannerName;
+          const overrideId = saved && saved.nativeOverrideModel;
+          const overrideModel = (overrideId && typeof window.__getModelById === 'function') ? window.__getModelById(overrideId) : null;
+          const overrideLabel = (overrideModel && overrideModel.shortName) || overrideId || '';
+
+          const menubarTitle = synced
+            ? ('Chat synced with Planner (' + plannerName + ') - Click to re-sync')
+            : ('Sync broken' + (overrideLabel ? ' (chat: ' + overrideLabel + ')' : '') + ' - Click to sync chat back to Planner (' + plannerName + ')');
+
+          const chatTitle = 'Sync chat model back to Planner (' + plannerName + ')';
+
+          // 1. Update menubar Sync Planner button(s)
+          document.querySelectorAll('.antigravity-planner-sync-btn, #antigravity-planner-sync-btn').forEach(btn => {
+            const nextState = synced ? 'synced' : 'desynced';
+            if (btn.getAttribute('data-sync-state') !== nextState) {
+              btn.setAttribute('data-sync-state', nextState);
+            }
+            if (btn.getAttribute('aria-pressed') !== (synced ? 'true' : 'false')) {
+              btn.setAttribute('aria-pressed', synced ? 'true' : 'false');
+            }
+            if (btn.getAttribute('title') !== menubarTitle) {
+              btn.setAttribute('title', menubarTitle);
+            }
+            if (btn.classList) {
+              btn.classList.toggle('is-synced', synced);
+              btn.classList.toggle('is-desynced', !synced);
+            }
+          });
+
+          // 2. Highlight menubar Planner button subtly when sync is broken
+          document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="planner"]').forEach(btn => {
+            if (btn.classList) {
+              btn.classList.toggle('is-desynced', !synced);
+            }
+          });
+
+          // 3. Ensure and update inline chatbox Sync Plan button next to each native model selector
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          if (!triggers.length) {
+            const single = document.querySelector('button[data-testid="model-selector-trigger"]');
+            if (single) triggers.push(single);
+          }
+
+          triggers.forEach(trigger => {
+            const parent = trigger && trigger.parentElement;
+            if (!parent) return;
+            if (parent.closest && parent.closest('[role="dialog"], [role="menu"], .agy-overlay')) return;
+            const row = (parent.closest && parent.closest('.flex.items-center')) || parent;
+            const slotContainer = row && typeof row.querySelector === 'function'
+              ? row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')
+              : null;
+            const host = slotContainer || row;
+            if (!host) return;
+
+            let chatBtn = (typeof host.querySelector === 'function')
+              ? host.querySelector('.antigravity-chat-planner-sync-btn')
+              : null;
+
+            if (!chatBtn && typeof document.createElement === 'function') {
+              chatBtn = document.createElement('button');
+              chatBtn.setAttribute('type', 'button');
+              chatBtn.setAttribute('class', 'antigravity-chat-planner-sync-btn');
+              chatBtn.setAttribute('aria-label', 'Sync chat model to Planner');
+              chatBtn.setAttribute('data-antigravity-internal', 'true');
+              chatBtn.innerHTML = '<svg aria-hidden="true" class="chat-planner-sync-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg><span class="chat-planner-sync-label">Sync Plan</span>';
+              if (slotContainer) {
+                if (typeof slotContainer.prepend === 'function') {
+                  slotContainer.prepend(chatBtn);
+                } else if (typeof slotContainer.insertBefore === 'function' && slotContainer.firstElementChild) {
+                  slotContainer.insertBefore(chatBtn, slotContainer.firstElementChild);
+                } else if (typeof slotContainer.appendChild === 'function') {
+                  slotContainer.appendChild(chatBtn);
+                }
+              } else if (typeof trigger.after === 'function') {
+                trigger.after(chatBtn);
+              } else if (typeof host.appendChild === 'function') {
+                host.appendChild(chatBtn);
+              }
+            }
+
+            if (chatBtn) {
+              const nextState = synced ? 'synced' : 'desynced';
+              if (chatBtn.getAttribute('data-sync-state') !== nextState) {
+                chatBtn.setAttribute('data-sync-state', nextState);
+              }
+              if (chatBtn.getAttribute('data-planner-model') !== plannerId) {
+                chatBtn.setAttribute('data-planner-model', plannerId);
+              }
+              if (chatBtn.getAttribute('title') !== chatTitle) {
+                chatBtn.setAttribute('title', chatTitle);
+              }
+              chatBtn.hidden = synced;
+              if (chatBtn.classList) {
+                chatBtn.classList.toggle('is-desynced', !synced);
+              }
+              const labelEl = typeof chatBtn.querySelector === 'function'
+                ? chatBtn.querySelector('.chat-planner-sync-label')
+                : null;
+              const expectedLabel = 'Sync: ' + plannerShort;
+              if (labelEl && labelEl.textContent !== expectedLabel) {
+                labelEl.textContent = expectedLabel;
+              }
+            }
+          });
+        };
+
+        window.__applyNativeModelSelectorLock = function() {
+          const synced = window.__isNativeSelectorLocked();
+          const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+          const plannerId = (saved && saved.planner) || 'gemini-4-argon-high';
+          const plannerModel = (typeof window.__getModelById === 'function') ? window.__getModelById(plannerId) : null;
+          const plannerLabel = (plannerModel && plannerModel.shortName) || plannerId;
+
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          if (!triggers.length) {
+            const single = document.querySelector('button[data-testid="model-selector-trigger"]');
+            if (single) triggers.push(single);
+          }
+          triggers.forEach(trigger => {
+            if (typeof window.__installNativeModelLockGuard === 'function') {
+              window.__installNativeModelLockGuard(trigger);
+            }
+            if (trigger.removeAttribute) {
+              trigger.removeAttribute('aria-disabled');
+            }
+            if (synced) {
+              if (trigger.setAttribute) {
+                trigger.setAttribute('data-antigravity-locked', 'true');
+                trigger.setAttribute('data-antigravity-sync', 'synced');
+                trigger.setAttribute('title', 'Synced with Planner Slot (' + plannerLabel + ') — click to override');
+              }
+              if (trigger.classList) {
+                if (typeof trigger.classList.add === 'function') trigger.classList.add('antigravity-native-model-locked');
+                if (typeof trigger.classList.remove === 'function') trigger.classList.remove('antigravity-native-model-desynced');
+              }
+            } else {
+              if (trigger.removeAttribute) {
+                trigger.removeAttribute('data-antigravity-locked');
+              }
+              if (trigger.setAttribute) {
+                trigger.setAttribute('data-antigravity-sync', 'desynced');
+                trigger.setAttribute('title', 'Out of sync with Planner (' + plannerLabel + ') — click Sync Plan to restore');
+              }
+              if (trigger.classList) {
+                if (typeof trigger.classList.remove === 'function') trigger.classList.remove('antigravity-native-model-locked');
+                if (typeof trigger.classList.add === 'function') trigger.classList.add('antigravity-native-model-desynced');
+              }
+            }
+          });
+          if (typeof window.__syncPlannerSyncButtons === 'function') {
+            window.__syncPlannerSyncButtons();
+          }
+          return synced;
+        };
+
+        window.__breakNativePlannerSync = function(overrideModelId) {
+          const current = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+          const nextOverride = overrideModelId || null;
+          const alreadyBroken = (
+            current.lockNative === false &&
+            current.plannerSyncBroken === true &&
+            (current.nativeOverrideModel || null) === nextOverride
+          );
+          if (alreadyBroken) {
+            if (typeof window.__applyNativeModelSelectorLock === 'function') {
+              window.__applyNativeModelSelectorLock();
+            }
+            return false;
+          }
+
+          current.lockNative = false;
+          current.plannerSyncBroken = true;
+          current.nativeOverrideModel = nextOverride;
+          current.updatedAt = Date.now();
+          try {
+            localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+          } catch (e) {}
+
+          if (typeof window.__applyNativeModelSelectorLock === 'function') {
+            window.__applyNativeModelSelectorLock();
+          }
+
+          // Update dropdown toggle button if Planner dropdown is currently open
+          const portal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          const lockToggleBtn = portal && typeof portal.querySelector === 'function'
+            ? portal.querySelector('.model-slot-lock-toggle')
+            : null;
+          if (lockToggleBtn) {
+            if (lockToggleBtn.classList) {
+              lockToggleBtn.classList.remove('locked');
+              lockToggleBtn.classList.add('desynced');
+            }
+            lockToggleBtn.setAttribute('data-locked', 'false');
+            lockToggleBtn.setAttribute('aria-pressed', 'false');
+            lockToggleBtn.setAttribute('title', 'Sync broken by manual chat selection. Click to sync back to Planner slot.');
+            const lbl = typeof lockToggleBtn.querySelector === 'function' ? lockToggleBtn.querySelector('.model-lock-label') : null;
+            if (lbl) lbl.textContent = 'Sync Planner';
+          }
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  planner: current.planner,
+                  builder: current.builder,
+                  enabled: current.enabled !== false,
+                  lockNative: false,
+                  plannerSyncBroken: true,
+                  nativeOverrideModel: nextOverride
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+
+          return true;
+        };
+
+        window.__syncPlannerModelToChat = function() {
+          const current = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+          current.lockNative = true;
+          current.plannerSyncBroken = false;
+          current.nativeOverrideModel = null;
+          current.updatedAt = Date.now();
+          try {
+            localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+          } catch (e) {}
+
+          if (typeof window.__applyNativeModelSelectorLock === 'function') {
+            window.__applyNativeModelSelectorLock();
+          }
+          if (current.planner && typeof window.__syncNativeModelSelector === 'function') {
+            window.__syncNativeModelSelector(current.planner);
+          }
+
+          // Update dropdown toggle button if Planner dropdown is currently open
+          const portal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          const lockToggleBtn = portal && typeof portal.querySelector === 'function'
+            ? portal.querySelector('.model-slot-lock-toggle')
+            : null;
+          if (lockToggleBtn) {
+            if (lockToggleBtn.classList) {
+              lockToggleBtn.classList.add('locked');
+              lockToggleBtn.classList.remove('desynced');
+            }
+            lockToggleBtn.setAttribute('data-locked', 'true');
+            lockToggleBtn.setAttribute('aria-pressed', 'true');
+            lockToggleBtn.setAttribute('title', 'Chat synced with Planner slot. Change model in chat anytime to override.');
+            const lbl = typeof lockToggleBtn.querySelector === 'function' ? lockToggleBtn.querySelector('.model-lock-label') : null;
+            if (lbl) lbl.textContent = 'Chat Synced';
+          }
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  planner: current.planner,
+                  builder: current.builder,
+                  enabled: current.enabled !== false,
+                  lockNative: true,
+                  plannerSyncBroken: false,
+                  nativeOverrideModel: null
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+
+          return true;
+        };
+
+        window.__toggleNativeModelLock = function() {
+          const isCurrentlySynced = window.__isNativeSelectorLocked();
+          if (!isCurrentlySynced) {
+            window.__syncPlannerModelToChat();
+            return true;
+          }
+          window.__breakNativePlannerSync(null);
+          return false;
+        };
 
         window.__syncNativeModelSelector = function(modelId) {
           if (!modelId) return false;
@@ -1204,6 +1756,40 @@ export class ModLoader {
           const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
           const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
           if (!activeTrigger) return false;
+
+          // Primary path: invoke Antigravity's native React Context setSelectedModel directly (0ms, zero flicker, works while locked)
+          const nativeCtx = (typeof window.__getNativeModelContext === 'function')
+            ? window.__getNativeModelContext(activeTrigger)
+            : null;
+          if (nativeCtx && typeof nativeCtx.setSelectedModel === 'function' && Array.isArray(nativeCtx.modelOptions)) {
+            const matchedOpt = nativeCtx.modelOptions.find(opt => opt && !opt.disabled && (opt.modelId === targetId || opt.id === targetId))
+              || nativeCtx.modelOptions.find(opt => {
+                if (!opt || opt.disabled || !opt.label) return false;
+                const lbl = String(opt.label).toLowerCase();
+                const hasB = lbl.includes(target.base.toLowerCase());
+                const hasE = target.effort ? lbl.includes('(' + target.effort.toLowerCase() + ')') : true;
+                return hasB && hasE;
+              });
+            if (matchedOpt) {
+              const currentNativeId = nativeCtx.selectedModel && (nativeCtx.selectedModel.modelId || nativeCtx.selectedModel.id);
+              if (currentNativeId === matchedOpt.modelId) {
+                return true;
+              }
+              const token = ++window.__nativeModelSyncToken;
+              window.__nativeModelSyncInProgress = true;
+              try {
+                nativeCtx.setSelectedModel(matchedOpt);
+              } finally {
+                const settleTimer = setTimeout(() => {
+                  if (window.__nativeModelSyncToken === token) {
+                    window.__nativeModelSyncInProgress = false;
+                  }
+                }, 120);
+                window.__nativeModelSyncTimers.push(settleTimer);
+              }
+              return true;
+            }
+          }
 
           const matchesEffortText = (text, effort) => {
             if (!effort) return true;
@@ -1300,56 +1886,71 @@ export class ModLoader {
           const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
           if (!activeTrigger) return false;
 
-          const detectedId = window.__resolveModelIdFromNativeText
-            ? window.__resolveModelIdFromNativeText(activeTrigger.textContent || '')
+          const nativeCtx = (typeof window.__getNativeModelContext === 'function')
+            ? window.__getNativeModelContext(activeTrigger)
             : null;
+          const ctxModelId = nativeCtx && nativeCtx.selectedModel && (nativeCtx.selectedModel.modelId || nativeCtx.selectedModel.id);
+          const detectedId = ctxModelId || (window.__resolveModelIdFromNativeText
+            ? window.__resolveModelIdFromNativeText(activeTrigger.textContent || '')
+            : null);
           if (!detectedId) return false;
 
           const current = (typeof window.__getSavedModelSlots === 'function')
             ? window.__getSavedModelSlots()
             : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
 
-          const plannerBtns = Array.from(document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="planner"]'));
-          const btnAlreadySynced = plannerBtns.length > 0 && plannerBtns.every(btn => btn.getAttribute('data-model-id') === detectedId);
-          if (current.planner === detectedId && btnAlreadySynced) {
+          if (!current.planner) return false;
+
+          // If user manually picked a different model in the chatbox selector,
+          // preserve the Planner slot and break synchronization instead of overwriting Planner or snapping back.
+          if (detectedId !== current.planner) {
+            if (typeof window.__breakNativePlannerSync === 'function') {
+              return window.__breakNativePlannerSync(detectedId);
+            }
             return false;
           }
 
-          current.planner = detectedId;
-          current.updatedAt = Date.now();
-          try {
-            localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
-          } catch (e) {}
-
-          if (typeof window.__updateMenubarSlotButtons === 'function') {
-            window.__updateMenubarSlotButtons(
-              typeof window.__getActiveMenubarSlotModels === 'function'
-                ? window.__getActiveMenubarSlotModels()
-                : current
-            );
+          // If the chatbox selector matches the Planner model again while desynced, restore synchronized state cleanly.
+          if (current.lockNative === false || current.plannerSyncBroken === true) {
+            current.lockNative = true;
+            current.plannerSyncBroken = false;
+            current.nativeOverrideModel = null;
+            current.updatedAt = Date.now();
+            try {
+              localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+            } catch (e) {}
+            if (typeof window.__applyNativeModelSelectorLock === 'function') {
+              window.__applyNativeModelSelectorLock();
+            }
+            try {
+              if (typeof fetch === 'function') {
+                fetch('http://127.0.0.1:53912/model-slots', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    planner: current.planner,
+                    builder: current.builder,
+                    enabled: current.enabled !== false,
+                    lockNative: true,
+                    plannerSyncBroken: false,
+                    nativeOverrideModel: null
+                  })
+                }).catch(function() {});
+              }
+            } catch (e) {}
+            return true;
           }
 
-          try {
-            if (typeof fetch === 'function') {
-              fetch('http://127.0.0.1:53912/model-slots', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  planner: current.planner,
-                  builder: current.builder,
-                  enabled: current.enabled !== false
-                })
-              }).catch(function() {});
-            }
-          } catch (e) {}
-
-          return true;
+          return false;
         };
 
         window.__observedNativeTriggerSet = new WeakSet();
         window.__observedNativeTriggersCount = 0;
 
         window.__observeNativeModelSelector = function() {
+          if (typeof window.__applyNativeModelSelectorLock === 'function') {
+            window.__applyNativeModelSelectorLock();
+          }
           if (typeof MutationObserver !== 'function') return;
           const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
           if (!triggers.length) {
@@ -1371,6 +1972,7 @@ export class ModLoader {
             window.__antigravityNativeModelObserver.disconnect();
           }
           window.__antigravityNativeModelObserver = new MutationObserver(() => {
+            if (window.__nativeModelSyncInProgress) return;
             if (typeof window.__syncPlannerFromNativeSelector === 'function') {
               window.__syncPlannerFromNativeSelector();
             }
@@ -1392,6 +1994,11 @@ export class ModLoader {
           if (!role || !modelId) return;
           const current = window.__getSavedModelSlots();
           current[role] = modelId;
+          if (role === 'planner') {
+            current.lockNative = true;
+            current.plannerSyncBroken = false;
+            current.nativeOverrideModel = null;
+          }
           current.updatedAt = Date.now();
           try {
             localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
@@ -1421,8 +2028,13 @@ export class ModLoader {
             window.__syncSubagentModelBadges();
           }
 
-          if (role === 'planner' && typeof window.__syncNativeModelSelector === 'function') {
-            window.__syncNativeModelSelector(modelId);
+          if (role === 'planner') {
+            if (typeof window.__applyNativeModelSelectorLock === 'function') {
+              window.__applyNativeModelSelectorLock();
+            }
+            if (typeof window.__syncNativeModelSelector === 'function') {
+              window.__syncNativeModelSelector(modelId);
+            }
           }
 
           try {
@@ -1433,7 +2045,10 @@ export class ModLoader {
                 body: JSON.stringify({
                   planner: current.planner,
                   builder: current.builder,
-                  enabled: current.enabled !== false
+                  enabled: current.enabled !== false,
+                  lockNative: current.lockNative !== false,
+                  plannerSyncBroken: current.plannerSyncBroken === true,
+                  nativeOverrideModel: current.nativeOverrideModel || null
                 })
               }).catch(function() {});
             }
@@ -1471,6 +2086,13 @@ export class ModLoader {
           }
           document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
 
+          const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+          if (pwPortal) {
+            pwPortal.classList.remove('open');
+            pwPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+
           let portal = document.getElementById('antigravity-model-slot-dropdown-portal');
           if (!portal) {
             portal = document.createElement('div');
@@ -1486,6 +2108,9 @@ export class ModLoader {
           portal.__currentBtn = null;
 
           if (!isCurrentOpen) {
+            if (typeof window.__discoverNativeModelCatalog === 'function') {
+              window.__discoverNativeModelCatalog();
+            }
             btn.classList.add('open');
             portal.__currentBtn = btn;
 
@@ -1495,8 +2120,51 @@ export class ModLoader {
             const currentSelectedId = savedSlots[slotRole] || btn.getAttribute('data-model-id');
 
             if (window.__renderModelSlotDropdownHtml) {
-              portal.innerHTML = window.__renderModelSlotDropdownHtml(slotRole, currentSelectedId, window.__BASE_MODELS || window.__MODEL_CATALOG);
+              const lockNative = (typeof window.__isNativeSelectorLocked === 'function') ? window.__isNativeSelectorLocked() : true;
+              portal.innerHTML = window.__renderModelSlotDropdownHtml(
+                slotRole,
+                currentSelectedId,
+                window.__BASE_MODELS || window.__MODEL_CATALOG,
+                { lockNative }
+              );
             }
+
+            const lockToggleBtn = portal.querySelector('.model-slot-lock-toggle');
+            if (lockToggleBtn) {
+              lockToggleBtn.onclick = (ev) => {
+                ev.stopPropagation();
+                ev.preventDefault();
+                if (typeof window.__syncPlannerModelToChat === 'function') {
+                  window.__syncPlannerModelToChat();
+                  lockToggleBtn.classList.add('locked');
+                  lockToggleBtn.classList.remove('desynced');
+                  lockToggleBtn.setAttribute('data-locked', 'true');
+                  lockToggleBtn.setAttribute('aria-pressed', 'true');
+                  lockToggleBtn.setAttribute('title', 'Chat synced with Planner slot. Change model in chat anytime to override.');
+                  const lbl = lockToggleBtn.querySelector('.model-lock-label');
+                  if (lbl) lbl.textContent = 'Chat Synced';
+                }
+              };
+            }
+
+            portal.querySelectorAll('.model-pack-header').forEach(header => {
+              header.onclick = (ev) => {
+                ev.stopPropagation();
+                ev.preventDefault();
+                const pack = header.closest('.model-pack');
+                if (!pack) return;
+                const willExpand = !pack.classList.contains('expanded');
+                portal.querySelectorAll('.model-pack.expanded').forEach(other => {
+                  other.classList.remove('expanded');
+                  const oh = other.querySelector('.model-pack-header');
+                  if (oh) oh.setAttribute('aria-expanded', 'false');
+                });
+                if (willExpand) {
+                  pack.classList.add('expanded');
+                  header.setAttribute('aria-expanded', 'true');
+                }
+              };
+            });
 
             portal.querySelectorAll('.model-effort-option, .model-slot-option').forEach(opt => {
               opt.onclick = (ev) => {
@@ -1809,6 +2477,10 @@ export class ModLoader {
           document.querySelectorAll('.antigravity-model-slots-group').forEach(b => {
             b.style.display = modelSlotsEnabled ? 'inline-flex' : 'none';
           });
+          const pitWallEnabled = localStorage.getItem('__antigravity_mod_enabled_pit-wall') !== 'false';
+          document.querySelectorAll('.antigravity-pit-wall-btn').forEach(b => {
+            b.style.display = pitWallEnabled ? 'inline-flex' : 'none';
+          });
         };
 
         window.__toggleModsManagerPanel = function(e, btnEl) {
@@ -1833,6 +2505,13 @@ export class ModLoader {
             tachPortal.__currentBadge = null;
           }
           document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+          const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+          if (pwPortal) {
+            pwPortal.classList.remove('open');
+            pwPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
 
           let portal = document.getElementById('antigravity-mods-manager-portal');
           if (!portal) {
@@ -1921,6 +2600,16 @@ export class ModLoader {
               };
             }
 
+            const pitWallEnabled = localStorage.getItem('__antigravity_mod_enabled_pit-wall') !== 'false';
+            const pitWallInput = portal.querySelector('#mod-toggle-pit-wall');
+            if (pitWallInput) {
+              pitWallInput.checked = pitWallEnabled;
+              pitWallInput.onchange = (ev) => {
+                localStorage.setItem('__antigravity_mod_enabled_pit-wall', ev.target.checked);
+                window.__applyModsVisibility();
+              };
+            }
+
             const daemonInput = portal.querySelector('#mod-toggle-daemon');
             const daemonPill = portal.querySelector('#daemon-status-pill');
             if (daemonInput) {
@@ -1955,6 +2644,229 @@ export class ModLoader {
             const clampedLeft = Math.max(10, Math.min(window.innerWidth - portalWidth - 10, rect.left));
             portal.style.left = clampedLeft + 'px';
             portal.classList.add('open');
+          }
+        };
+
+        window.__hidePitWallTooltip = function() {
+          const tip = document.getElementById('antigravity-pit-wall-tooltip');
+          if (tip) {
+            tip.classList.remove('visible');
+            tip.setAttribute('aria-hidden', 'true');
+            if (typeof tip.hidePopover === 'function') {
+              try { tip.hidePopover(); } catch {}
+            }
+          }
+        };
+
+        window.__togglePitWallModal = function(e, btnEl) {
+          if (e) {
+            e.stopPropagation();
+            e.preventDefault();
+          }
+          const btn = btnEl || (e ? e.currentTarget : document.getElementById('antigravity-pit-wall-trigger'));
+          let portal = document.getElementById('antigravity-pit-wall-portal');
+          if (!portal) {
+            portal = document.createElement('div');
+            portal.id = 'antigravity-pit-wall-portal';
+            portal.className = 'antigravity-pit-wall-portal';
+            document.body.appendChild(portal);
+          }
+
+          const isCurrentOpen = portal.classList.contains('open');
+
+          const agentPortal = document.getElementById('antigravity-agent-dropdown-portal');
+          if (agentPortal) {
+            agentPortal.classList.remove('open');
+            agentPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+
+          const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+          if (tachPortal) {
+            tachPortal.classList.remove('open');
+            tachPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+          const msPortal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          if (msPortal) {
+            msPortal.classList.remove('open');
+            msPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+
+          const mPortal = document.getElementById('antigravity-mods-manager-portal');
+          if (mPortal) {
+            mPortal.classList.remove('open');
+            mPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+
+          document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+          portal.classList.remove('open');
+          portal.__currentBtn = null;
+          if (typeof window.__hidePitWallTooltip === 'function') {
+            window.__hidePitWallTooltip();
+          }
+
+          const bindPitWallClose = () => {
+            const closeBtn = portal.querySelector('#antigravity-pit-wall-close');
+            if (closeBtn) {
+              closeBtn.onclick = (ev) => {
+                if (ev) {
+                  ev.stopPropagation();
+                  ev.preventDefault();
+                }
+                portal.classList.remove('open');
+                portal.__currentBtn = null;
+                if (typeof window.__hidePitWallTooltip === 'function') {
+                  window.__hidePitWallTooltip();
+                }
+                document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+              };
+            }
+          };
+
+          const bindPitWallTooltips = (pwPortal) => {
+            if (!pwPortal || pwPortal.__pitWallTipsBound) return;
+            pwPortal.__pitWallTipsBound = true;
+
+            const escTip = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+            const showTip = (target) => {
+              if (!target) return;
+              const rawTip = target.getAttribute('data-pw-tip');
+              if (!rawTip) return;
+              let tipData;
+              try {
+                tipData = JSON.parse(rawTip);
+              } catch {
+                return;
+              }
+              const tip = pwPortal.querySelector('#antigravity-pit-wall-tooltip') || document.getElementById('antigravity-pit-wall-tooltip');
+              if (!tip) return;
+
+              const titleHtml = tipData.title ? ('<div class="pit-wall-tip-title">' + escTip(tipData.title) + '</div>') : '';
+              const rowsHtml = Array.isArray(tipData.rows)
+                ? ('<div class="pit-wall-tip-rows">' + tipData.rows.map(function(r) {
+                    return '<div class="pit-wall-tip-row">' +
+                      '<span class="pit-wall-tip-label">' + escTip(r.label) + '</span>' +
+                      '<span class="pit-wall-tip-val' + (r.accent ? ' accent' : '') + '">' + escTip(r.val) + '</span>' +
+                    '</div>';
+                  }).join('') + '</div>')
+                : '';
+
+              tip.innerHTML = titleHtml + rowsHtml;
+
+              let rect = { top: 100, left: 100, width: 20, height: 20, bottom: 120, right: 120 };
+              if (typeof target.getBoundingClientRect === 'function') {
+                try {
+                  const r = target.getBoundingClientRect();
+                  if (r && (r.width || r.height || r.top || r.left || r.bottom || r.right)) {
+                    rect = {
+                      top: r.top ?? 100,
+                      left: r.left ?? 100,
+                      width: r.width ?? 20,
+                      height: r.height ?? 20,
+                      bottom: r.bottom ?? ((r.top ?? 100) + (r.height ?? 20)),
+                      right: r.right ?? ((r.left ?? 100) + (r.width ?? 20))
+                    };
+                  }
+                } catch {}
+              }
+
+              let tipW = tip.offsetWidth || 220;
+              let tipH = tip.offsetHeight || 120;
+              tip.style.display = 'block';
+              if (tip.offsetWidth) tipW = tip.offsetWidth;
+              if (tip.offsetHeight) tipH = tip.offsetHeight;
+
+              const winW = (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : 1280;
+              let top = rect.top - tipH - 10;
+              let placement = 'top';
+              if (top < 8) {
+                top = rect.bottom + 10;
+                placement = 'bottom';
+              }
+
+              const targetCenter = rect.left + (rect.width / 2);
+              let left = targetCenter - (tipW / 2);
+              left = Math.max(10, Math.min(winW - tipW - 10, left));
+
+              const caretOffset = Math.max(12, Math.min(tipW - 12, targetCenter - left));
+              tip.setAttribute('data-placement', placement);
+              if (typeof tip.style.setProperty === 'function') {
+                tip.style.setProperty('--pw-tip-caret-left', caretOffset + 'px');
+              }
+              tip.style.top = top + 'px';
+              tip.style.left = left + 'px';
+
+              tip.classList.add('visible');
+              tip.setAttribute('aria-hidden', 'false');
+              if (typeof tip.showPopover === 'function') {
+                try { tip.showPopover(); } catch {}
+              }
+            };
+
+            const handlePointerEnter = (ev) => {
+              const target = ev.target && typeof ev.target.closest === 'function' ? ev.target.closest('[data-pw-tip]') : null;
+              if (target) {
+                showTip(target);
+              } else {
+                if (typeof window.__hidePitWallTooltip === 'function') window.__hidePitWallTooltip();
+              }
+            };
+
+            const handlePointerLeave = (ev) => {
+              const rel = ev.relatedTarget && typeof ev.relatedTarget.closest === 'function' ? ev.relatedTarget.closest('[data-pw-tip]') : null;
+              if (!rel && typeof window.__hidePitWallTooltip === 'function') {
+                window.__hidePitWallTooltip();
+              }
+            };
+
+            pwPortal.addEventListener('mouseover', handlePointerEnter);
+            pwPortal.addEventListener('focusin', handlePointerEnter);
+            pwPortal.addEventListener('mouseout', handlePointerLeave);
+            pwPortal.addEventListener('focusout', (ev) => {
+              const rel = ev.relatedTarget && typeof ev.relatedTarget.closest === 'function' ? ev.relatedTarget.closest('[data-pw-tip]') : null;
+              if (!rel && typeof window.__hidePitWallTooltip === 'function') {
+                window.__hidePitWallTooltip();
+              }
+            });
+            pwPortal.addEventListener('mouseleave', () => {
+              if (typeof window.__hidePitWallTooltip === 'function') {
+                window.__hidePitWallTooltip();
+              }
+            });
+          };
+
+          if (!isCurrentOpen) {
+            if (btn) btn.classList.add('open');
+            portal.__currentBtn = btn || null;
+            if (typeof window.__renderPitWallModalHtml === 'function') {
+              portal.innerHTML = window.__renderPitWallModalHtml(window.__antigravityPitWall || {});
+            }
+            bindPitWallClose();
+            bindPitWallTooltips(portal);
+            portal.classList.add('open');
+
+            if (typeof fetch === 'function') {
+              try {
+                fetch('http://127.0.0.1:53912/pit-wall')
+                  .then(r => (r && r.ok ? r.json() : null))
+                  .then(json => {
+                    if (json && json.status === 'ok' && json.pitWall) {
+                      window.__antigravityPitWall = json.pitWall;
+                      if (portal.classList.contains('open') && typeof window.__renderPitWallModalHtml === 'function') {
+                        portal.innerHTML = window.__renderPitWallModalHtml(json.pitWall);
+                        bindPitWallClose();
+                        bindPitWallTooltips(portal);
+                      }
+                    }
+                  })
+                  .catch(() => {});
+              } catch (err) {}
+            }
           }
         };
 
@@ -2764,6 +3676,13 @@ export class ModLoader {
           }
           document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
 
+          const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+          if (pwPortal) {
+            pwPortal.classList.remove('open');
+            pwPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+
 
           let portal = document.getElementById('antigravity-tachometer-popover-portal');
           if (!portal) {
@@ -3182,6 +4101,30 @@ export class ModLoader {
             document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
           }
 
+          const isPitWallBtn = clickTarget.closest('.antigravity-pit-wall-btn');
+          const isPitWallPortal = clickTarget.closest('#antigravity-pit-wall-portal');
+          if (!isPitWallBtn && !isPitWallPortal) {
+            const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+            if (pwPortal) {
+              pwPortal.classList.remove('open');
+              pwPortal.__currentBtn = null;
+              if (typeof window.__hidePitWallTooltip === 'function') {
+                window.__hidePitWallTooltip();
+              }
+            }
+            document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+          }
+
+          const plannerSyncBtn = clickTarget.closest('.antigravity-planner-sync-btn, .antigravity-chat-planner-sync-btn');
+          if (plannerSyncBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof window.__syncPlannerModelToChat === 'function') {
+              window.__syncPlannerModelToChat();
+            }
+            return;
+          }
+
           const modelSlotBtn = clickTarget.closest('.antigravity-model-slot-btn');
           if (modelSlotBtn) {
             const role = modelSlotBtn.getAttribute('data-slot-role');
@@ -3241,6 +4184,16 @@ export class ModLoader {
               msPortal.__currentBtn = null;
             }
             document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+
+            const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+            if (pwPortal) {
+              pwPortal.classList.remove('open');
+              pwPortal.__currentBtn = null;
+              if (typeof window.__hidePitWallTooltip === 'function') {
+                window.__hidePitWallTooltip();
+              }
+            }
+            document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
           }
         };
 
@@ -3346,6 +4299,14 @@ export class ModLoader {
             btn.__modsClickBound = true;
             btn.addEventListener('click', (e) => {
               window.__toggleModsManagerPanel(e, btn);
+            });
+          });
+
+          document.querySelectorAll('.antigravity-pit-wall-btn').forEach(btn => {
+            if (btn.__pitWallClickBound) return;
+            btn.__pitWallClickBound = true;
+            btn.addEventListener('click', (e) => {
+              window.__togglePitWallModal(e, btn);
             });
           });
 
@@ -3539,8 +4500,9 @@ export class ModLoader {
           return Boolean(
             node.classList?.contains('antigravity-slot-container') ||
             node.classList?.contains('antigravity-voice-dock') ||
+            node.classList?.contains('antigravity-chat-planner-sync-btn') ||
             (typeof node.id === 'string' && node.id.startsWith('antigravity-')) ||
-            node.closest?.('.antigravity-slot-container, .antigravity-voice-dock, [id^="antigravity-"]')
+            node.closest?.('.antigravity-slot-container, .antigravity-voice-dock, .antigravity-chat-planner-sync-btn, [id^="antigravity-"]')
           );
         };
 
@@ -3598,7 +4560,10 @@ export class ModLoader {
               }
             }
             if (!missingSlot) {
-              const sidebarSlot = document.querySelector('.shrink-0 > .bg-sidebar');
+              const sidebarSlot = document.querySelector('.shrink-0 > .bg-sidebar') ||
+                                  document.querySelector('.shrink-0.bg-sidebar .flex.items-center.bg-sidebar') ||
+                                  document.querySelector('.shrink-0 .flex.items-center.bg-sidebar') ||
+                                  document.querySelector('.shrink-0.bg-sidebar');
               if (sidebarSlot && !document.querySelector('.antigravity-slot-menubar-actions, #antigravity-slot-menubar-actions')) {
                 missingSlot = true;
               }
@@ -3621,10 +4586,23 @@ export class ModLoader {
         });
 
         window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
+        if (typeof window.__discoverNativeModelCatalog === 'function') {
+          window.__discoverNativeModelCatalog();
+        }
+        if (typeof window.__applyNativeModelSelectorLock === 'function') {
+          const isLocked = window.__applyNativeModelSelectorLock();
+          if (isLocked && typeof window.__getNativeModelContext === 'function' && window.__getNativeModelContext()) {
+            const initialSlots = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+            if (initialSlots && initialSlots.planner && typeof window.__syncNativeModelSelector === 'function') {
+              window.__syncNativeModelSelector(initialSlots.planner);
+            }
+          }
+        }
         return {
           success: true,
           selectedAgentsMap: localStorage.getItem('__antigravity_selected_agents_map'),
-          modelSlots: localStorage.getItem('__antigravity_model_slots')
+          modelSlots: localStorage.getItem('__antigravity_model_slots'),
+          discoveredModelCatalog: window.__DISCOVERED_MODEL_CATALOG || null
         };
       })();
     `;
