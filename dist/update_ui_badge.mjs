@@ -22,6 +22,7 @@ class CdpPortResolver {
   /**
    * @param {Object} [options]
    * @param {string} [options.logDir] Custom path to Antigravity logs directory.
+   * @param {string} [options.devToolsActivePortPath] Custom path to Electron DevToolsActivePort file.
    * @param {number} [options.defaultPort] Fallback port if auto-discovery fails.
    * @param {number[]} [options.candidatePorts] Candidate ports to probe.
    * @param {number} [options.probeTimeoutMs] Timeout for active HTTP probes in ms.
@@ -30,6 +31,7 @@ class CdpPortResolver {
   constructor(options = {}) {
     this.host = options.host || '127.0.0.1';
     this.logDir = options.logDir || path.join(os.homedir(), 'AppData', 'Roaming', 'Antigravity', 'logs');
+    this.devToolsActivePortPath = options.devToolsActivePortPath || path.join(path.dirname(this.logDir), 'DevToolsActivePort');
     this.defaultPort = options.defaultPort ?? 53908;
     this.candidatePorts = options.candidatePorts || [56547, 53908, 9222, 9229, 53909, 53910];
     this.probeTimeoutMs = options.probeTimeoutMs ?? 150;
@@ -136,12 +138,37 @@ class CdpPortResolver {
   }
 
   /**
+   * Synchronously reads Electron's DevToolsActivePort file (line 1 = active port)
+   * and parses it as a valid TCP port (1..65535).
+   * @returns {number|null} Discovered port or null if missing/invalid.
+   */
+  resolvePortFromDevToolsActivePort() {
+    try {
+      if (!this.devToolsActivePortPath || !fs.existsSync(this.devToolsActivePortPath)) {
+        return null;
+      }
+
+      const raw = fs.readFileSync(this.devToolsActivePortPath, 'utf-8');
+      const firstLine = raw.split(/\r?\n/)[0]?.replace(/^\uFEFF/, '').trim();
+      if (!firstLine || !/^\d+$/.test(firstLine)) {
+        return null;
+      }
+
+      const port = Number(firstLine);
+      return Number.isSafeInteger(port) && port >= 1 && port <= 65535 ? port : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Resolves the active CDP port using a tiered cascading strategy:
    * 1. CLI parameter (--cdp-port <port>)
    * 2. Environment variable (ANTIGRAVITY_CDP_PORT)
-   * 3. Active HTTP probe on defaultPort & candidate ports
-   * 4. Passive log tail inspection
-   * 5. Fallback to defaultPort
+   * 3. Electron DevToolsActivePort file (verified via active HTTP probe)
+   * 4. Active HTTP probe on defaultPort & candidate ports
+   * 5. Passive log tail inspection
+   * 6. Fallback to defaultPort
    * @returns {Promise<number>}
    */
   async resolvePort() {
@@ -164,25 +191,31 @@ class CdpPortResolver {
       }
     }
 
-    // 3. Active HTTP probe on default port
+    // 3. Electron DevToolsActivePort discovery (verified via active HTTP probe)
+    const activePort = this.resolvePortFromDevToolsActivePort();
+    if (activePort && (await this.probePort(activePort))) {
+      return activePort;
+    }
+
+    // 4. Active HTTP probe on default port
     if (await this.probePort(this.defaultPort)) {
       return this.defaultPort;
     }
 
-    // 4. Active HTTP probe across candidate ports
+    // 5. Active HTTP probe across candidate ports
     for (const port of this.candidatePorts) {
       if (port !== this.defaultPort && (await this.probePort(port))) {
         return port;
       }
     }
 
-    // 5. Fallback: Passive log tail inspection
+    // 6. Fallback: Passive log tail inspection
     const logPort = this.resolvePortFromLogs();
     if (logPort) {
       return logPort;
     }
 
-    // 6. Final default fallback
+    // 7. Final default fallback
     return this.defaultPort;
   }
 }
@@ -217,13 +250,78 @@ class CdpWebSocketClient {
   }
 
   /**
+   * Checks whether a CDP target represents a non-UI page such as a splash screen,
+   * DevTools window, or blank document.
+   * @param {{ url?: string, title?: string }} target
+   * @returns {boolean}
+   */
+  static isNonUiPageTarget(target) {
+    const url = typeof target?.url === 'string' ? target.url.trim().toLowerCase() : '';
+    const title = typeof target?.title === 'string' ? target.title.trim().toLowerCase() : '';
+
+    if (url) {
+      if (
+        url.startsWith('data:') ||
+        url.startsWith('devtools:') ||
+        url.startsWith('about:blank') ||
+        url.startsWith('about:srcdoc') ||
+        url.startsWith('chrome://') ||
+        url.startsWith('chrome-devtools://') ||
+        url.startsWith('chrome-extension://') ||
+        url.startsWith('edge://')
+      ) {
+        return true;
+      }
+    } else if (
+      title.startsWith('data:') ||
+      title === 'about:blank' ||
+      title.startsWith('devtools://')
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Checks whether a CDP page target URL matches the primary Antigravity app window.
+   * @param {{ url?: string }} target
+   * @returns {boolean}
+   */
+  static isPreferredAppTarget(target) {
+    const url = typeof target?.url === 'string' ? target.url.trim().toLowerCase() : '';
+    if (!url) return false;
+    return (
+      url.startsWith('https://127.0.0.1') ||
+      url.startsWith('http://127.0.0.1') ||
+      url.startsWith('https://localhost') ||
+      url.startsWith('http://localhost') ||
+      url.startsWith('vscode-file:')
+    );
+  }
+
+  /**
    * Finds the primary browser page target among the reported CDP targets.
-   * @param {Array<{ type: string, webSocketDebuggerUrl?: string }>} targets
-   * @returns {{ type: string, webSocketDebuggerUrl?: string } | undefined}
+   * Skips `data:`, `devtools:`, `about:blank`, and other non-UI targets,
+   * preferring the real Antigravity app window with a clean fallback to any valid UI page.
+   * @param {Array<{ type: string, url?: string, title?: string, webSocketDebuggerUrl?: string }>} targets
+   * @returns {{ type: string, url?: string, title?: string, webSocketDebuggerUrl?: string } | undefined}
    */
   static findPageTarget(targets) {
     if (!Array.isArray(targets)) return undefined;
-    return targets.find(t => t.type === 'page' && typeof t.webSocketDebuggerUrl === 'string');
+
+    const uiPages = targets.filter(
+      (t) =>
+        t &&
+        t.type === 'page' &&
+        typeof t.webSocketDebuggerUrl === 'string' &&
+        t.webSocketDebuggerUrl.trim().length > 0 &&
+        !CdpWebSocketClient.isNonUiPageTarget(t)
+    );
+
+    if (!uiPages.length) return undefined;
+
+    return uiPages.find((t) => CdpWebSocketClient.isPreferredAppTarget(t)) || uiPages[0];
   }
 
   /**
@@ -409,22 +507,47 @@ class SlotManager {
 
     return `
       (() => {
-        let anchors = Array.from(document.querySelectorAll('${slot.selector}'));
-        if (!anchors.length && '${slotId}' === 'aux-pane-tab') {
-          const auxBar = document.querySelector('[data-active-tab-id]') ||
-                         document.querySelector('.shrink-0.flex.items-center.gap-0\\\\.5.border-b') ||
-                         document.querySelector('div[class*="shrink-0"][class*="border-b"]');
-          if (auxBar) {
-            anchors = [auxBar.querySelector('.overflow-x-auto') || auxBar];
+        let anchorEntries = Array.from(document.querySelectorAll('${slot.selector}'))
+          .map(anchor => ({ anchor, strategy: '${slot.strategy}' }));
+
+        if (!anchorEntries.length && '${slotId}' === 'aux-pane-tab') {
+          const sidePanelNewTabBtns = Array.from(document.querySelectorAll('button[data-testid="side-panel-new-tab-button"]'));
+          if (sidePanelNewTabBtns.length) {
+            anchorEntries = sidePanelNewTabBtns.map(anchor => ({ anchor, strategy: 'before' }));
+          } else {
+            let auxBars = Array.from(document.querySelectorAll('[data-active-tab-id], [data-side-panel-strip="true"]'));
+            if (!auxBars.length) {
+              auxBars = Array.from(document.querySelectorAll('.shrink-0.flex.items-center.gap-0\\\\.5.border-b'));
+            }
+            if (!auxBars.length) {
+              auxBars = Array.from(document.querySelectorAll('div[class*="shrink-0"][class*="border-b"]'));
+            }
+            for (const auxBar of auxBars) {
+              const newTabBtn = auxBar.querySelector('button[data-testid="side-panel-new-tab-button"], button[data-testid="aux-pane-new-tab-button"]');
+              if (newTabBtn) {
+                anchorEntries.push({ anchor: newTabBtn, strategy: 'before' });
+              } else {
+                const tabScrollStrip = auxBar.querySelector('.overflow-x-auto');
+                if (tabScrollStrip) {
+                  anchorEntries.push({ anchor: tabScrollStrip, strategy: 'after' });
+                } else {
+                  anchorEntries.push({ anchor: auxBar, strategy: 'append' });
+                }
+              }
+            }
           }
         }
 
         // Clean up any misplaced legacy slot containers that were injected directly inside non-flex wrappers
-        document.querySelectorAll('#${containerId}').forEach(el => {
-          if (el.parentElement && !el.parentElement.className.includes('flex')) {
-            el.remove();
-          }
-        });
+        if ('${slot.strategy}' === 'before' || '${slot.strategy}' === 'after') {
+          document.querySelectorAll('#${containerId}').forEach(el => {
+            const parent = el.parentElement;
+            const parentCls = parent && typeof parent.className === 'string' ? parent.className : '';
+            if (parent && !parentCls.includes('flex') && !parent.hasAttribute('data-active-tab-id') && !parent.hasAttribute('data-side-panel-strip')) {
+              el.remove();
+            }
+          });
+        }
 
         const ensureSlotSizing = (container) => {
           if (container.style.minWidth !== '0') container.style.minWidth = '0';
@@ -461,13 +584,13 @@ class SlotManager {
         // If containers already exist in the DOM, ensure mod nodes are hydrated without redundant innerHTML churn
         document.querySelectorAll('#${containerId}').forEach(syncModNode);
 
-        if (!anchors.length) return;
+        if (!anchorEntries.length) return;
 
-        for (const anchor of anchors) {
+        for (const { anchor, strategy } of anchorEntries) {
           let parent;
           let targetItem = anchor;
 
-          if ('${slot.strategy}' === 'append' || '${slot.strategy}' === 'prepend') {
+          if (strategy === 'append' || strategy === 'prepend') {
             parent = anchor;
           } else {
             parent = anchor.parentElement;
@@ -504,28 +627,32 @@ class SlotManager {
             container.style.maxWidth = '100%';
             container.style.setProperty('app-region', 'no-drag');
 
-            if ('${slot.strategy}' === 'after') {
+            if (strategy === 'after') {
               if (targetItem.nextSibling) {
                 parent.insertBefore(container, targetItem.nextSibling);
               } else {
                 parent.appendChild(container);
               }
-            } else if ('${slot.strategy}' === 'before') {
+            } else if (strategy === 'before') {
               parent.insertBefore(container, targetItem);
-            } else if ('${slot.strategy}' === 'prepend') {
+            } else if (strategy === 'prepend') {
               parent.prepend(container);
             } else {
               parent.appendChild(container);
             }
           } else {
-            // Ensure slot container remains directly in parent flex row, right after targetItem
-            if ('${slot.strategy}' === 'after' && (container.parentElement !== parent || container.previousElementSibling !== targetItem)) {
+            // Ensure slot container remains in the expected position relative to targetItem
+            if (strategy === 'after' && (container.parentElement !== parent || container.previousElementSibling !== targetItem)) {
               if (targetItem.nextSibling) {
                 parent.insertBefore(container, targetItem.nextSibling);
               } else {
                 parent.appendChild(container);
               }
-            } else if (('${slot.strategy}' === 'append' || '${slot.strategy}' === 'prepend') && container.parentElement !== parent) {
+            } else if (strategy === 'before' && (container.parentElement !== parent || container.nextElementSibling !== targetItem)) {
+              parent.insertBefore(container, targetItem);
+            } else if (strategy === 'prepend' && (container.parentElement !== parent || parent.firstElementChild !== container)) {
+              parent.prepend(container);
+            } else if (strategy === 'append' && container.parentElement !== parent) {
               parent.appendChild(container);
             }
           }
@@ -931,7 +1058,8 @@ class ModLoader {
         window.__antigravityFetchSessionVcsOverview = async function() {
           try {
             const cascadeId = window.__resolveCascadeId ? window.__resolveCascadeId() : '';
-            const repoPath = await window.__resolveRepoForCascade(cascadeId);
+            const resolved = await window.__resolveRepoForCascade(cascadeId);
+            const repoPath = resolved || (window.__antigravityVcsData && window.__antigravityVcsData.repoPath) || window.__antigravityActiveRepoPath || '';
             const url = 'http://127.0.0.1:53912/vcs/overview?cascadeId=' + encodeURIComponent(cascadeId || '') +
               (repoPath ? '&repoPath=' + encodeURIComponent(repoPath) : '');
             const res = await fetch(url);
@@ -2612,7 +2740,9 @@ class ModLoader {
           }
 
           const reqSeq = (window.__antigravityVcsReqSeq = (window.__antigravityVcsReqSeq || 0) + 1);
-          if (typeof window.__antigravityFetchSessionVcsOverview === 'function') {
+          const activeCascadeId = window.__resolveCascadeId ? window.__resolveCascadeId() : '';
+          const hasCachedRepo = !!(activeCascadeId && window.__antigravityCascadeRepos && window.__antigravityCascadeRepos[activeCascadeId]);
+          if (window.__APP_CONFIG__?.csrfToken && !hasCachedRepo && typeof window.__antigravityFetchSessionVcsOverview === 'function') {
             window.__antigravityFetchSessionVcsOverview().then(function(liveData) {
               if (!window.__antigravityGitPanelOpen || reqSeq !== window.__antigravityVcsReqSeq) return;
               if (liveData && window.__antigravityUpdateVcsData) {
@@ -2620,7 +2750,12 @@ class ModLoader {
               }
             }).catch(function() {});
           } else {
-            fetch(getVcsOverviewUrl())
+            const sessionRepo = (activeCascadeId && window.__antigravityCascadeRepos && window.__antigravityCascadeRepos[activeCascadeId]) || '';
+            const baseUrl = getVcsOverviewUrl();
+            const overviewUrl = sessionRepo && !baseUrl.includes('repoPath=')
+              ? (baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'repoPath=' + encodeURIComponent(sessionRepo))
+              : baseUrl;
+            fetch(overviewUrl)
               .then(function(r) { return r && r.ok ? r.json() : null; })
               .then(function(liveData) {
                 if (!window.__antigravityGitPanelOpen || reqSeq !== window.__antigravityVcsReqSeq) return;
@@ -3353,7 +3488,7 @@ class ModLoader {
             }
 
             if (!missingSlot) {
-              const auxBtn = document.querySelector('button[data-testid="aux-pane-new-tab-button"]') || document.querySelector('.aux-pane-new-tab-button');
+              const auxBtn = document.querySelector('button[data-testid="aux-pane-new-tab-button"], button[data-testid="side-panel-new-tab-button"], .aux-pane-new-tab-button, [data-active-tab-id], [data-side-panel-strip="true"]');
               if (auxBtn && !document.querySelector('.antigravity-slot-aux-pane-tab, #antigravity-slot-aux-pane-tab')) {
                 missingSlot = true;
               }

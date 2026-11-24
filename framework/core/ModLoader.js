@@ -220,7 +220,8 @@ export class ModLoader {
         window.__antigravityFetchSessionVcsOverview = async function() {
           try {
             const cascadeId = window.__resolveCascadeId ? window.__resolveCascadeId() : '';
-            const repoPath = await window.__resolveRepoForCascade(cascadeId);
+            const resolved = await window.__resolveRepoForCascade(cascadeId);
+            const repoPath = resolved || (window.__antigravityVcsData && window.__antigravityVcsData.repoPath) || window.__antigravityActiveRepoPath || '';
             const url = 'http://127.0.0.1:53912/vcs/overview?cascadeId=' + encodeURIComponent(cascadeId || '') +
               (repoPath ? '&repoPath=' + encodeURIComponent(repoPath) : '');
             const res = await fetch(url);
@@ -1901,7 +1902,9 @@ export class ModLoader {
           }
 
           const reqSeq = (window.__antigravityVcsReqSeq = (window.__antigravityVcsReqSeq || 0) + 1);
-          if (typeof window.__antigravityFetchSessionVcsOverview === 'function') {
+          const activeCascadeId = window.__resolveCascadeId ? window.__resolveCascadeId() : '';
+          const hasCachedRepo = !!(activeCascadeId && window.__antigravityCascadeRepos && window.__antigravityCascadeRepos[activeCascadeId]);
+          if (window.__APP_CONFIG__?.csrfToken && !hasCachedRepo && typeof window.__antigravityFetchSessionVcsOverview === 'function') {
             window.__antigravityFetchSessionVcsOverview().then(function(liveData) {
               if (!window.__antigravityGitPanelOpen || reqSeq !== window.__antigravityVcsReqSeq) return;
               if (liveData && window.__antigravityUpdateVcsData) {
@@ -1909,7 +1912,12 @@ export class ModLoader {
               }
             }).catch(function() {});
           } else {
-            fetch(getVcsOverviewUrl())
+            const sessionRepo = (activeCascadeId && window.__antigravityCascadeRepos && window.__antigravityCascadeRepos[activeCascadeId]) || '';
+            const baseUrl = getVcsOverviewUrl();
+            const overviewUrl = sessionRepo && !baseUrl.includes('repoPath=')
+              ? (baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'repoPath=' + encodeURIComponent(sessionRepo))
+              : baseUrl;
+            fetch(overviewUrl)
               .then(function(r) { return r && r.ok ? r.json() : null; })
               .then(function(liveData) {
                 if (!window.__antigravityGitPanelOpen || reqSeq !== window.__antigravityVcsReqSeq) return;
@@ -2642,7 +2650,7 @@ export class ModLoader {
             }
 
             if (!missingSlot) {
-              const auxBtn = document.querySelector('button[data-testid="aux-pane-new-tab-button"]') || document.querySelector('.aux-pane-new-tab-button');
+              const auxBtn = document.querySelector('button[data-testid="aux-pane-new-tab-button"], button[data-testid="side-panel-new-tab-button"], .aux-pane-new-tab-button, [data-active-tab-id], [data-side-panel-strip="true"]');
               if (auxBtn && !document.querySelector('.antigravity-slot-aux-pane-tab, #antigravity-slot-aux-pane-tab')) {
                 missingSlot = true;
               }

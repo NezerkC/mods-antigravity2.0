@@ -958,6 +958,19 @@ test('ModLoader - includes session repo resolution helpers and Git panel DOM gua
   assert.ok(script.includes('window.__resolveRepoForCascade = async function(cascadeId)'));
   assert.ok(script.includes('window.__antigravityFetchSessionVcsOverview = async function()'));
   assert.ok(script.includes('window.__lastGitCascadeId = currentCascadeId'));
-  assert.ok(script.includes('!activeGitHost.firstElementChild'));
+  assert.ok(script.includes('!activeGitHost.children || activeGitHost.children.length === 0'));
   assert.ok(script.includes('.antigravity-slot-aux-pane-tab, #antigravity-slot-aux-pane-tab'));
+});
+
+test('ModLoader - observer checks real slot IDs and ignores self-mutations to avoid 150ms flicker loop', () => {
+  const loader = new ModLoader();
+  const script = loader.buildInjectionPayload({});
+
+  assert.ok(script.includes('.min-w-0:not(.flex) > #antigravity-slot-header-actions'));
+  assert.ok(script.includes('#antigravity-slot-aux-pane-tab'));
+  assert.ok(script.includes('#antigravity-slot-menubar-actions'));
+  assert.ok(!script.includes('#antigravity-slot-sidebar-header'));
+  assert.ok(!script.includes('#antigravity-slot-aux-pane-tabs'));
+  assert.ok(script.includes('window.__antigravityIsMountingMods'));
+  assert.ok(script.includes('isOwnedModNode'));
 });
