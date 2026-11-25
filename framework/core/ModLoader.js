@@ -4,6 +4,7 @@
 import { SlotManager } from './SlotManager.js';
 import { StyleIsolator } from '../sdk/StyleIsolator.js';
 import { renderPopoverHtml, renderSvgIcon } from '../../mods/context-tachometer/components/PopoverHtml.js';
+import { getGaugeMetrics } from '../../mods/context-tachometer/components/GaugeSvg.js';
 import { renderModsManagerPanelHtml } from '../../mods/mods-manager/components/ModsManagerHtml.js';
 import { getLaneColor, renderGitGraphSvg } from '../../mods/git-graph/components/GitGraphSvg.js';
 import { renderPrCiCardHtml } from '../../mods/git-graph/components/PrCiCardHtml.js';
@@ -671,6 +672,7 @@ export class ModLoader {
 
         const renderSvgIcon = ${renderSvgIcon.toString()};
         window.__renderSvgIcon = renderSvgIcon;
+        window.__getGaugeMetrics = ${getGaugeMetrics.toString()};
         window.__formatResetTime = ${formatResetTime.toString()};
         window.__resolveNativeQuotaForModel = ${resolveNativeQuotaForModel.toString()};
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
@@ -3909,10 +3911,10 @@ export class ModLoader {
             }
 
             const pctNum = parseFloat(m.pct) || 0;
-            let statusColor = '#22c55e';
-            if (pctNum >= 85) statusColor = '#ef4444';
-            else if (pctNum >= 60) statusColor = '#f97316';
-            else if (pctNum >= 25) statusColor = '#eab308';
+            const gm = (typeof window.__getGaugeMetrics === 'function')
+              ? window.__getGaugeMetrics(pctNum)
+              : { angle: -120 + (Math.min(pctNum, 100) / 100) * 240, needleColor: pctNum >= 85 ? '#ef4444' : pctNum >= 60 ? '#f97316' : pctNum >= 25 ? '#eab308' : '#22c55e' };
+            const statusColor = gm.needleColor;
 
             const nextTitle = 'Context: ' + m.displayTokens + ' tokens (' + m.pct + '%)';
             if (badge.getAttribute('title') !== nextTitle) {
@@ -3929,7 +3931,7 @@ export class ModLoader {
             }
             const needle = badge.querySelector('g[filter]');
             if (needle) {
-              const angle = -120 + (Math.min(pctNum, 100) / 100) * 240;
+              const angle = gm.angle;
               const nextTransform = 'rotate(' + angle.toFixed(1) + 'deg)';
               if (needle.style.transform !== nextTransform) {
                 needle.style.transform = nextTransform;
@@ -3948,9 +3950,9 @@ export class ModLoader {
                 tpl.innerHTML = renderedPopover;
               }
 
-              // Update live popover content if currently open on screen, preserving expanded model disclosures
+              // Update live popover content only when open and owned by this exact badge (split-view safety)
               const portal = document.getElementById('antigravity-tachometer-popover-portal');
-              if (portal && portal.classList.contains('open') && portal.innerHTML !== renderedPopover) {
+              if (portal && portal.classList.contains('open') && portal.__currentBadge === badge && portal.innerHTML !== renderedPopover) {
                 const openKeys = new Set();
                 const scrollByKey = new Map();
                 portal.querySelectorAll('details.tach-model-details[open]').forEach(det => {

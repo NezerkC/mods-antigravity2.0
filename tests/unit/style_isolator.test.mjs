@@ -49,3 +49,23 @@ test('StyleIsolator - preserves portal and mod component selectors without root 
   assert.ok(!scoped.includes('#antigravity-mod-mods-manager .mod-card'));
 });
 
+test('StyleIsolator - recursively scopes rules inside @media blocks and allows [data-mod-portal]', () => {
+  const css = `
+    [data-mod-portal="custom"] .panel { color: #fff; }
+    @media (max-width: 640px) {
+      .badge, .chip:hover { font-size: 11px; }
+      [data-mod-portal] { width: 100%; }
+    }
+    @keyframes pulse {
+      0% { opacity: 0.5; }
+      100% { opacity: 1; }
+    }
+  `;
+  const scoped = StyleIsolator.scopeCss(css, '#antigravity-mod-demo');
+  assert.ok(scoped.includes('@media (max-width: 640px)'), 'Must keep @media wrapper');
+  assert.ok(scoped.includes('#antigravity-mod-demo .badge, #antigravity-mod-demo .chip:hover'), 'Must scope inner @media selectors recursively');
+  assert.ok(scoped.includes('[data-mod-portal] { width: 100%; }'), 'Must preserve generic [data-mod-portal] selector');
+  assert.ok(!scoped.includes('#antigravity-mod-demo [data-mod-portal="custom"]'));
+  assert.ok(scoped.includes('0% { opacity: 0.5; }'), 'Must preserve @keyframes keyframes un-prefixed');
+});
+

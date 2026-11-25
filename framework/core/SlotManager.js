@@ -193,11 +193,12 @@ export class SlotManager {
           if (modNode.getAttribute('data-version') !== '2') {
             modNode.setAttribute('data-version', '2');
           }
-          const prevSig = modNode.getAttribute('data-sig');
+          const prevSig = modNode.getAttribute('data-render-hash') || modNode.getAttribute('data-sig');
           const isLiveStateMod = '${modId}' === 'agent-selector' || '${modId}' === 'context-tachometer';
           if (!modNode.firstElementChild || (!isLiveStateMod && prevSig !== '${htmlSig}')) {
             modNode.innerHTML = ${JSON.stringify(htmlContent)};
             modNode.setAttribute('data-sig', '${htmlSig}');
+            modNode.setAttribute('data-render-hash', '${htmlSig}');
           }
         };
 

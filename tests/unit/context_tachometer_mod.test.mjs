@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ContextTachometerMod } from '../../mods/context-tachometer/index.js';
+import { getGaugeMetrics } from '../../mods/context-tachometer/components/GaugeSvg.js';
 
 test('ContextTachometerMod - loads correct manifest metadata', () => {
   const mod = new ContextTachometerMod();
@@ -165,4 +166,23 @@ test('ContextTachometerMod - renders expandable subagents grouped inside Consumo
   assert.ok(rendered.html.includes('UI Builder'));
   assert.ok(!rendered.html.includes('<script>alert(1)</script>'));
   assert.ok(rendered.html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
+});
+
+test('getGaugeMetrics - computes clamped angle and threshold palette accurately', () => {
+  const low = getGaugeMetrics(10);
+  assert.equal(low.clampedPct, 10);
+  assert.equal(low.needleColor, '#22c55e');
+  assert.equal(low.angle, -96);
+
+  const med = getGaugeMetrics(50);
+  assert.equal(med.needleColor, '#eab308');
+  assert.equal(med.angle, 0);
+
+  const high = getGaugeMetrics(75);
+  assert.equal(high.needleColor, '#f97316');
+
+  const crit = getGaugeMetrics(130);
+  assert.equal(crit.clampedPct, 100);
+  assert.equal(crit.needleColor, '#ef4444');
+  assert.equal(crit.angle, 120);
 });

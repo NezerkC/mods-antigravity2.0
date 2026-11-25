@@ -1,4 +1,29 @@
 /**
+ * Computes normalized gauge geometry and status palette for a percentage value.
+ * Self-contained so it can be serialized into browser runtime scripts.
+ * @param {number|string} [pct=0]
+ * @returns {{ numericPct: number, clampedPct: number, angle: number, needleColor: string, statusColor: string }}
+ */
+export function getGaugeMetrics(pct = 0) {
+  const numericPct = typeof pct === 'string' ? parseFloat(pct) || 0 : (Number(pct) || 0);
+  const clampedPct = Math.min(Math.max(numericPct, 0), 100);
+  const angle = -120 + (clampedPct / 100) * 240;
+
+  let needleColor = '#22c55e';
+  if (clampedPct >= 85) needleColor = '#ef4444';
+  else if (clampedPct >= 60) needleColor = '#f97316';
+  else if (clampedPct >= 25) needleColor = '#eab308';
+
+  return {
+    numericPct,
+    clampedPct,
+    angle,
+    needleColor,
+    statusColor: needleColor
+  };
+}
+
+/**
  * Generates an analog speedometer/tachometer SVG based on the reference design.
  * Features an unrotated 240° arc path with a linear gradient:
  * - Green (0% - Empty / Desocupado) on the left
@@ -7,14 +32,7 @@
  * - Red (100% - Full / Lleno) on the right
  */
 export function renderGaugeSvg(pct = 0, size = 18) {
-  const numericPct = typeof pct === 'string' ? parseFloat(pct) || 0 : (pct || 0);
-  const clampedPct = Math.min(Math.max(numericPct, 0), 100);
-  const angle = -120 + (clampedPct / 100) * 240;
-
-  let needleColor = '#22c55e'; // Green when low
-  if (clampedPct >= 85) needleColor = '#ef4444';      // Red when critical
-  else if (clampedPct >= 60) needleColor = '#f97316'; // Orange when high
-  else if (clampedPct >= 25) needleColor = '#eab308'; // Yellow when moderate
+  const { angle, needleColor } = getGaugeMetrics(pct);
 
   return `
     <svg viewBox="0 0 100 100" width="${size}" height="${size}" style="vertical-align: middle; flex-shrink: 0; overflow: visible;">

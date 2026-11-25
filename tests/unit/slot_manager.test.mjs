@@ -477,4 +477,5 @@ test('SlotManager - preserves mounted modNode innerHTML when HTML signature is u
 
   runMount(doc);
   assert.equal(innerHtmlWrites, 0, 'Should not overwrite innerHTML when modNode already has child and matching signature');
+  assert.ok(modNode.getAttribute('data-render-hash'), 'Mounted modNode must record data-render-hash attribute');
 });
