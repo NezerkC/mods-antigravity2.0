@@ -50,8 +50,16 @@ export class StyleIsolator {
       }
 
       if (endIndex !== -1) {
-        const fullAtRule = text.slice(0, endIndex + 1);
-        atRuleBlocks.push(fullAtRule.trim());
+        const fullAtRule = text.slice(0, endIndex + 1).trim();
+        const braceOpen = fullAtRule.indexOf('{');
+        const header = braceOpen !== -1 ? fullAtRule.slice(0, braceOpen).trim() : '';
+        if (braceOpen !== -1 && /^@(?:media|supports|layer)\b/i.test(header)) {
+          const innerBody = fullAtRule.slice(braceOpen + 1, -1);
+          const scopedInner = StyleIsolator.scopeCss(innerBody, scopeSelector);
+          atRuleBlocks.push(`${header} {\n${scopedInner}\n}`);
+        } else {
+          atRuleBlocks.push(fullAtRule);
+        }
         text = text.slice(endIndex + 1);
       } else {
         strippedCss += text;
@@ -70,6 +78,7 @@ export class StyleIsolator {
         .filter(Boolean)
         .map(sel => {
           if (
+            sel.includes('[data-mod-portal]') ||
             sel.includes('-portal') ||
             sel.includes('antigravity-agent-dropdown') ||
             sel.includes('antigravity-mods-manager-portal') ||
@@ -79,6 +88,15 @@ export class StyleIsolator {
             sel.startsWith('.mods-manager-') ||
             sel.startsWith('.agent-') ||
             sel.startsWith('.antigravity-agent-item') ||
+            sel.startsWith('.model-slot-') ||
+            sel.startsWith('.model-effort-') ||
+            sel.startsWith('.model-pack') ||
+            sel.startsWith('.pit-wall-') ||
+            sel.includes('antigravity-pit-wall') ||
+            sel.includes('antigravity-subagent-model') ||
+            sel.includes('antigravity-native-model-locked') ||
+            sel.includes('antigravity-native-model-desynced') ||
+            sel.includes('antigravity-chat-planner-sync-btn') ||
             sel.startsWith('body') ||
             sel.startsWith(':root')
           ) {

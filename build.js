@@ -12,6 +12,7 @@ import os from 'node:os';
 function cleanModuleCode(filePath) {
   return fs.readFileSync(path.resolve(filePath), 'utf-8')
     .replace(/^import\s+.*?;?\s*$/gm, '')
+    .replace(/^export\s*\{[^}]*\};?\s*$/gm, '')
     .replace(/^export\s+(default\s+)?/gm, '');
 }
 
@@ -75,10 +76,11 @@ async function build() {
     .replace(/const __dirname = .*?;/, '')
     .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(gitGraphCss)};`);
 
-    // 6. Read Voice Assistant Mod sources
-  const voiceButtonHtml = cleanModuleCode('mods/voice-assistant/components/VoiceButtonHtml.js');
+  // 6. Read Voice Assistant Mod sources
   const textSanitizer = cleanModuleCode('mods/voice-assistant/services/TextSanitizer.js');
   const actionNarratorService = cleanModuleCode('mods/voice-assistant/services/ActionNarratorService.js');
+  const xttsLocalAdapter = cleanModuleCode('mods/voice-assistant/services/XttsLocalAdapter.js');
+  const voicePromptConditioner = cleanModuleCode('mods/voice-assistant/services/VoicePromptConditioner.js');
   const voiceAssistantCss = fs.readFileSync(path.resolve('mods/voice-assistant/styles.css'), 'utf-8');
 
   const voiceAssistantIndex = cleanModuleCode('mods/voice-assistant/index.js')
@@ -86,7 +88,25 @@ async function build() {
     .replace(/const __dirname = .*?;/, '')
     .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(voiceAssistantCss)};`);
 
-  // 7. Assemble Standalone Bundle
+  // 7. Read Model Slots Mod sources
+  const modelSlotsHtml = cleanModuleCode('mods/model-slots/components/ModelSlotsHtml.js');
+  const modelSlotsCss = fs.readFileSync(path.resolve('mods/model-slots/styles.css'), 'utf-8');
+
+  const modelSlotsIndex = cleanModuleCode('mods/model-slots/index.js')
+    .replace(/const __filename = .*?;/, '')
+    .replace(/const __dirname = .*?;/, '')
+    .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(modelSlotsCss)};`);
+
+  // 8. Read Pit Wall Mod sources
+  const pitWallHtml = cleanModuleCode('mods/pit-wall/components/PitWallHtml.js');
+  const pitWallCss = fs.readFileSync(path.resolve('mods/pit-wall/styles.css'), 'utf-8');
+
+  const pitWallIndex = cleanModuleCode('mods/pit-wall/index.js')
+    .replace(/const __filename = .*?;/, '')
+    .replace(/const __dirname = .*?;/, '')
+    .replace(/this\.cachedCss = '';[\s\S]*?\}\s*catch[^{]*\{[^}]*\}/, `this.cachedCss = ${JSON.stringify(pitWallCss)};`);
+
+  // 8. Assemble Standalone Bundle
   const bundle = `// Antigravity Mod Framework Runtime Host (Bundle)
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -158,9 +178,21 @@ ${textSanitizer}
 
 ${actionNarratorService}
 
-${voiceButtonHtml}
+${xttsLocalAdapter}
+
+${voicePromptConditioner}
 
 ${voiceAssistantIndex}
+
+// ===================== Model Slots Mod =====================
+${modelSlotsHtml}
+
+${modelSlotsIndex}
+
+// ======================= Pit Wall Mod ========================
+${pitWallHtml}
+
+${pitWallIndex}
 
 // ======================= Entrypoint Execution =======================
 async function main() {
@@ -169,6 +201,8 @@ async function main() {
     host.registerMod(new ContextTachometerMod());
     host.registerMod(new AgentSelectorMod());
     host.registerMod(new ModsManagerMod());
+    host.registerMod(new ModelSlotsMod());
+    host.registerMod(new PitWallMod());
 
     // Lazy VCS: Avoid running 20+ git/gh processes synchronously on every hook execution.
     // Full VCS overview will be fetched on demand by GitGraph via the local HTTP bridge.
@@ -211,9 +245,32 @@ main();
 
   fs.writeFileSync(targetLoader, bundle, 'utf-8');
   fs.writeFileSync(targetLegacy, bundle, 'utf-8');
+
+  // Deploy lifecycle Python hooks alongside runtime bundle (executed directly via pythonw without .cmd window flashes)
+  const hooksDir = path.resolve('tools/hooks');
+  const deployedHooks = [];
+  for (const hookFile of ['context-tracker.py', 'model-catalog-hook.py', 'permission-guard.py']) {
+    const srcHook = path.join(hooksDir, hookFile);
+    if (fs.existsSync(srcHook)) {
+      const dstHook = path.join(targetDir, hookFile);
+      fs.copyFileSync(srcHook, dstHook);
+      deployedHooks.push(dstHook);
+    }
+  }
+  // Remove legacy .cmd wrappers if present so Windows never flashes cmd.exe windows
+  for (const legacyCmd of ['model-catalog-hook.cmd', 'permission-guard.cmd']) {
+    const legacyPath = path.join(targetDir, legacyCmd);
+    if (fs.existsSync(legacyPath)) {
+      try { fs.unlinkSync(legacyPath); } catch {}
+    }
+  }
+
   console.log('🚀 Deployed successfully to ~/.gemini/config/mods/:');
   console.log('   - ', targetLoader);
   console.log('   - ', targetLegacy);
+  for (const h of deployedHooks) {
+    console.log('   - ', h);
+  }
 }
 
 build().catch(err => {

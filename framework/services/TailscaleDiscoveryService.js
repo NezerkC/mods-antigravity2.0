@@ -33,7 +33,8 @@ export class TailscaleDiscoveryService {
     this.execFn = options.execFn || ((cmd) => execSync(cmd, {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 3000
+      timeout: 3000,
+      windowsHide: true
     }));
   }
 

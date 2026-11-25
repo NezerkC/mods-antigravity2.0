@@ -1,0 +1,584 @@
+/* =========================================================================
+   ANTIGRAVITY PIT WALL ANALYTICS MOD - STYLES
+   ========================================================================= */
+
+/* Menubar Button */
+.antigravity-pit-wall-btn {
+  height: 26px !important;
+  padding: 0 8px !important;
+  font-size: 11.5px !important;
+  font-weight: 500 !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  color: rgba(255, 255, 255, 0.85) !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  flex-shrink: 0 !important;
+  white-space: nowrap !important;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease !important;
+  transform: none !important;
+  -webkit-app-region: no-drag !important;
+  app-region: no-drag !important;
+  user-select: none !important;
+  line-height: 1 !important;
+  box-sizing: border-box !important;
+}
+
+.antigravity-pit-wall-btn:hover {
+  background: rgba(255, 255, 255, 0.09) !important;
+  border-color: rgba(96, 165, 250, 0.4) !important;
+  color: #ffffff !important;
+}
+
+.antigravity-pit-wall-btn.open {
+  background: rgba(96, 165, 250, 0.15) !important;
+  border-color: rgba(96, 165, 250, 0.5) !important;
+  color: #93c5fd !important;
+}
+
+.antigravity-pit-wall-btn .pit-wall-btn-icon {
+  width: 13px !important;
+  height: 13px !important;
+  color: #60a5fa !important;
+  flex-shrink: 0 !important;
+  pointer-events: none !important;
+}
+
+.antigravity-pit-wall-btn .pit-wall-btn-label {
+  pointer-events: none !important;
+}
+
+/* Floating Modal Portal */
+.antigravity-pit-wall-portal {
+  position: fixed !important;
+  top: 50% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  z-index: 1000003 !important;
+  width: min(860px, calc(100vw - 32px)) !important;
+  max-height: calc(100vh - 56px) !important;
+  overflow-y: auto !important;
+  background: #0b0c0f !important;
+  color: #f4f4f5 !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.88), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;
+  padding: 20px 22px !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  display: none;
+  box-sizing: border-box !important;
+}
+
+.antigravity-pit-wall-portal.open {
+  display: block !important;
+}
+
+.antigravity-pit-wall-portal::-webkit-scrollbar {
+  width: 6px;
+}
+
+.antigravity-pit-wall-portal::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+}
+
+/* Modal Content */
+.pit-wall-modal-shell {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 14px !important;
+}
+
+.pit-wall-header {
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+}
+
+.pit-wall-title {
+  margin: 0 !important;
+  font-size: 19px !important;
+  font-weight: 700 !important;
+  color: #fafafa !important;
+  letter-spacing: -0.3px !important;
+  line-height: 1.2 !important;
+}
+
+.pit-wall-subtitle {
+  margin: 4px 0 0 0 !important;
+  font-size: 12px !important;
+  color: #a1a1aa !important;
+  line-height: 1.4 !important;
+}
+
+.pit-wall-close-btn {
+  width: 26px !important;
+  height: 26px !important;
+  border-radius: 6px !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+  color: #a1a1aa !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 12px !important;
+  flex-shrink: 0 !important;
+}
+
+.pit-wall-close-btn:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+  color: #ffffff !important;
+}
+
+/* 6 Top KPI Bento Cards */
+.pit-wall-kpi-grid {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+}
+
+@media (max-width: 720px) {
+  .pit-wall-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+.pit-wall-kpi-card {
+  background: #141519 !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 10px !important;
+  padding: 12px 14px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 4px !important;
+}
+
+.pit-wall-kpi-label {
+  font-size: 11px !important;
+  color: #a1a1aa !important;
+  font-weight: 500 !important;
+}
+
+.pit-wall-kpi-value {
+  font-size: 24px !important;
+  font-weight: 700 !important;
+  color: #ffffff !important;
+  letter-spacing: -0.5px !important;
+  line-height: 1.15 !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+.pit-wall-kpi-sub {
+  font-size: 10.5px !important;
+  color: #71717a !important;
+}
+
+/* 4 Analytics Panels */
+.pit-wall-analytics-grid {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 12px !important;
+}
+
+@media (max-width: 720px) {
+  .pit-wall-analytics-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+.pit-wall-panel {
+  background: #141519 !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 10px !important;
+  padding: 14px 16px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+  min-width: 0 !important;
+}
+
+.pit-wall-panel-title {
+  font-size: 13.5px !important;
+  font-weight: 600 !important;
+  color: #f4f4f5 !important;
+}
+
+.pit-wall-panel-sub {
+  font-size: 10.5px !important;
+  color: #71717a !important;
+  line-height: 1.35 !important;
+  margin-bottom: 6px !important;
+}
+
+/* 60-Day Vertical Bar Charts */
+.pit-wall-chart-frame {
+  display: flex !important;
+  align-items: stretch !important;
+  gap: 8px !important;
+  height: 140px !important;
+  margin-top: auto !important;
+}
+
+.pit-wall-y-axis {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: space-between !important;
+  font-size: 9.5px !important;
+  color: #71717a !important;
+  font-family: ui-monospace, monospace !important;
+  padding-bottom: 18px !important;
+  text-align: right !important;
+  min-width: 30px !important;
+}
+
+.pit-wall-chart-area {
+  position: relative !important;
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  min-width: 0 !important;
+}
+
+.pit-wall-grid-lines {
+  position: absolute !important;
+  inset: 0 0 18px 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: space-between !important;
+  pointer-events: none !important;
+}
+
+.pit-wall-grid-line {
+  width: 100% !important;
+  height: 1px !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+}
+
+.pit-wall-bars-row {
+  position: relative !important;
+  z-index: 1 !important;
+  flex: 1 !important;
+  display: flex !important;
+  align-items: flex-end !important;
+  gap: 2px !important;
+}
+
+.pit-wall-bar-col {
+  flex: 1 !important;
+  height: 100% !important;
+  display: flex !important;
+  align-items: flex-end !important;
+  min-width: 0 !important;
+}
+
+.pit-wall-bar-hours {
+  width: 100% !important;
+  background: #60a5fa !important;
+  border-radius: 2px 2px 0 0 !important;
+  transition: opacity 0.12s ease !important;
+}
+
+.pit-wall-bar-col:hover .pit-wall-bar-hours,
+.pit-wall-bar-col:hover .pit-wall-bar-stack {
+  filter: brightness(1.2) !important;
+}
+
+.pit-wall-bar-stack {
+  width: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: flex-end !important;
+  border-radius: 2px 2px 0 0 !important;
+  overflow: hidden !important;
+}
+
+.pit-wall-bar-bg {
+  width: 100% !important;
+  background: #1d4ed8 !important;
+}
+
+.pit-wall-bar-main {
+  width: 100% !important;
+  background: #60a5fa !important;
+}
+
+.pit-wall-x-axis {
+  height: 18px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  font-size: 9.5px !important;
+  color: #71717a !important;
+  font-family: ui-monospace, monospace !important;
+  padding-top: 4px !important;
+}
+
+/* Consistency Heatmap */
+.pit-wall-heatmap-wrap {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 4px !important;
+  margin: auto 0 !important;
+  overflow-x: auto !important;
+}
+
+.pit-wall-heatmap-months-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+}
+
+.pit-wall-heatmap-day-spacer {
+  width: 24px !important;
+  flex-shrink: 0 !important;
+}
+
+.pit-wall-heatmap-months-grid {
+  display: flex !important;
+  gap: 3px !important;
+  flex: 1 !important;
+}
+
+.pit-wall-heatmap-month {
+  width: 11px !important;
+  font-size: 9px !important;
+  color: #71717a !important;
+  white-space: nowrap !important;
+  overflow: visible !important;
+}
+
+.pit-wall-heatmap-body {
+  display: flex !important;
+  align-items: stretch !important;
+  gap: 6px !important;
+}
+
+.pit-wall-heatmap-days {
+  width: 24px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: space-between !important;
+  font-size: 9px !important;
+  color: #71717a !important;
+  flex-shrink: 0 !important;
+}
+
+.pit-wall-heatmap-days span {
+  height: 11px !important;
+  line-height: 11px !important;
+}
+
+.pit-wall-heatmap-cols {
+  display: flex !important;
+  gap: 3px !important;
+  flex: 1 !important;
+}
+
+.pit-wall-heatmap-col {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 3px !important;
+}
+
+.pit-wall-heat-cell {
+  width: 11px !important;
+  height: 11px !important;
+  border-radius: 2px !important;
+}
+
+/* Cost by Model Horizontal Bars */
+.pit-wall-models-list {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+  margin-top: 4px !important;
+}
+
+.pit-wall-model-row {
+  display: grid !important;
+  grid-template-columns: 110px 1fr 48px !important;
+  align-items: center !important;
+  gap: 10px !important;
+  font-size: 11px !important;
+}
+
+.pit-wall-model-name {
+  color: #a1a1aa !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+.pit-wall-model-bar-track {
+  height: 10px !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+  border-radius: 4px !important;
+  overflow: hidden !important;
+}
+
+.pit-wall-model-bar-fill {
+  height: 100% !important;
+  border-radius: 4px !important;
+}
+
+.pit-wall-model-cost {
+  font-family: ui-monospace, monospace !important;
+  font-size: 11px !important;
+  color: #e4e4e7 !important;
+  text-align: right !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+.pit-wall-empty-note {
+  font-size: 11px !important;
+  color: #71717a !important;
+  padding: 12px 0 !important;
+}
+
+/* Tooltip & Interactive State Enhancements */
+.pit-wall-tooltip {
+  position: fixed !important;
+  inset: auto !important;
+  margin: 0 !important;
+  display: none !important;
+  z-index: 2147483647 !important;
+  pointer-events: none !important;
+  background: rgba(9, 9, 11, 0.97) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  border-radius: 8px !important;
+  padding: 8px 10px !important;
+  min-width: 180px !important;
+  max-width: 280px !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.72) !important;
+  color: #f4f4f5 !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+  font-size: 11px !important;
+  line-height: 1.4 !important;
+  box-sizing: border-box !important;
+}
+
+.pit-wall-tooltip.visible,
+.pit-wall-tooltip:popover-open {
+  display: block !important;
+}
+
+.pit-wall-tooltip::after {
+  content: "" !important;
+  position: absolute !important;
+  left: var(--pw-tip-caret-left, 50%) !important;
+  transform: translateX(-50%) !important;
+  width: 0 !important;
+  height: 0 !important;
+  border-left: 5px solid transparent !important;
+  border-right: 5px solid transparent !important;
+  pointer-events: none !important;
+}
+
+.pit-wall-tooltip[data-placement="top"]::after {
+  bottom: -5px !important;
+  border-top: 5px solid rgba(9, 9, 11, 0.97) !important;
+  border-bottom: 0 !important;
+}
+
+.pit-wall-tooltip[data-placement="bottom"]::after {
+  top: -5px !important;
+  border-bottom: 5px solid rgba(9, 9, 11, 0.97) !important;
+  border-top: 0 !important;
+}
+
+.pit-wall-tip-title {
+  font-weight: 600 !important;
+  font-size: 11.5px !important;
+  color: #ffffff !important;
+  margin-bottom: 6px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+  padding-bottom: 4px !important;
+}
+
+.pit-wall-tip-rows {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 3px !important;
+}
+
+.pit-wall-tip-row {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+}
+
+.pit-wall-tip-label {
+  color: #a1a1aa !important;
+  font-size: 10.5px !important;
+  white-space: nowrap !important;
+}
+
+.pit-wall-tip-val {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  font-variant-numeric: tabular-nums !important;
+  font-size: 10.5px !important;
+  color: #f4f4f5 !important;
+  text-align: right !important;
+  white-space: nowrap !important;
+}
+
+.pit-wall-tip-val.accent {
+  color: #60a5fa !important;
+  font-weight: 600 !important;
+}
+
+/* Hover & Focus Highlights */
+.pit-wall-kpi-card {
+  transition: border-color 0.12s ease, background 0.12s ease !important;
+  outline: none !important;
+}
+
+.pit-wall-kpi-card:hover,
+.pit-wall-kpi-card:focus-visible {
+  border-color: rgba(96, 165, 250, 0.35) !important;
+  background: #181920 !important;
+  cursor: default !important;
+}
+
+.pit-wall-bar-col {
+  cursor: pointer !important;
+  outline: none !important;
+}
+
+.pit-wall-bar-col:focus-visible .pit-wall-bar-hours,
+.pit-wall-bar-col:focus-visible .pit-wall-bar-stack {
+  filter: brightness(1.3) !important;
+  outline: 2px solid #60a5fa !important;
+}
+
+.pit-wall-heat-cell {
+  cursor: pointer !important;
+  outline: none !important;
+  transition: filter 0.12s ease !important;
+}
+
+.pit-wall-heat-cell:hover,
+.pit-wall-heat-cell:focus-visible {
+  filter: brightness(1.35) !important;
+  outline: 1.5px solid #60a5fa !important;
+}
+
+.pit-wall-model-row {
+  cursor: pointer !important;
+  padding: 3px 6px !important;
+  border-radius: 6px !important;
+  transition: background 0.12s ease !important;
+  outline: none !important;
+}
+
+.pit-wall-model-row:hover,
+.pit-wall-model-row:focus-visible {
+  background: rgba(255, 255, 255, 0.05) !important;
+}

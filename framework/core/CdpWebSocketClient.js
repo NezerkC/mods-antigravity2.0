@@ -27,13 +27,78 @@ export class CdpWebSocketClient {
   }
 
   /**
+   * Checks whether a CDP target represents a non-UI page such as a splash screen,
+   * DevTools window, or blank document.
+   * @param {{ url?: string, title?: string }} target
+   * @returns {boolean}
+   */
+  static isNonUiPageTarget(target) {
+    const url = typeof target?.url === 'string' ? target.url.trim().toLowerCase() : '';
+    const title = typeof target?.title === 'string' ? target.title.trim().toLowerCase() : '';
+
+    if (url) {
+      if (
+        url.startsWith('data:') ||
+        url.startsWith('devtools:') ||
+        url.startsWith('about:blank') ||
+        url.startsWith('about:srcdoc') ||
+        url.startsWith('chrome://') ||
+        url.startsWith('chrome-devtools://') ||
+        url.startsWith('chrome-extension://') ||
+        url.startsWith('edge://')
+      ) {
+        return true;
+      }
+    } else if (
+      title.startsWith('data:') ||
+      title === 'about:blank' ||
+      title.startsWith('devtools://')
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Checks whether a CDP page target URL matches the primary Antigravity app window.
+   * @param {{ url?: string }} target
+   * @returns {boolean}
+   */
+  static isPreferredAppTarget(target) {
+    const url = typeof target?.url === 'string' ? target.url.trim().toLowerCase() : '';
+    if (!url) return false;
+    return (
+      url.startsWith('https://127.0.0.1') ||
+      url.startsWith('http://127.0.0.1') ||
+      url.startsWith('https://localhost') ||
+      url.startsWith('http://localhost') ||
+      url.startsWith('vscode-file:')
+    );
+  }
+
+  /**
    * Finds the primary browser page target among the reported CDP targets.
-   * @param {Array<{ type: string, webSocketDebuggerUrl?: string }>} targets
-   * @returns {{ type: string, webSocketDebuggerUrl?: string } | undefined}
+   * Skips `data:`, `devtools:`, `about:blank`, and other non-UI targets,
+   * preferring the real Antigravity app window with a clean fallback to any valid UI page.
+   * @param {Array<{ type: string, url?: string, title?: string, webSocketDebuggerUrl?: string }>} targets
+   * @returns {{ type: string, url?: string, title?: string, webSocketDebuggerUrl?: string } | undefined}
    */
   static findPageTarget(targets) {
     if (!Array.isArray(targets)) return undefined;
-    return targets.find(t => t.type === 'page' && typeof t.webSocketDebuggerUrl === 'string');
+
+    const uiPages = targets.filter(
+      (t) =>
+        t &&
+        t.type === 'page' &&
+        typeof t.webSocketDebuggerUrl === 'string' &&
+        t.webSocketDebuggerUrl.trim().length > 0 &&
+        !CdpWebSocketClient.isNonUiPageTarget(t)
+    );
+
+    if (!uiPages.length) return undefined;
+
+    return uiPages.find((t) => CdpWebSocketClient.isPreferredAppTarget(t)) || uiPages[0];
   }
 
   /**

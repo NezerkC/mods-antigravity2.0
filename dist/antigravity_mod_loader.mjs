@@ -8,6 +8,9 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 // ======================== Core & SDK ========================
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 
 
 
@@ -19,6 +22,7 @@ class CdpPortResolver {
   /**
    * @param {Object} [options]
    * @param {string} [options.logDir] Custom path to Antigravity logs directory.
+   * @param {string} [options.devToolsActivePortPath] Custom path to Electron DevToolsActivePort file.
    * @param {number} [options.defaultPort] Fallback port if auto-discovery fails.
    * @param {number[]} [options.candidatePorts] Candidate ports to probe.
    * @param {number} [options.probeTimeoutMs] Timeout for active HTTP probes in ms.
@@ -27,6 +31,7 @@ class CdpPortResolver {
   constructor(options = {}) {
     this.host = options.host || '127.0.0.1';
     this.logDir = options.logDir || path.join(os.homedir(), 'AppData', 'Roaming', 'Antigravity', 'logs');
+    this.devToolsActivePortPath = options.devToolsActivePortPath || path.join(path.dirname(this.logDir), 'DevToolsActivePort');
     this.defaultPort = options.defaultPort ?? 53908;
     this.candidatePorts = options.candidatePorts || [56547, 53908, 9222, 9229, 53909, 53910];
     this.probeTimeoutMs = options.probeTimeoutMs ?? 150;
@@ -133,12 +138,37 @@ class CdpPortResolver {
   }
 
   /**
+   * Synchronously reads Electron's DevToolsActivePort file (line 1 = active port)
+   * and parses it as a valid TCP port (1..65535).
+   * @returns {number|null} Discovered port or null if missing/invalid.
+   */
+  resolvePortFromDevToolsActivePort() {
+    try {
+      if (!this.devToolsActivePortPath || !fs.existsSync(this.devToolsActivePortPath)) {
+        return null;
+      }
+
+      const raw = fs.readFileSync(this.devToolsActivePortPath, 'utf-8');
+      const firstLine = raw.split(/\r?\n/)[0]?.replace(/^\uFEFF/, '').trim();
+      if (!firstLine || !/^\d+$/.test(firstLine)) {
+        return null;
+      }
+
+      const port = Number(firstLine);
+      return Number.isSafeInteger(port) && port >= 1 && port <= 65535 ? port : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Resolves the active CDP port using a tiered cascading strategy:
    * 1. CLI parameter (--cdp-port <port>)
    * 2. Environment variable (ANTIGRAVITY_CDP_PORT)
-   * 3. Active HTTP probe on defaultPort & candidate ports
-   * 4. Passive log tail inspection
-   * 5. Fallback to defaultPort
+   * 3. Electron DevToolsActivePort file (verified via active HTTP probe)
+   * 4. Active HTTP probe on defaultPort & candidate ports
+   * 5. Passive log tail inspection
+   * 6. Fallback to defaultPort
    * @returns {Promise<number>}
    */
   async resolvePort() {
@@ -161,29 +191,38 @@ class CdpPortResolver {
       }
     }
 
-    // 3. Active HTTP probe on default port
+    // 3. Electron DevToolsActivePort discovery (verified via active HTTP probe)
+    const activePort = this.resolvePortFromDevToolsActivePort();
+    if (activePort && (await this.probePort(activePort))) {
+      return activePort;
+    }
+
+    // 4. Active HTTP probe on default port
     if (await this.probePort(this.defaultPort)) {
       return this.defaultPort;
     }
 
-    // 4. Active HTTP probe across candidate ports
+    // 5. Active HTTP probe across candidate ports
     for (const port of this.candidatePorts) {
       if (port !== this.defaultPort && (await this.probePort(port))) {
         return port;
       }
     }
 
-    // 5. Fallback: Passive log tail inspection
+    // 6. Fallback: Passive log tail inspection
     const logPort = this.resolvePortFromLogs();
     if (logPort) {
       return logPort;
     }
 
-    // 6. Final default fallback
+    // 7. Final default fallback
     return this.defaultPort;
   }
 }
 
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
 
 /**
  * Client for interacting with the Electron Chrome DevTools Protocol (CDP) WebSocket bridge.
@@ -211,13 +250,78 @@ class CdpWebSocketClient {
   }
 
   /**
+   * Checks whether a CDP target represents a non-UI page such as a splash screen,
+   * DevTools window, or blank document.
+   * @param {{ url?: string, title?: string }} target
+   * @returns {boolean}
+   */
+  static isNonUiPageTarget(target) {
+    const url = typeof target?.url === 'string' ? target.url.trim().toLowerCase() : '';
+    const title = typeof target?.title === 'string' ? target.title.trim().toLowerCase() : '';
+
+    if (url) {
+      if (
+        url.startsWith('data:') ||
+        url.startsWith('devtools:') ||
+        url.startsWith('about:blank') ||
+        url.startsWith('about:srcdoc') ||
+        url.startsWith('chrome://') ||
+        url.startsWith('chrome-devtools://') ||
+        url.startsWith('chrome-extension://') ||
+        url.startsWith('edge://')
+      ) {
+        return true;
+      }
+    } else if (
+      title.startsWith('data:') ||
+      title === 'about:blank' ||
+      title.startsWith('devtools://')
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Checks whether a CDP page target URL matches the primary Antigravity app window.
+   * @param {{ url?: string }} target
+   * @returns {boolean}
+   */
+  static isPreferredAppTarget(target) {
+    const url = typeof target?.url === 'string' ? target.url.trim().toLowerCase() : '';
+    if (!url) return false;
+    return (
+      url.startsWith('https://127.0.0.1') ||
+      url.startsWith('http://127.0.0.1') ||
+      url.startsWith('https://localhost') ||
+      url.startsWith('http://localhost') ||
+      url.startsWith('vscode-file:')
+    );
+  }
+
+  /**
    * Finds the primary browser page target among the reported CDP targets.
-   * @param {Array<{ type: string, webSocketDebuggerUrl?: string }>} targets
-   * @returns {{ type: string, webSocketDebuggerUrl?: string } | undefined}
+   * Skips `data:`, `devtools:`, `about:blank`, and other non-UI targets,
+   * preferring the real Antigravity app window with a clean fallback to any valid UI page.
+   * @param {Array<{ type: string, url?: string, title?: string, webSocketDebuggerUrl?: string }>} targets
+   * @returns {{ type: string, url?: string, title?: string, webSocketDebuggerUrl?: string } | undefined}
    */
   static findPageTarget(targets) {
     if (!Array.isArray(targets)) return undefined;
-    return targets.find(t => t.type === 'page' && typeof t.webSocketDebuggerUrl === 'string');
+
+    const uiPages = targets.filter(
+      (t) =>
+        t &&
+        t.type === 'page' &&
+        typeof t.webSocketDebuggerUrl === 'string' &&
+        t.webSocketDebuggerUrl.trim().length > 0 &&
+        !CdpWebSocketClient.isNonUiPageTarget(t)
+    );
+
+    if (!uiPages.length) return undefined;
+
+    return uiPages.find((t) => CdpWebSocketClient.isPreferredAppTarget(t)) || uiPages[0];
   }
 
   /**
@@ -293,6 +397,9 @@ class CdpWebSocketClient {
   }
 }
 
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
 
 /**
  * Manages target UI slots in the Antigravity 2.0 DOM and generates
@@ -370,40 +477,105 @@ class SlotManager {
   }
 
   /**
-   * Generates browser-executable JavaScript to mount a mod within a target slot
-   * across ALL conversation tabs and split panels matching the selector.
-   * @param {Object} params
-   * @param {string} params.slotId
-   * @param {string} params.modId
-   * @param {string} params.htmlContent
+   * Computes a deterministic content signature to skip redundant innerHTML writes.
+   * @param {string} html
    * @returns {string}
    */
-  generateMountCode({ slotId, modId, htmlContent }) {
+  static computeHtmlSignature(html) {
+    const text = String(html || '');
+    let hash = 5381;
+    for (let i = 0; i < text.length; i++) {
+      hash = ((hash << 5) + hash) ^ text.charCodeAt(i);
+    }
+    return `${text.length}:${(hash >>> 0).toString(36)}`;
+  }
+
+  /**
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * using default SlotManager definitions.
+   * @param {string} slotId
+   * @param {string} modId
+   * @param {string} htmlContent
+   * @returns {string}
+   */
+  static generateMountSnippet(slotId, modId, htmlContent) {
+    return new SlotManager().generateMountSnippet(slotId, modId, htmlContent);
+  }
+
+  /**
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * across ALL conversation tabs and split panels matching the selector.
+   * @param {string} slotId
+   * @param {string} modId
+   * @param {string} htmlContent
+   * @returns {string}
+   */
+  generateMountSnippet(slotId, modId, htmlContent) {
     const slot = this.getSlot(slotId);
     const containerId = this.getContainerId(slotId);
     const modWrapperId = `antigravity-mod-${modId}`;
+    const htmlSig = SlotManager.computeHtmlSignature(htmlContent);
 
     return `
       (() => {
-        let anchors = Array.from(document.querySelectorAll('${slot.selector}'));
-        if (!anchors.length && '${slotId}' === 'aux-pane-tab') {
-          const auxBar = document.querySelector('[data-active-tab-id]') ||
-                         document.querySelector('.shrink-0.flex.items-center.gap-0\\\\.5.border-b') ||
-                         document.querySelector('div[class*="shrink-0"][class*="border-b"]');
-          if (auxBar) {
-            anchors = [auxBar.querySelector('.overflow-x-auto') || auxBar];
+        let anchorEntries = Array.from(document.querySelectorAll('${slot.selector}'))
+          .map(anchor => ({ anchor, strategy: '${slot.strategy}' }));
+
+        if (!anchorEntries.length && '${slotId}' === 'menubar-actions') {
+          const menubar = document.querySelector('.shrink-0.bg-sidebar .flex.items-center.bg-sidebar') ||
+                          document.querySelector('.shrink-0 .flex.items-center.bg-sidebar') ||
+                          document.querySelector('.shrink-0.bg-sidebar');
+          if (menubar) {
+            anchorEntries = [{ anchor: menubar, strategy: '${slot.strategy}' }];
+          }
+        }
+
+        if (!anchorEntries.length && '${slotId}' === 'aux-pane-tab') {
+          const sidePanelNewTabBtns = Array.from(document.querySelectorAll('button[data-testid="side-panel-new-tab-button"]'));
+          if (sidePanelNewTabBtns.length) {
+            anchorEntries = sidePanelNewTabBtns.map(anchor => ({ anchor, strategy: 'before' }));
+          } else {
+            let auxBars = Array.from(document.querySelectorAll('[data-active-tab-id], [data-side-panel-strip="true"]'));
+            if (!auxBars.length) {
+              auxBars = Array.from(document.querySelectorAll('.shrink-0.flex.items-center.gap-0\\\\.5.border-b'));
+            }
+            if (!auxBars.length) {
+              auxBars = Array.from(document.querySelectorAll('div[class*="shrink-0"][class*="border-b"]'));
+            }
+            for (const auxBar of auxBars) {
+              const newTabBtn = auxBar.querySelector('button[data-testid="side-panel-new-tab-button"], button[data-testid="aux-pane-new-tab-button"]');
+              if (newTabBtn) {
+                anchorEntries.push({ anchor: newTabBtn, strategy: 'before' });
+              } else {
+                const tabScrollStrip = auxBar.querySelector('.overflow-x-auto');
+                if (tabScrollStrip) {
+                  anchorEntries.push({ anchor: tabScrollStrip, strategy: 'after' });
+                } else {
+                  anchorEntries.push({ anchor: auxBar, strategy: 'append' });
+                }
+              }
+            }
           }
         }
 
         // Clean up any misplaced legacy slot containers that were injected directly inside non-flex wrappers
-        document.querySelectorAll('#${containerId}').forEach(el => {
-          if (el.parentElement && !el.parentElement.className.includes('flex')) {
-            el.remove();
-          }
-        });
+        if ('${slot.strategy}' === 'before' || '${slot.strategy}' === 'after') {
+          document.querySelectorAll('#${containerId}').forEach(el => {
+            const parent = el.parentElement;
+            const parentCls = parent && typeof parent.className === 'string' ? parent.className : '';
+            if (parent && !parentCls.includes('flex') && !parent.hasAttribute('data-active-tab-id') && !parent.hasAttribute('data-side-panel-strip')) {
+              el.remove();
+            }
+          });
+        }
 
-        // If containers already exist in the DOM, ensure mod nodes are refreshed immediately
-        document.querySelectorAll('#${containerId}').forEach(container => {
+        const ensureSlotSizing = (container) => {
+          if (container.style.minWidth !== '0') container.style.minWidth = '0';
+          if (container.style.maxWidth !== '100%') container.style.maxWidth = '100%';
+        };
+
+        const syncModNode = (container) => {
+          ensureSlotSizing(container);
           let modNode = container.querySelector('#${modWrapperId}');
           if (!modNode) {
             modNode = document.createElement('div');
@@ -412,21 +584,34 @@ class SlotManager {
             modNode.style.display = 'inline-flex';
             modNode.style.alignItems = 'center';
             modNode.style.height = '28px';
+            if ('${slotId}' === 'header-actions') {
+              modNode.style.minWidth = '0';
+              modNode.style.maxWidth = '100%';
+            }
             container.appendChild(modNode);
           }
-          modNode.setAttribute('data-version', '2');
-          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
-            modNode.innerHTML = ${JSON.stringify(htmlContent)};
+          if (modNode.getAttribute('data-version') !== '2') {
+            modNode.setAttribute('data-version', '2');
           }
-        });
+          const prevSig = modNode.getAttribute('data-render-hash') || modNode.getAttribute('data-sig');
+          const isLiveStateMod = '${modId}' === 'agent-selector' || '${modId}' === 'context-tachometer';
+          if (!modNode.firstElementChild || (!isLiveStateMod && prevSig !== '${htmlSig}')) {
+            modNode.innerHTML = ${JSON.stringify(htmlContent)};
+            modNode.setAttribute('data-sig', '${htmlSig}');
+            modNode.setAttribute('data-render-hash', '${htmlSig}');
+          }
+        };
 
-        if (!anchors.length) return;
+        // If containers already exist in the DOM, ensure mod nodes are hydrated without redundant innerHTML churn
+        document.querySelectorAll('#${containerId}').forEach(syncModNode);
 
-        for (const anchor of anchors) {
+        if (!anchorEntries.length) return;
+
+        for (const { anchor, strategy } of anchorEntries) {
           let parent;
           let targetItem = anchor;
 
-          if ('${slot.strategy}' === 'append' || '${slot.strategy}' === 'prepend') {
+          if (strategy === 'append' || strategy === 'prepend') {
             parent = anchor;
           } else {
             parent = anchor.parentElement;
@@ -459,54 +644,63 @@ class SlotManager {
             container.style.alignItems = 'center';
             container.style.gap = '6px';
             container.style.height = '100%';
+            container.style.minWidth = '0';
+            container.style.maxWidth = '100%';
             container.style.setProperty('app-region', 'no-drag');
 
-            if ('${slot.strategy}' === 'after') {
+            if (strategy === 'after') {
               if (targetItem.nextSibling) {
                 parent.insertBefore(container, targetItem.nextSibling);
               } else {
                 parent.appendChild(container);
               }
-            } else if ('${slot.strategy}' === 'before') {
+            } else if (strategy === 'before') {
               parent.insertBefore(container, targetItem);
-            } else if ('${slot.strategy}' === 'prepend') {
+            } else if (strategy === 'prepend') {
               parent.prepend(container);
             } else {
               parent.appendChild(container);
             }
           } else {
-            // Ensure slot container remains directly in parent flex row, right after targetItem
-            if ('${slot.strategy}' === 'after' && (container.parentElement !== parent || container.previousElementSibling !== targetItem)) {
+            // Ensure slot container remains in the expected position relative to targetItem
+            if (strategy === 'after' && (container.parentElement !== parent || container.previousElementSibling !== targetItem)) {
               if (targetItem.nextSibling) {
                 parent.insertBefore(container, targetItem.nextSibling);
               } else {
                 parent.appendChild(container);
               }
-            } else if (('${slot.strategy}' === 'append' || '${slot.strategy}' === 'prepend') && container.parentElement !== parent) {
+            } else if (strategy === 'before' && (container.parentElement !== parent || container.nextElementSibling !== targetItem)) {
+              parent.insertBefore(container, targetItem);
+            } else if (strategy === 'prepend' && (container.parentElement !== parent || parent.firstElementChild !== container)) {
+              parent.prepend(container);
+            } else if (strategy === 'append' && container.parentElement !== parent) {
               parent.appendChild(container);
             }
           }
 
-          let modNode = container.querySelector('#${modWrapperId}');
-          if (!modNode) {
-            modNode = document.createElement('div');
-            modNode.id = '${modWrapperId}';
-            modNode.className = '${modWrapperId}';
-            modNode.style.display = 'inline-flex';
-            modNode.style.alignItems = 'center';
-            modNode.style.height = '28px';
-            container.appendChild(modNode);
-          }
-          modNode.setAttribute('data-version', '2');
-          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
-            modNode.innerHTML = ${JSON.stringify(htmlContent)};
-          }
+          syncModNode(container);
         }
       })();
     `;
   }
+
+  /**
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * across ALL conversation tabs and split panels matching the selector.
+   * @param {Object} params
+   * @param {string} params.slotId
+   * @param {string} params.modId
+   * @param {string} params.htmlContent
+   * @returns {string} Executable JavaScript.
+   */
+  generateMountCode({ slotId, modId, htmlContent }) {
+    return this.generateMountSnippet(slotId, modId, htmlContent);
+  }
 }
 
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
 
 /**
  * Scopes and isolates raw CSS rules to prevent injected mod styles
@@ -557,8 +751,16 @@ class StyleIsolator {
       }
 
       if (endIndex !== -1) {
-        const fullAtRule = text.slice(0, endIndex + 1);
-        atRuleBlocks.push(fullAtRule.trim());
+        const fullAtRule = text.slice(0, endIndex + 1).trim();
+        const braceOpen = fullAtRule.indexOf('{');
+        const header = braceOpen !== -1 ? fullAtRule.slice(0, braceOpen).trim() : '';
+        if (braceOpen !== -1 && /^@(?:media|supports|layer)\b/i.test(header)) {
+          const innerBody = fullAtRule.slice(braceOpen + 1, -1);
+          const scopedInner = StyleIsolator.scopeCss(innerBody, scopeSelector);
+          atRuleBlocks.push(`${header} {\n${scopedInner}\n}`);
+        } else {
+          atRuleBlocks.push(fullAtRule);
+        }
         text = text.slice(endIndex + 1);
       } else {
         strippedCss += text;
@@ -577,6 +779,7 @@ class StyleIsolator {
         .filter(Boolean)
         .map(sel => {
           if (
+            sel.includes('[data-mod-portal]') ||
             sel.includes('-portal') ||
             sel.includes('antigravity-agent-dropdown') ||
             sel.includes('antigravity-mods-manager-portal') ||
@@ -586,6 +789,15 @@ class StyleIsolator {
             sel.startsWith('.mods-manager-') ||
             sel.startsWith('.agent-') ||
             sel.startsWith('.antigravity-agent-item') ||
+            sel.startsWith('.model-slot-') ||
+            sel.startsWith('.model-effort-') ||
+            sel.startsWith('.model-pack') ||
+            sel.startsWith('.pit-wall-') ||
+            sel.includes('antigravity-pit-wall') ||
+            sel.includes('antigravity-subagent-model') ||
+            sel.includes('antigravity-native-model-locked') ||
+            sel.includes('antigravity-native-model-desynced') ||
+            sel.includes('antigravity-chat-planner-sync-btn') ||
             sel.startsWith('body') ||
             sel.startsWith(':root')
           ) {
@@ -611,6 +823,9 @@ class StyleIsolator {
   }
 }
 
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
 
 /**
  * Base class for all Antigravity desktop UI mods.
@@ -672,6 +887,12 @@ class AntigravityMod {
    */
   onDestroy() {}
 }
+
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
+
 
 
 
@@ -750,12 +971,14 @@ class ModLoader {
         combinedStyles.push(scopedCss);
       }
 
-      const mountCode = this.slotManager.generateMountCode({
-        slotId,
-        modId,
-        htmlContent: html
-      });
-      mountSnippets.push(mountCode);
+      if (html && html.trim()) {
+        const mountCode = this.slotManager.generateMountCode({
+          slotId,
+          modId,
+          htmlContent: html
+        });
+        mountSnippets.push(mountCode);
+      }
     }
 
     const cssBundle = combinedStyles.join('\n\n');
@@ -763,6 +986,9 @@ class ModLoader {
     return `
       (() => {
         window.__antigravityMods = window.__antigravityMods || {};
+        if (${JSON.stringify(context.repoPath || '')}) {
+          window.__antigravityActiveRepoPath = ${JSON.stringify(context.repoPath || '')};
+        }
 
         // 0. Permanently terminate any legacy unmanaged loops
         if (window.__multiContextTrackerLoop) clearInterval(window.__multiContextTrackerLoop);
@@ -781,6 +1007,41 @@ class ModLoader {
         }
         styleTag.textContent = ${JSON.stringify(cssBundle)};
 
+        // Native Voice Mode unlock & Developer flags (Antigravity 2.29.0+)
+        try {
+          if (typeof window !== 'undefined') {
+            window.jetski = window.jetski || {};
+            window.jetski.developer = window.jetski.developer || {};
+            window.jetski.developer.customFlagOverrides = window.jetski.developer.customFlagOverrides || {};
+            window.jetski.developer.customFlagOverrides['enable-voice-relay'] = true;
+            window.jetski.developer.voiceEngineAddr = '127.0.0.1:8765';
+          }
+          if (typeof globalThis !== 'undefined') {
+            globalThis.jetski = globalThis.jetski || (typeof window !== 'undefined' ? window.jetski : {});
+            globalThis.jetski.developer = globalThis.jetski.developer || {};
+            globalThis.jetski.developer.customFlagOverrides = globalThis.jetski.developer.customFlagOverrides || {};
+            globalThis.jetski.developer.customFlagOverrides['enable-voice-relay'] = true;
+            globalThis.jetski.developer.voiceEngineAddr = '127.0.0.1:8765';
+          }
+        } catch (e) {}
+
+        if (!window.__antigravityVoiceHealthIntercepted && typeof window.fetch === 'function') {
+          window.__antigravityVoiceHealthIntercepted = true;
+          const originalFetch = window.fetch;
+          window.fetch = async function(...args) {
+            const url = (args[0] && typeof args[0] === 'string')
+              ? args[0]
+              : (args[0] && args[0].url ? args[0].url : String(args[0] || ''));
+            if (typeof url === 'string' && url.includes('/voice/health')) {
+              return new Response(JSON.stringify({ status: 'ok', healthy: true }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+              });
+            }
+            return originalFetch.apply(this, args);
+          };
+        }
+
         // 2. Global Agent Selector & Tachometer Portal Handlers
         window.__resolveCascadeId = function(badge) {
           const cascadeEl = badge ? badge.closest('[data-cascade-id]') : null;
@@ -792,6 +1053,80 @@ class ModLoader {
           if (urlPathId) return urlPathId;
           const searchMatch = (window.location.search || '').match(/[?&](?:focused|conversationId)=([0-9a-fA-F-]+)/);
           return searchMatch ? searchMatch[1] : null;
+        };
+
+        window.__normalizeFileUriToPath = function(uri) {
+          if (!uri || typeof uri !== 'string') return '';
+          let clean = uri.trim();
+          try {
+            if (clean.indexOf('file://') === 0) {
+              clean = decodeURIComponent(clean.replace(/^file:\\/\\/\\/?/, ''));
+            } else if (clean.indexOf('%') !== -1) {
+              clean = decodeURIComponent(clean);
+            }
+            if (/^\\/([a-zA-Z]:)/.test(clean)) {
+              clean = clean.slice(1);
+            }
+          } catch (e) {}
+          return clean;
+        };
+
+        window.__resolveRepoForCascade = async function(cascadeId) {
+          const targetId = cascadeId || (window.__resolveCascadeId ? window.__resolveCascadeId() : null);
+          window.__antigravityCascadeRepos = window.__antigravityCascadeRepos || {};
+          if (targetId && window.__antigravityCascadeRepos[targetId]) {
+            return window.__antigravityCascadeRepos[targetId];
+          }
+          try {
+            if (window.__APP_CONFIG__?.csrfToken) {
+              const res = await fetch('/exa.language_server_pb.LanguageServerService/GetAllCascadeTrajectories', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Connect-Protocol-Version': '1',
+                  'x-codeium-csrf-token': window.__APP_CONFIG__.csrfToken
+                },
+                body: '{}'
+              });
+              if (res.ok) {
+                const data = await res.json();
+                const summaries = (data && data.trajectorySummaries) || {};
+                Object.keys(summaries).forEach(function(id) {
+                  const summary = summaries[id];
+                  const ws = (summary && summary.workspaces && summary.workspaces[0]) ||
+                             (summary && summary.trajectoryMetadata && summary.trajectoryMetadata.workspaces && summary.trajectoryMetadata.workspaces[0]);
+                  const rawUri = (ws && (ws.gitRootAbsoluteUri || ws.workspaceFolderAbsoluteUri)) ||
+                                 (summary && summary.trajectoryMetadata && summary.trajectoryMetadata.workspaceUris && summary.trajectoryMetadata.workspaceUris[0]);
+                  if (rawUri) {
+                    const cleanPath = window.__normalizeFileUriToPath ? window.__normalizeFileUriToPath(rawUri) : rawUri;
+                    if (cleanPath) {
+                      window.__antigravityCascadeRepos[id] = cleanPath;
+                    }
+                  }
+                });
+              }
+            }
+          } catch (e) {}
+          return (targetId && window.__antigravityCascadeRepos[targetId]) || '';
+        };
+
+        window.__antigravityFetchSessionVcsOverview = async function() {
+          try {
+            const cascadeId = window.__resolveCascadeId ? window.__resolveCascadeId() : '';
+            const resolved = await window.__resolveRepoForCascade(cascadeId);
+            const repoPath = resolved || (window.__antigravityVcsData && window.__antigravityVcsData.repoPath) || window.__antigravityActiveRepoPath || '';
+            const url = 'http://127.0.0.1:53912/vcs/overview?cascadeId=' + encodeURIComponent(cascadeId || '') +
+              (repoPath ? '&repoPath=' + encodeURIComponent(repoPath) : '');
+            const res = await fetch(url);
+            if (res.ok) {
+              const liveData = await res.json();
+              if (liveData && typeof window.__antigravityUpdateVcsData === 'function') {
+                window.__antigravityUpdateVcsData(liveData);
+              }
+              return liveData;
+            }
+          } catch (e) {}
+          return null;
         };
 
         window.__classifyPromptMode = function(prompt) {
@@ -940,6 +1275,13 @@ class ModLoader {
           }
           document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
 
+          const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+          if (pwPortal) {
+            pwPortal.classList.remove('open');
+            pwPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+
           document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
           portal.classList.remove('open');
           portal.__currentBadge = null;
@@ -1068,8 +1410,8 @@ class ModLoader {
 
           // Update exterior reticle triggers across panels
           const reticleSvg = window.__renderReticleSvg ? window.__renderReticleSvg(nextVal, 14) : '';
-          const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
-          const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
+          const focusTitle = 'Modo Focus (Caveman + ADHD): Concentracion activa y accion inmediata (~70% ahorro de tokens) - Clic para alternar a Explicativo';
+          const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus (Caveman + ADHD)';
 
           document.querySelectorAll('.antigravity-caveman-reticle-trigger').forEach(triggerEl => {
             const parent = triggerEl.parentElement;
@@ -1082,6 +1424,7 @@ class ModLoader {
               const box = triggerEl.querySelector('.caveman-reticle-box');
               if (box && reticleSvg) {
                 box.innerHTML = reticleSvg;
+                box.setAttribute('data-focus-state', String(nextVal));
               }
             }
           });
@@ -1094,7 +1437,7 @@ class ModLoader {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   cascadeId: cascadeId,
-                  modifiers: { caveman: nextVal }
+                  modifiers: { caveman: nextVal, adhd: nextVal }
                 })
               }).catch(function() {});
             }
@@ -1219,25 +1562,1790 @@ class ModLoader {
 
         const renderSvgIcon = ${renderSvgIcon.toString()};
         window.__renderSvgIcon = renderSvgIcon;
+        window.__getGaugeMetrics = ${getGaugeMetrics.toString()};
         window.__formatResetTime = ${formatResetTime.toString()};
         window.__resolveNativeQuotaForModel = ${resolveNativeQuotaForModel.toString()};
         window.__renderTachometerPopoverHtml = ${renderPopoverHtml.toString()};
         window.__renderModsManagerPanelHtml = ${renderModsManagerPanelHtml.toString()};
+        window.__renderPitWallModalHtml = ${renderPitWallModalHtml.toString()};
+        window.__antigravityPitWall = ${JSON.stringify(context.pitWall || null)};
         const renderReticleSvg = ${renderReticleSvg.toString()};
         window.__renderReticleSvg = renderReticleSvg;
 
+        const syncReticleTrigger = (reticleBtn, cascadeId) => {
+          if (!reticleBtn) return;
+          const isFocus = window.__resolveCavemanForCascade ? window.__resolveCavemanForCascade(cascadeId) : false;
+          const focusTitle = 'Modo Focus (Caveman + ADHD): Concentracion activa y accion inmediata (~70% ahorro de tokens) - Clic para alternar a Explicativo';
+          const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus (Caveman + ADHD)';
+          const nextTitle = isFocus ? focusTitle : explicativoTitle;
+          if (reticleBtn.classList.contains('is-focus') !== isFocus) {
+            reticleBtn.classList.toggle('is-focus', isFocus);
+          }
+          if (reticleBtn.getAttribute('title') !== nextTitle) {
+            reticleBtn.setAttribute('title', nextTitle);
+          }
+          const box = reticleBtn.querySelector('.caveman-reticle-box');
+          const focusKey = isFocus ? '1' : '0';
+          if (box && window.__renderReticleSvg && (!box.firstElementChild || box.getAttribute('data-focus') !== focusKey)) {
+            box.innerHTML = window.__renderReticleSvg(isFocus, 14);
+            box.setAttribute('data-focus', focusKey);
+          }
+        };
+
+        const resolveChatboxFooter = (node) => {
+          if (!node) return null;
+          return node.closest?.('[class*="input-footer"]') ||
+            node.closest?.('.flex.items-center.justify-between') ||
+            node.parentElement ||
+            node;
+        };
+
+        const applyCompactToChatboxScope = (scopeEl, explicitWidth) => {
+          if (document.hidden || window.innerWidth <= 0 || !scopeEl) return;
+          const compactSetting = localStorage.getItem('__antigravity_compact_chatbox_mods');
+          const footer = resolveChatboxFooter(scopeEl);
+          const rawWidth = typeof explicitWidth === 'number'
+            ? explicitWidth
+            : (footer ? (footer.offsetWidth || footer.getBoundingClientRect?.().width || 0) : 0);
+          const width = rawWidth > 0 ? rawWidth : 0;
+          if (compactSetting !== 'true' && compactSetting !== 'false' && width <= 0) return;
+
+          const tach = scopeEl.classList?.contains('antigravity-tachometer-badge')
+            ? scopeEl
+            : (scopeEl.querySelector?.('.antigravity-tachometer-badge') || scopeEl.parentElement?.querySelector?.('.antigravity-tachometer-badge') || null);
+          const agent = scopeEl.classList?.contains('antigravity-agent-badge')
+            ? scopeEl
+            : (scopeEl.querySelector?.('.antigravity-agent-badge') || scopeEl.parentElement?.querySelector?.('.antigravity-agent-badge') || null);
+
+          const isCurrentlyCompact = Boolean(
+            tach?.classList?.contains('compact') ||
+            agent?.classList?.contains('compact') ||
+            scopeEl.querySelector?.('.antigravity-tachometer-badge.compact')
+          );
+          const threshold = isCurrentlyCompact ? 590 : 540;
+          const isNarrow = (width > 0 && width < threshold) || window.innerWidth < 800;
+          const shouldCompact = compactSetting === 'true' ? true : (compactSetting === 'false' ? false : isNarrow);
+
+          const slot = scopeEl.classList?.contains('antigravity-slot-container')
+            ? scopeEl
+            : (scopeEl.querySelector?.('.antigravity-slot-container') || null);
+          if (slot) {
+            slot.__lastTachCompact = shouldCompact;
+            slot.__lastAgentCompact = shouldCompact;
+          }
+          if (tach && tach.classList.contains('compact') !== shouldCompact) {
+            tach.classList.toggle('compact', shouldCompact);
+          }
+          if (agent && agent.classList.contains('compact') !== shouldCompact) {
+            agent.classList.toggle('compact', shouldCompact);
+          }
+        };
+
+        window.__BASE_MODELS = ${JSON.stringify(
+          (context.modelCatalog && Array.isArray(context.modelCatalog.baseModels) && context.modelCatalog.baseModels.length > 0)
+            ? context.modelCatalog.baseModels
+            : BASE_MODELS
+        )};
+        window.__MODEL_CATALOG = ${JSON.stringify(
+          (context.modelCatalog && Array.isArray(context.modelCatalog.modelCatalog) && context.modelCatalog.modelCatalog.length > 0)
+            ? context.modelCatalog.modelCatalog
+            : MODEL_CATALOG
+        )};
+        window.__DEFAULT_MODEL_SLOTS = ${JSON.stringify(DEFAULT_MODEL_SLOTS)};
+        window.__normalizeNativeModelCatalog = ${normalizeNativeModelCatalog.toString()};
+        window.__groupBaseModelsIntoPacks = ${groupBaseModelsIntoPacks.toString()};
+        window.__antigravitySubagentSessionSlots = Object.assign(
+          window.__antigravitySubagentSessionSlots || {},
+          ${JSON.stringify((context.modelSlots && context.modelSlots.sessions) ? context.modelSlots.sessions : {})}
+        );
+        window.__getModelById = function(modelId, catalog) { const list = catalog || window.__MODEL_CATALOG || []; return list.find(m => m.id === modelId) || list[0]; };
+        window.getModelById = window.__getModelById;
+        window.__renderModelSlotDropdownHtml = ${renderModelSlotDropdownHtml.toString()};
+        window.__renderSubagentModelPill = ${renderSubagentModelPill.toString()};
+
+        window.__discoverNativeModelCatalog = function(options) {
+          const opts = options || {};
+          try {
+            const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+            const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
+            if (!activeTrigger) return null;
+
+            const reactKey = Object.keys(activeTrigger).find(k => k.startsWith('__reactFiber'));
+            if (!reactKey) return null;
+
+            let cur = activeTrigger[reactKey];
+            let depth = 0;
+            let ctxValue = null;
+            while (cur && depth < 35) {
+              const val = cur.memoizedProps && cur.memoizedProps.value;
+              if (val && Array.isArray(val.modelOptions) && val.modelOptions.length > 0) {
+                ctxValue = val;
+                break;
+              }
+              cur = cur.return;
+              depth++;
+            }
+            if (!ctxValue) return null;
+
+            const rawOptions = ctxValue.modelOptions.map(m => ({
+              modelId: m.modelId || m.id || '',
+              label: m.label || m.name || '',
+              value: m.value,
+              disabled: Boolean(m.disabled),
+              tagTitle: m.tagTitle || '',
+              tagDescription: m.tagDescription || ''
+            }));
+
+            const rawGroups = Array.isArray(ctxValue.groups)
+              ? ctxValue.groups.map(g => ({
+                  groupName: g.groupName || '',
+                  options: Array.isArray(g.options)
+                    ? g.options.map(o => ({
+                        modelId: o.modelId || o.id || '',
+                        label: o.label || o.name || '',
+                        value: o.value,
+                        disabled: Boolean(o.disabled),
+                        tagTitle: o.tagTitle || '',
+                        tagDescription: o.tagDescription || ''
+                      }))
+                    : []
+                }))
+              : [];
+
+            const effortIndexObj = {};
+            const ei = ctxValue.effortIndex;
+            if (ei && typeof ei === 'object') {
+              const entries = (typeof Map === 'function' && ei instanceof Map)
+                ? Array.from(ei.entries())
+                : Object.entries(ei);
+              for (const pair of entries) {
+                const baseKey = pair[0];
+                const effList = pair[1];
+                if (typeof Map === 'function' && effList instanceof Map) {
+                  effortIndexObj[baseKey] = Array.from(effList.entries()).map(ep => ({
+                    effort: ep[0],
+                    modelId: ep[1] && (ep[1].modelId || ep[1].id) || '',
+                    label: ep[1] && (ep[1].label || ep[1].name) || '',
+                    value: ep[1] && ep[1].value,
+                    disabled: Boolean(ep[1] && ep[1].disabled)
+                  }));
+                } else if (Array.isArray(effList)) {
+                  effortIndexObj[baseKey] = effList.map(ev => ({
+                    effort: ev && (ev.effort || ev.effortLabel) || '',
+                    modelId: ev && (ev.modelId || ev.id) || '',
+                    label: ev && (ev.label || ev.name) || '',
+                    value: ev && ev.value,
+                    disabled: Boolean(ev && ev.disabled)
+                  }));
+                }
+              }
+            }
+
+            if (typeof window.__normalizeNativeModelCatalog !== 'function') return null;
+            const normalized = window.__normalizeNativeModelCatalog(rawOptions, effortIndexObj, rawGroups);
+            if (!normalized || !Array.isArray(normalized.baseModels) || normalized.baseModels.length === 0) {
+              return null;
+            }
+
+            const payload = {
+              source: 'native-react-context',
+              ...normalized,
+              discoveredAt: Date.now()
+            };
+
+            const signature = JSON.stringify({
+              models: normalized.modelCatalog.map(m => m.id),
+              disabled: normalized.disabledModels.map(m => m.id)
+            });
+
+            window.__BASE_MODELS = normalized.baseModels;
+            window.__MODEL_CATALOG = normalized.modelCatalog;
+            window.__DISCOVERED_MODEL_CATALOG = payload;
+
+            const changed = window.__lastModelCatalogSignature !== signature;
+            if (changed || opts.forceSync) {
+              window.__lastModelCatalogSignature = signature;
+              if (typeof window.__updateMenubarSlotButtons === 'function' && typeof window.__getActiveMenubarSlotModels === 'function') {
+                window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+              }
+              try {
+                if (typeof fetch === 'function') {
+                  fetch('http://127.0.0.1:53912/model-catalog', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                  }).catch(function() {});
+                }
+              } catch (e) {}
+            }
+
+            return payload;
+          } catch (e) {
+            return null;
+          }
+        };
+
+        window.__getSavedModelSlots = function() {
+          try {
+            const raw = localStorage.getItem('__antigravity_model_slots');
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (parsed && typeof parsed === 'object') {
+                return { ...window.__DEFAULT_MODEL_SLOTS, ...parsed };
+              }
+            }
+          } catch (e) {}
+          return { ...window.__DEFAULT_MODEL_SLOTS };
+        };
+
+        window.__resolveSubagentSessionId = function(el) {
+          if (el && typeof el.closest === 'function') {
+            const convEl = el.closest('[data-conversation-id]');
+            const convId = convEl ? convEl.getAttribute('data-conversation-id') : null;
+            if (convId) return convId;
+
+            const cascadeEl = el.closest('[data-cascade-id]');
+            const cascadeId = cascadeEl ? cascadeEl.getAttribute('data-cascade-id') : null;
+            if (cascadeId) return cascadeId;
+
+            const existingEl = el.closest('[data-subagent-session-id]');
+            const existingId = existingEl ? existingEl.getAttribute('data-subagent-session-id') : null;
+            if (existingId) return existingId;
+          } else if (el && typeof el.getAttribute === 'function') {
+            const directConv = el.getAttribute('data-conversation-id');
+            if (directConv) return directConv;
+            const directCascade = el.getAttribute('data-cascade-id');
+            if (directCascade) return directCascade;
+            const directSession = el.getAttribute('data-subagent-session-id');
+            if (directSession) return directSession;
+          }
+
+          const urlPath = (typeof window !== 'undefined' && window.location && window.location.pathname)
+            ? window.location.pathname
+            : '';
+          const pathParts = urlPath.split('/c/');
+          const urlPathId = (pathParts.length > 1 && pathParts[1]) ? pathParts[1].split('/')[0].split('?')[0] : null;
+          if (urlPathId) return urlPathId;
+
+          const urlSearch = (typeof window !== 'undefined' && window.location && window.location.search)
+            ? window.location.search
+            : '';
+          const searchMatch = urlSearch.match(/[?&](?:conversationId|focused)=([0-9a-zA-Z_-]+)/);
+          if (searchMatch && searchMatch[1]) return searchMatch[1];
+
+          if (!el) return null;
+
+          const generatedId = 'subagent-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+          if (typeof el.setAttribute === 'function') {
+            const target = (typeof el.closest === 'function' && el.closest('[data-subagent-container], .subagent-container')) || el;
+            target.setAttribute('data-subagent-session-id', generatedId);
+          }
+          return generatedId;
+        };
+
+        window.__hasSavedSubagentSessionSlots = function(sessionId) {
+          if (!sessionId) return false;
+          try {
+            const rawMap = localStorage.getItem('__antigravity_subagent_model_slots_map');
+            if (rawMap) {
+              const map = JSON.parse(rawMap);
+              if (map && typeof map === 'object' && map[sessionId] && typeof map[sessionId] === 'object') {
+                return true;
+              }
+            }
+          } catch (e) {}
+          const serverSessions = window.__antigravitySubagentSessionSlots;
+          return Boolean(
+            serverSessions &&
+            typeof serverSessions === 'object' &&
+            serverSessions[sessionId] &&
+            typeof serverSessions[sessionId] === 'object'
+          );
+        };
+
+        window.__getSavedSubagentSessionSlots = function(sessionId) {
+          const globalSlots = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+          if (!sessionId) {
+            return { ...globalSlots };
+          }
+          try {
+            const rawMap = localStorage.getItem('__antigravity_subagent_model_slots_map');
+            if (rawMap) {
+              const map = JSON.parse(rawMap);
+              if (map && typeof map === 'object' && map[sessionId] && typeof map[sessionId] === 'object') {
+                return { ...globalSlots, ...map[sessionId] };
+              }
+            }
+          } catch (e) {}
+          try {
+            const serverSessions = window.__antigravitySubagentSessionSlots;
+            if (serverSessions && typeof serverSessions === 'object' && serverSessions[sessionId] && typeof serverSessions[sessionId] === 'object') {
+              return { ...globalSlots, ...serverSessions[sessionId] };
+            }
+          } catch (e) {}
+          return { ...globalSlots };
+        };
+
+        window.__saveSubagentSessionSlots = function(sessionId, slots) {
+          if (!sessionId || !slots || typeof slots !== 'object') return null;
+          const globalSlots = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+
+          let map = {};
+          try {
+            const rawMap = localStorage.getItem('__antigravity_subagent_model_slots_map');
+            if (rawMap) {
+              const parsed = JSON.parse(rawMap);
+              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                map = parsed;
+              }
+            }
+          } catch (e) {}
+
+          const existing = (map[sessionId] && typeof map[sessionId] === 'object')
+            ? map[sessionId]
+            : ((window.__antigravitySubagentSessionSlots && window.__antigravitySubagentSessionSlots[sessionId]) || {});
+
+          const nextSession = {
+            ...existing,
+            ...slots,
+            planner: slots.planner || existing.planner || globalSlots.planner,
+            builder: slots.builder || existing.builder || globalSlots.builder,
+            updatedAt: Date.now()
+          };
+
+          map[sessionId] = nextSession;
+          window.__antigravitySubagentSessionSlots = window.__antigravitySubagentSessionSlots || {};
+          window.__antigravitySubagentSessionSlots[sessionId] = nextSession;
+
+          try {
+            localStorage.setItem('__antigravity_subagent_model_slots_map', JSON.stringify(map));
+          } catch (e) {}
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/subagent-model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  sessionId: sessionId,
+                  slots: nextSession
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+
+          return nextSession;
+        };
+
+        window.__isElementVisible = function(el) {
+          if (!el) return false;
+          let cur = el;
+          while (cur && cur.nodeType === 1) {
+            if (cur.hasAttribute && cur.hasAttribute('hidden')) return false;
+            if (cur.style && (cur.style.display === 'none' || cur.style.visibility === 'hidden')) return false;
+            if (typeof window !== 'undefined' && typeof window.getComputedStyle === 'function') {
+              try {
+                const cs = window.getComputedStyle(cur);
+                if (cs && (cs.display === 'none' || cs.visibility === 'hidden')) return false;
+              } catch (e) {}
+            }
+            cur = cur.parentElement;
+          }
+          return true;
+        };
+
+        window.__getSubagentBadges = function() {
+          let candidates = [];
+          try {
+            candidates = Array.from(document.querySelectorAll('div[title="Subagent"], [data-swarm-worker], .text-secondary-foreground:has(> span)'));
+          } catch (e) {
+            candidates = Array.from(document.querySelectorAll('div[title="Subagent"], [data-swarm-worker], .text-secondary-foreground'));
+          }
+          return candidates.filter(badge =>
+            Array.from(badge.querySelectorAll('span')).some(s => /^(self|swarm|builder)$/i.test(String(s.textContent || '').trim()))
+          );
+        };
+
+        window.__findActiveSubagentSession = function() {
+          const badges = window.__getSubagentBadges ? window.__getSubagentBadges() : [];
+          const visibleBadges = badges.filter(b => window.__isElementVisible(b));
+          const activeEl = (typeof document !== 'undefined') ? document.activeElement : null;
+
+          if (visibleBadges.length > 0) {
+            if (activeEl && activeEl !== document.body && activeEl !== document.documentElement) {
+              for (const badge of visibleBadges) {
+                const container = (badge.closest && badge.closest('[data-conversation-id], [data-cascade-id], [data-subagent-session-id], [data-subagent-container]')) || badge.parentElement;
+                if (container && (container === activeEl || (typeof container.contains === 'function' && container.contains(activeEl)))) {
+                  return { badge, sessionId: window.__resolveSubagentSessionId(badge) };
+                }
+              }
+            }
+            const selectedBadge = visibleBadges[visibleBadges.length - 1];
+            return { badge: selectedBadge, sessionId: window.__resolveSubagentSessionId(selectedBadge) };
+          }
+
+          if (activeEl && activeEl !== document.body && activeEl !== document.documentElement && typeof activeEl.closest === 'function') {
+            const focusedSub = activeEl.closest('[data-subagent-session-id], [data-subagent-container]');
+            if (focusedSub && window.__isElementVisible(focusedSub)) {
+              return { badge: focusedSub, sessionId: window.__resolveSubagentSessionId(focusedSub) };
+            }
+          }
+
+          return null;
+        };
+
+        window.__getActiveMenubarSlotModels = function() {
+          const globalSlots = window.__getSavedModelSlots();
+          const activeSubagent = (typeof window.__findActiveSubagentSession === 'function')
+            ? window.__findActiveSubagentSession()
+            : null;
+          if (activeSubagent && activeSubagent.sessionId && typeof window.__getSavedSubagentSessionSlots === 'function') {
+            const sessionSlots = window.__getSavedSubagentSessionSlots(activeSubagent.sessionId);
+            return {
+              ...globalSlots,
+              builder: sessionSlots.builder || globalSlots.builder,
+              activeSessionId: activeSubagent.sessionId
+            };
+          }
+          return { ...globalSlots, activeSessionId: null };
+        };
+
+        window.__updateMenubarSlotButtons = function(slots) {
+          const effectiveSlots = slots || window.__getActiveMenubarSlotModels();
+          ['planner', 'builder'].forEach(role => {
+            const modelId = effectiveSlots[role];
+            const model = window.__getModelById ? window.__getModelById(modelId) : null;
+            if (!model) return;
+            document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="' + role + '"]').forEach(btn => {
+              const expectedSessionId = (role === 'builder' && effectiveSlots.activeSessionId)
+                ? effectiveSlots.activeSessionId
+                : '';
+              const expectedTitle = (role === 'planner' ? 'Planner Model: ' : 'Builder Model: ') + model.name;
+              const expectedVal = model.shortName || model.name;
+              const valEl = btn.querySelector('.model-slot-value');
+              const dotEl = btn.querySelector('.model-slot-dot');
+
+              const isUnchanged = (
+                (btn.getAttribute('data-model-id') || '') === model.id &&
+                (btn.getAttribute('data-session-id') || '') === expectedSessionId &&
+                (btn.getAttribute('title') || '') === expectedTitle &&
+                (!valEl || valEl.textContent === expectedVal)
+              );
+              if (isUnchanged) return;
+
+              btn.setAttribute('data-model-id', model.id);
+              if (expectedSessionId) {
+                btn.setAttribute('data-session-id', expectedSessionId);
+              } else if (btn.hasAttribute('data-session-id')) {
+                btn.removeAttribute('data-session-id');
+              }
+              btn.setAttribute('title', expectedTitle);
+              if (valEl && valEl.textContent !== expectedVal) {
+                valEl.textContent = expectedVal;
+              }
+              if (dotEl) {
+                dotEl.style.background = model.color;
+                dotEl.style.boxShadow = '0 0 6px ' + model.color;
+              }
+            });
+          });
+        };
+
+        window.__syncSubagentModelBadges = function() {
+          const badges = window.__getSubagentBadges ? window.__getSubagentBadges() : [];
+
+          badges.forEach(badge => {
+            const selfSpan = Array.from(badge.querySelectorAll('span')).find(s => /^(self|swarm|builder)$/i.test(String(s.textContent || '').trim()));
+            if (!selfSpan) return;
+
+            const sessionId = window.__resolveSubagentSessionId(badge);
+            const hasSaved = window.__hasSavedSubagentSessionSlots ? window.__hasSavedSubagentSessionSlots(sessionId) : false;
+            const sessionSlots = window.__getSavedSubagentSessionSlots(sessionId);
+
+            if (sessionId && !hasSaved && typeof window.__saveSubagentSessionSlots === 'function') {
+              window.__saveSubagentSessionSlots(sessionId, {
+                planner: sessionSlots.planner,
+                builder: sessionSlots.builder
+              });
+            }
+
+            const builderModelId = sessionSlots.builder || 'gemini-4-hydrogen-high';
+            const model = (typeof window.__getModelById === 'function')
+              ? window.__getModelById(builderModelId)
+              : { id: builderModelId, name: builderModelId, shortName: builderModelId, color: '#34d399' };
+
+            let pill = badge.querySelector('#antigravity-subagent-model-pill');
+            if (!pill) {
+              pill = badge.querySelector('.antigravity-subagent-model-pill');
+            }
+
+            if (pill) {
+              const expectedSessionId = sessionId || '';
+              const currentModelId = pill.getAttribute('data-model-id') || '';
+              const currentSessionId = pill.getAttribute('data-session-id') || '';
+              const expectedTitle = 'Subagent Builder Model: ' + model.name;
+              const currentTitle = pill.getAttribute('title') || '';
+              const label = pill.querySelector('.subagent-model-label');
+              const isUnchanged = (
+                currentModelId === model.id &&
+                currentSessionId === expectedSessionId &&
+                currentTitle === expectedTitle &&
+                (!label || label.textContent === model.shortName)
+              );
+              if (!isUnchanged) {
+                pill.setAttribute('data-model-id', model.id);
+                if (sessionId) {
+                  pill.setAttribute('data-session-id', sessionId);
+                } else if (pill.hasAttribute('data-session-id')) {
+                  pill.removeAttribute('data-session-id');
+                }
+                pill.setAttribute('title', expectedTitle);
+                pill.style.borderColor = model.color + '55';
+                pill.style.background = model.color + '18';
+                pill.style.color = model.color;
+                const dot = pill.querySelector('.subagent-model-dot');
+                if (dot) {
+                  dot.style.background = model.color;
+                  dot.style.boxShadow = '0 0 5px ' + model.color;
+                }
+                if (label) {
+                  label.textContent = model.shortName;
+                }
+              }
+            } else if (typeof window.__renderSubagentModelPill === 'function') {
+              const temp = document.createElement('div');
+              temp.innerHTML = window.__renderSubagentModelPill(builderModelId, window.__MODEL_CATALOG);
+              const newPill = temp.firstElementChild;
+              if (newPill) {
+                if (sessionId) {
+                  newPill.setAttribute('data-session-id', sessionId);
+                }
+                selfSpan.after(newPill);
+              }
+            }
+          });
+
+          if (typeof window.__updateMenubarSlotButtons === 'function') {
+            window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+          }
+        };
+
+        window.__syncModelSlotsUI = function() {
+          if (typeof window.__updateMenubarSlotButtons === 'function') {
+            window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+          }
+          if (typeof window.__syncSubagentModelBadges === 'function') {
+            window.__syncSubagentModelBadges();
+          }
+          if (typeof window.__syncPlannerSyncButtons === 'function') {
+            window.__syncPlannerSyncButtons();
+          }
+        };
+
+        window.__resolveNativeModelTarget = function(modelId) {
+          if (!modelId || typeof modelId !== 'string') return null;
+          const resolved = (typeof window.__getModelById === 'function')
+            ? window.__getModelById(modelId)
+            : null;
+          const effectiveId = (resolved && resolved.id === modelId) ? resolved.id : modelId;
+
+          const baseModels = Array.isArray(window.__BASE_MODELS) ? window.__BASE_MODELS : [];
+          for (const bm of baseModels) {
+            if (!bm || !Array.isArray(bm.efforts)) continue;
+            const foundEff = bm.efforts.find(e => e.id === effectiveId);
+            if (foundEff) {
+              const isDirectSelect =
+                bm.efforts.length === 1 &&
+                (
+                  String(foundEff.label || '').toLowerCase() === 'standard' ||
+                  /^orchestrator/i.test(bm.name) ||
+                  /^gpt-oss/i.test(bm.name)
+                );
+              return {
+                base: bm.name,
+                effort: isDirectSelect ? null : (foundEff.label || null)
+              };
+            }
+          }
+
+          if (effectiveId === 'gemini-pro-orchestrator-neon') {
+            return { base: 'Orchestrator (Neon)', effort: null };
+          }
+          if (effectiveId === 'gemini-pro-orchestrator-g1-pro') {
+            return { base: 'Orchestrator (Argon)', effort: null };
+          }
+          if (effectiveId.startsWith('gpt-oss-120b-')) {
+            return { base: 'GPT-OSS 120B', effort: null };
+          }
+
+          const basePrefixes = [
+            { prefix: 'gemini-4-neon-', base: 'Gemini 4 Neon' },
+            { prefix: 'gemini-4-argon-', base: 'Gemini 4 Argon' },
+            { prefix: 'gemini-4-hydrogen-', base: 'Gemini 4 Hydrogen' },
+            { prefix: 'gemini-3.8-flash-', base: 'Gemini 3.8 Flash' },
+            { prefix: 'claude-opus-5-5-', base: 'Claude Opus 5.5' },
+            { prefix: 'claude-sonnet-5-5-', base: 'Claude Sonnet 5.5' }
+          ];
+
+          const effortLabels = {
+            minimal: 'Minimal',
+            low: 'Low',
+            medium: 'Medium',
+            high: 'High',
+            xhigh: 'XHigh',
+            max: 'Max'
+          };
+
+          for (const entry of basePrefixes) {
+            if (effectiveId.startsWith(entry.prefix)) {
+              const rawEffort = effectiveId.slice(entry.prefix.length).toLowerCase();
+              return {
+                base: entry.base,
+                effort: effortLabels[rawEffort] || null
+              };
+            }
+          }
+          return null;
+        };
+
+        window.__resolveModelIdFromNativeText = function(rawText) {
+          if (!rawText || typeof rawText !== 'string') return null;
+          const text = rawText.trim().toLowerCase();
+          if (!text) return null;
+
+          const normalizedText = text.replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim();
+          const catalog = Array.isArray(window.__MODEL_CATALOG) ? window.__MODEL_CATALOG : [];
+          const baseModels = Array.isArray(window.__BASE_MODELS) ? window.__BASE_MODELS : [];
+
+          // 1. Direct normalized match against live catalog names
+          for (const item of catalog) {
+            if (!item || !item.name) continue;
+            const itemNorm = String(item.name).toLowerCase().replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim();
+            if (itemNorm === normalizedText) {
+              return item.id;
+            }
+          }
+
+          // 2. Dynamic base-model + effort resolution against live BASE_MODELS
+          let detectedEffortKey = null;
+          if (/(?:^|[^a-z])xhigh(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'xhigh';
+          else if (/(?:^|[^a-z])high(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'high';
+          else if (/(?:^|[^a-z])(?:medium|med)(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'medium';
+          else if (/(?:^|[^a-z])low(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'low';
+          else if (/(?:^|[^a-z])minimal(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'minimal';
+          else if (/(?:^|[^a-z])max(?:$|[^a-z])/i.test(text)) detectedEffortKey = 'max';
+
+          // Sort longest base names first so "Orchestrator (Neon)" matches before shorter substrings
+          const sortedBases = baseModels.slice().sort((a, b) => String(b.name || '').length - String(a.name || '').length);
+          for (const bm of sortedBases) {
+            if (!bm || !bm.name || !Array.isArray(bm.efforts) || bm.efforts.length === 0) continue;
+            const bmNorm = String(bm.name).toLowerCase().replace(/[()]/g, ' ').replace(/\s+/g, ' ').trim();
+            if (normalizedText.includes(bmNorm)) {
+              if (bm.efforts.length === 1) {
+                return bm.efforts[0].id;
+              }
+              if (detectedEffortKey) {
+                const effMatch = bm.efforts.find(e => String(e.label || '').toLowerCase() === detectedEffortKey || String(e.id || '').toLowerCase().endsWith('-' + detectedEffortKey));
+                if (effMatch) return effMatch.id;
+              }
+              const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+              if (saved && saved.planner) {
+                const savedMatch = bm.efforts.find(e => e.id === saved.planner);
+                if (savedMatch) return savedMatch.id;
+              }
+              const highDefault = bm.efforts.find(e => String(e.label || '').toLowerCase() === 'high');
+              return (highDefault || bm.efforts[0]).id;
+            }
+          }
+
+          // 3. Legacy fuzzy keyword fallback
+          if (text.includes('orchestrator')) {
+            if (text.includes('neon')) return 'gemini-pro-orchestrator-neon';
+            return 'gemini-pro-orchestrator-g1-pro';
+          }
+          if (text.includes('gpt-oss') || text.includes('120b')) return 'gpt-oss-120b-medium';
+
+          let basePrefix = null;
+          if (text.includes('neon')) basePrefix = 'gemini-4-neon-';
+          else if (text.includes('argon')) basePrefix = 'gemini-4-argon-';
+          else if (text.includes('hydrogen')) basePrefix = 'gemini-4-hydrogen-';
+          else if (text.includes('3.8') && text.includes('flash')) basePrefix = 'gemini-3.8-flash-';
+          else if (text.includes('opus')) basePrefix = 'claude-opus-5-5-';
+          else if (text.includes('sonnet')) basePrefix = 'claude-sonnet-5-5-';
+
+          if (!basePrefix) return null;
+
+          let effort = detectedEffortKey;
+          if (!effort) {
+            const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+            if (saved && saved.planner && saved.planner.startsWith(basePrefix)) {
+              effort = saved.planner.slice(basePrefix.length);
+            } else {
+              effort = 'high';
+            }
+          }
+
+          const candidateId = basePrefix + effort;
+          const found = catalog.find(m => m.id === candidateId);
+          return found ? found.id : null;
+        };
+
+        window.__nativeModelSyncTimers = window.__nativeModelSyncTimers || [];
+        window.__nativeModelSyncInProgress = false;
+        window.__nativeModelSyncToken = window.__nativeModelSyncToken || 0;
+
+        window.__getNativeModelContext = function(triggerEl) {
+          try {
+            const el = triggerEl || (() => {
+              const list = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+              return list[list.length - 1] || list[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
+            })();
+            if (!el) return null;
+            const reactKey = Object.keys(el).find(k => k.startsWith('__reactFiber'));
+            if (!reactKey) return null;
+            let cur = el[reactKey];
+            let depth = 0;
+            while (cur && depth < 35) {
+              const val = cur.memoizedProps && cur.memoizedProps.value;
+              if (val && Array.isArray(val.modelOptions) && val.modelOptions.length > 0) {
+                return val;
+              }
+              cur = cur.return;
+              depth++;
+            }
+          } catch (e) {}
+          return null;
+        };
+
+        window.__isNativeSelectorLocked = function() {
+          const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+          if (!saved) return true;
+          if (saved.enabled === false) return false;
+          if (saved.plannerSyncBroken === true) return false;
+          return saved.lockNative !== false;
+        };
+
+        window.__installNativeModelLockGuard = function(triggerEl) {
+          if (!triggerEl || typeof triggerEl.removeEventListener !== 'function') return;
+          // Soft-lock policy: never block pointer or keyboard interaction on the native chatbox model selector.
+          // Clean up any legacy capture-phase blocking listeners from earlier versions.
+          if (triggerEl.__antigravityLockGuard) {
+            for (const evName of ['click', 'mousedown', 'pointerdown', 'keydown']) {
+              try {
+                triggerEl.removeEventListener(evName, triggerEl.__antigravityLockGuard, true);
+              } catch (e) {}
+            }
+            triggerEl.__antigravityLockGuard = null;
+          }
+        };
+
+        window.__syncPlannerSyncButtons = function() {
+          const synced = window.__isNativeSelectorLocked();
+          const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+          const plannerId = (saved && saved.planner) || 'gemini-4-argon-high';
+          const plannerModel = (typeof window.__getModelById === 'function') ? window.__getModelById(plannerId) : null;
+          const plannerName = (plannerModel && plannerModel.name) || plannerId;
+          const plannerShort = (plannerModel && plannerModel.shortName) || plannerName;
+          const overrideId = saved && saved.nativeOverrideModel;
+          const overrideModel = (overrideId && typeof window.__getModelById === 'function') ? window.__getModelById(overrideId) : null;
+          const overrideLabel = (overrideModel && overrideModel.shortName) || overrideId || '';
+
+          const menubarTitle = synced
+            ? ('Chat synced with Planner (' + plannerName + ') - Click to re-sync')
+            : ('Sync broken' + (overrideLabel ? ' (chat: ' + overrideLabel + ')' : '') + ' - Click to sync chat back to Planner (' + plannerName + ')');
+
+          const chatTitle = 'Sync chat model back to Planner (' + plannerName + ')';
+
+          // 1. Update menubar Sync Planner button(s)
+          document.querySelectorAll('.antigravity-planner-sync-btn, #antigravity-planner-sync-btn').forEach(btn => {
+            const nextState = synced ? 'synced' : 'desynced';
+            if (btn.getAttribute('data-sync-state') !== nextState) {
+              btn.setAttribute('data-sync-state', nextState);
+            }
+            if (btn.getAttribute('aria-pressed') !== (synced ? 'true' : 'false')) {
+              btn.setAttribute('aria-pressed', synced ? 'true' : 'false');
+            }
+            if (btn.getAttribute('title') !== menubarTitle) {
+              btn.setAttribute('title', menubarTitle);
+            }
+            if (btn.classList) {
+              btn.classList.toggle('is-synced', synced);
+              btn.classList.toggle('is-desynced', !synced);
+            }
+          });
+
+          // 2. Highlight menubar Planner button subtly when sync is broken
+          document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="planner"]').forEach(btn => {
+            if (btn.classList) {
+              btn.classList.toggle('is-desynced', !synced);
+            }
+          });
+
+          // 3. Ensure and update inline chatbox Sync Plan button next to each native model selector
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          if (!triggers.length) {
+            const single = document.querySelector('button[data-testid="model-selector-trigger"]');
+            if (single) triggers.push(single);
+          }
+
+          triggers.forEach(trigger => {
+            const parent = trigger && trigger.parentElement;
+            if (!parent) return;
+            if (parent.closest && parent.closest('[role="dialog"], [role="menu"], .agy-overlay')) return;
+            const row = (parent.closest && parent.closest('.flex.items-center')) || parent;
+            const slotContainer = row && typeof row.querySelector === 'function'
+              ? row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')
+              : null;
+            const host = slotContainer || row;
+            if (!host) return;
+
+            let chatBtn = (typeof host.querySelector === 'function')
+              ? host.querySelector('.antigravity-chat-planner-sync-btn')
+              : null;
+
+            if (!chatBtn && typeof document.createElement === 'function') {
+              chatBtn = document.createElement('button');
+              chatBtn.setAttribute('type', 'button');
+              chatBtn.setAttribute('class', 'antigravity-chat-planner-sync-btn');
+              chatBtn.setAttribute('aria-label', 'Sync chat model to Planner');
+              chatBtn.setAttribute('data-antigravity-internal', 'true');
+              chatBtn.innerHTML = '<svg aria-hidden="true" class="chat-planner-sync-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg><span class="chat-planner-sync-label">Sync Plan</span>';
+              if (slotContainer) {
+                if (typeof slotContainer.prepend === 'function') {
+                  slotContainer.prepend(chatBtn);
+                } else if (typeof slotContainer.insertBefore === 'function' && slotContainer.firstElementChild) {
+                  slotContainer.insertBefore(chatBtn, slotContainer.firstElementChild);
+                } else if (typeof slotContainer.appendChild === 'function') {
+                  slotContainer.appendChild(chatBtn);
+                }
+              } else if (typeof trigger.after === 'function') {
+                trigger.after(chatBtn);
+              } else if (typeof host.appendChild === 'function') {
+                host.appendChild(chatBtn);
+              }
+            }
+
+            if (chatBtn) {
+              const nextState = synced ? 'synced' : 'desynced';
+              if (chatBtn.getAttribute('data-sync-state') !== nextState) {
+                chatBtn.setAttribute('data-sync-state', nextState);
+              }
+              if (chatBtn.getAttribute('data-planner-model') !== plannerId) {
+                chatBtn.setAttribute('data-planner-model', plannerId);
+              }
+              if (chatBtn.getAttribute('title') !== chatTitle) {
+                chatBtn.setAttribute('title', chatTitle);
+              }
+              chatBtn.hidden = synced;
+              if (chatBtn.classList) {
+                chatBtn.classList.toggle('is-desynced', !synced);
+              }
+              const labelEl = typeof chatBtn.querySelector === 'function'
+                ? chatBtn.querySelector('.chat-planner-sync-label')
+                : null;
+              const expectedLabel = 'Sync: ' + plannerShort;
+              if (labelEl && labelEl.textContent !== expectedLabel) {
+                labelEl.textContent = expectedLabel;
+              }
+            }
+          });
+        };
+
+        window.__applyNativeModelSelectorLock = function() {
+          const synced = window.__isNativeSelectorLocked();
+          const saved = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+          const plannerId = (saved && saved.planner) || 'gemini-4-argon-high';
+          const plannerModel = (typeof window.__getModelById === 'function') ? window.__getModelById(plannerId) : null;
+          const plannerLabel = (plannerModel && plannerModel.shortName) || plannerId;
+
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          if (!triggers.length) {
+            const single = document.querySelector('button[data-testid="model-selector-trigger"]');
+            if (single) triggers.push(single);
+          }
+          triggers.forEach(trigger => {
+            if (typeof window.__installNativeModelLockGuard === 'function') {
+              window.__installNativeModelLockGuard(trigger);
+            }
+            if (trigger.removeAttribute) {
+              trigger.removeAttribute('aria-disabled');
+            }
+            if (synced) {
+              if (trigger.setAttribute) {
+                trigger.setAttribute('data-antigravity-locked', 'true');
+                trigger.setAttribute('data-antigravity-sync', 'synced');
+                trigger.setAttribute('title', 'Synced with Planner Slot (' + plannerLabel + ') — click to override');
+              }
+              if (trigger.classList) {
+                if (typeof trigger.classList.add === 'function') trigger.classList.add('antigravity-native-model-locked');
+                if (typeof trigger.classList.remove === 'function') trigger.classList.remove('antigravity-native-model-desynced');
+              }
+            } else {
+              if (trigger.removeAttribute) {
+                trigger.removeAttribute('data-antigravity-locked');
+              }
+              if (trigger.setAttribute) {
+                trigger.setAttribute('data-antigravity-sync', 'desynced');
+                trigger.setAttribute('title', 'Out of sync with Planner (' + plannerLabel + ') — click Sync Plan to restore');
+              }
+              if (trigger.classList) {
+                if (typeof trigger.classList.remove === 'function') trigger.classList.remove('antigravity-native-model-locked');
+                if (typeof trigger.classList.add === 'function') trigger.classList.add('antigravity-native-model-desynced');
+              }
+            }
+          });
+          if (typeof window.__syncPlannerSyncButtons === 'function') {
+            window.__syncPlannerSyncButtons();
+          }
+          return synced;
+        };
+
+        window.__breakNativePlannerSync = function(overrideModelId) {
+          const current = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+          const nextOverride = overrideModelId || null;
+          const alreadyBroken = (
+            current.lockNative === false &&
+            current.plannerSyncBroken === true &&
+            (current.nativeOverrideModel || null) === nextOverride
+          );
+          if (alreadyBroken) {
+            if (typeof window.__applyNativeModelSelectorLock === 'function') {
+              window.__applyNativeModelSelectorLock();
+            }
+            return false;
+          }
+
+          current.lockNative = false;
+          current.plannerSyncBroken = true;
+          current.nativeOverrideModel = nextOverride;
+          current.updatedAt = Date.now();
+          try {
+            localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+          } catch (e) {}
+
+          if (typeof window.__applyNativeModelSelectorLock === 'function') {
+            window.__applyNativeModelSelectorLock();
+          }
+
+          // Update dropdown toggle button if Planner dropdown is currently open
+          const portal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          const lockToggleBtn = portal && typeof portal.querySelector === 'function'
+            ? portal.querySelector('.model-slot-lock-toggle')
+            : null;
+          if (lockToggleBtn) {
+            if (lockToggleBtn.classList) {
+              lockToggleBtn.classList.remove('locked');
+              lockToggleBtn.classList.add('desynced');
+            }
+            lockToggleBtn.setAttribute('data-locked', 'false');
+            lockToggleBtn.setAttribute('aria-pressed', 'false');
+            lockToggleBtn.setAttribute('title', 'Sync broken by manual chat selection. Click to sync back to Planner slot.');
+            const lbl = typeof lockToggleBtn.querySelector === 'function' ? lockToggleBtn.querySelector('.model-lock-label') : null;
+            if (lbl) lbl.textContent = 'Sync Planner';
+          }
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  planner: current.planner,
+                  builder: current.builder,
+                  enabled: current.enabled !== false,
+                  lockNative: false,
+                  plannerSyncBroken: true,
+                  nativeOverrideModel: nextOverride
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+
+          return true;
+        };
+
+        window.__syncPlannerModelToChat = function() {
+          const current = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+          current.lockNative = true;
+          current.plannerSyncBroken = false;
+          current.nativeOverrideModel = null;
+          current.updatedAt = Date.now();
+          try {
+            localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+          } catch (e) {}
+
+          if (typeof window.__applyNativeModelSelectorLock === 'function') {
+            window.__applyNativeModelSelectorLock();
+          }
+          if (current.planner && typeof window.__syncNativeModelSelector === 'function') {
+            window.__syncNativeModelSelector(current.planner);
+          }
+
+          // Update dropdown toggle button if Planner dropdown is currently open
+          const portal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          const lockToggleBtn = portal && typeof portal.querySelector === 'function'
+            ? portal.querySelector('.model-slot-lock-toggle')
+            : null;
+          if (lockToggleBtn) {
+            if (lockToggleBtn.classList) {
+              lockToggleBtn.classList.add('locked');
+              lockToggleBtn.classList.remove('desynced');
+            }
+            lockToggleBtn.setAttribute('data-locked', 'true');
+            lockToggleBtn.setAttribute('aria-pressed', 'true');
+            lockToggleBtn.setAttribute('title', 'Chat synced with Planner slot. Change model in chat anytime to override.');
+            const lbl = typeof lockToggleBtn.querySelector === 'function' ? lockToggleBtn.querySelector('.model-lock-label') : null;
+            if (lbl) lbl.textContent = 'Chat Synced';
+          }
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  planner: current.planner,
+                  builder: current.builder,
+                  enabled: current.enabled !== false,
+                  lockNative: true,
+                  plannerSyncBroken: false,
+                  nativeOverrideModel: null
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+
+          return true;
+        };
+
+        window.__toggleNativeModelLock = function() {
+          const isCurrentlySynced = window.__isNativeSelectorLocked();
+          if (!isCurrentlySynced) {
+            window.__syncPlannerModelToChat();
+            return true;
+          }
+          window.__breakNativePlannerSync(null);
+          return false;
+        };
+
+        window.__syncNativeModelSelector = function(modelId) {
+          if (!modelId) return false;
+          const resolved = (typeof window.__getModelById === 'function')
+            ? window.__getModelById(modelId)
+            : null;
+          const targetId = (resolved && resolved.id === modelId) ? resolved.id : modelId;
+          const target = window.__resolveNativeModelTarget ? window.__resolveNativeModelTarget(targetId) : null;
+          if (!target) return false;
+
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
+          if (!activeTrigger) return false;
+
+          // Primary path: invoke Antigravity's native React Context setSelectedModel directly (0ms, zero flicker, works while locked)
+          const nativeCtx = (typeof window.__getNativeModelContext === 'function')
+            ? window.__getNativeModelContext(activeTrigger)
+            : null;
+          if (nativeCtx && typeof nativeCtx.setSelectedModel === 'function' && Array.isArray(nativeCtx.modelOptions)) {
+            const matchedOpt = nativeCtx.modelOptions.find(opt => opt && !opt.disabled && (opt.modelId === targetId || opt.id === targetId))
+              || nativeCtx.modelOptions.find(opt => {
+                if (!opt || opt.disabled || !opt.label) return false;
+                const lbl = String(opt.label).toLowerCase();
+                const hasB = lbl.includes(target.base.toLowerCase());
+                const hasE = target.effort ? lbl.includes('(' + target.effort.toLowerCase() + ')') : true;
+                return hasB && hasE;
+              });
+            if (matchedOpt) {
+              const currentNativeId = nativeCtx.selectedModel && (nativeCtx.selectedModel.modelId || nativeCtx.selectedModel.id);
+              if (currentNativeId === matchedOpt.modelId) {
+                return true;
+              }
+              const token = ++window.__nativeModelSyncToken;
+              window.__nativeModelSyncInProgress = true;
+              try {
+                nativeCtx.setSelectedModel(matchedOpt);
+              } finally {
+                const settleTimer = setTimeout(() => {
+                  if (window.__nativeModelSyncToken === token) {
+                    window.__nativeModelSyncInProgress = false;
+                  }
+                }, 120);
+                window.__nativeModelSyncTimers.push(settleTimer);
+              }
+              return true;
+            }
+          }
+
+          const matchesEffortText = (text, effort) => {
+            if (!effort) return true;
+            const escaped = effort.replace(/[.*+?^$()|[\\]\\\\]/g, '\\\\$&').replace(/[{}]/g, '\\\\$&');
+            return new RegExp('(?:^|[^a-zA-Z])' + escaped + '(?:$|[^a-zA-Z])', 'i').test(text);
+          };
+
+          const currentText = (activeTrigger.textContent || '').trim();
+          const hasBase = currentText.toLowerCase().includes(target.base.toLowerCase());
+          const hasEffort = target.effort ? matchesEffortText(currentText, target.effort) : true;
+          if (hasBase && hasEffort) {
+            return true;
+          }
+
+          if (Array.isArray(window.__nativeModelSyncTimers)) {
+            while (window.__nativeModelSyncTimers.length > 0) {
+              clearTimeout(window.__nativeModelSyncTimers.pop());
+            }
+          }
+          const token = ++window.__nativeModelSyncToken;
+          window.__nativeModelSyncInProgress = true;
+
+          const finishSync = () => {
+            if (window.__nativeModelSyncToken === token) {
+              const settleTimer = setTimeout(() => {
+                if (window.__nativeModelSyncToken === token) {
+                  window.__nativeModelSyncInProgress = false;
+                }
+              }, 120);
+              window.__nativeModelSyncTimers.push(settleTimer);
+            }
+          };
+
+          if (typeof activeTrigger.click === 'function') {
+            activeTrigger.click();
+          }
+
+          const t1 = setTimeout(() => {
+            if (window.__nativeModelSyncToken !== token) return;
+            const menuItems = Array.from(document.querySelectorAll('[role="menuitem"], [data-testid="model-selector-item"]'));
+            const baseRow = menuItems.find(el => {
+              const text = (el.textContent || '').trim().toLowerCase();
+              const label = (el.getAttribute && (el.getAttribute('data-model-label') || '')).trim().toLowerCase();
+              const needle = target.base.toLowerCase();
+              return text.includes(needle) || label.includes(needle);
+            });
+
+            if (!baseRow) {
+              window.__nativeModelSyncInProgress = false;
+              return;
+            }
+
+            if (!target.effort) {
+              if (typeof baseRow.click === 'function') {
+                baseRow.click();
+              }
+              finishSync();
+              return;
+            }
+
+            try {
+              if (typeof baseRow.dispatchEvent === 'function' && typeof MouseEvent === 'function') {
+                baseRow.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+              }
+            } catch (e) {}
+            if (typeof baseRow.click === 'function') {
+              baseRow.click();
+            }
+
+            const t2 = setTimeout(() => {
+              if (window.__nativeModelSyncToken !== token) return;
+              const subItems = Array.from(document.querySelectorAll('[role="menuitem"], [data-testid="model-selector-item"]'));
+              const effortNeedle = target.effort.toLowerCase();
+              const candidates = subItems.filter(el => el !== baseRow);
+              const effortItem = candidates.find(el => (el.textContent || '').trim().toLowerCase() === effortNeedle)
+                || candidates.find(el => matchesEffortText((el.textContent || '').trim(), target.effort))
+                || subItems.find(el => (el.textContent || '').trim().toLowerCase() === effortNeedle)
+                || subItems.find(el => matchesEffortText((el.textContent || '').trim(), target.effort));
+
+              if (effortItem && typeof effortItem.click === 'function') {
+                effortItem.click();
+              }
+              finishSync();
+            }, 100);
+            window.__nativeModelSyncTimers.push(t2);
+          }, 80);
+          window.__nativeModelSyncTimers.push(t1);
+          return true;
+        };
+
+        window.__syncPlannerFromNativeSelector = function() {
+          if (window.__nativeModelSyncInProgress) return false;
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          const activeTrigger = triggers[triggers.length - 1] || triggers[0] || document.querySelector('button[data-testid="model-selector-trigger"]');
+          if (!activeTrigger) return false;
+
+          const nativeCtx = (typeof window.__getNativeModelContext === 'function')
+            ? window.__getNativeModelContext(activeTrigger)
+            : null;
+          const ctxModelId = nativeCtx && nativeCtx.selectedModel && (nativeCtx.selectedModel.modelId || nativeCtx.selectedModel.id);
+          const detectedId = ctxModelId || (window.__resolveModelIdFromNativeText
+            ? window.__resolveModelIdFromNativeText(activeTrigger.textContent || '')
+            : null);
+          if (!detectedId) return false;
+
+          const current = (typeof window.__getSavedModelSlots === 'function')
+            ? window.__getSavedModelSlots()
+            : { ...(window.__DEFAULT_MODEL_SLOTS || { planner: 'gemini-4-argon-high', builder: 'gemini-4-hydrogen-high' }) };
+
+          if (!current.planner) return false;
+
+          // If user manually picked a different model in the chatbox selector,
+          // preserve the Planner slot and break synchronization instead of overwriting Planner or snapping back.
+          if (detectedId !== current.planner) {
+            if (typeof window.__breakNativePlannerSync === 'function') {
+              return window.__breakNativePlannerSync(detectedId);
+            }
+            return false;
+          }
+
+          // If the chatbox selector matches the Planner model again while desynced, restore synchronized state cleanly.
+          if (current.lockNative === false || current.plannerSyncBroken === true) {
+            current.lockNative = true;
+            current.plannerSyncBroken = false;
+            current.nativeOverrideModel = null;
+            current.updatedAt = Date.now();
+            try {
+              localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+            } catch (e) {}
+            if (typeof window.__applyNativeModelSelectorLock === 'function') {
+              window.__applyNativeModelSelectorLock();
+            }
+            try {
+              if (typeof fetch === 'function') {
+                fetch('http://127.0.0.1:53912/model-slots', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    planner: current.planner,
+                    builder: current.builder,
+                    enabled: current.enabled !== false,
+                    lockNative: true,
+                    plannerSyncBroken: false,
+                    nativeOverrideModel: null
+                  })
+                }).catch(function() {});
+              }
+            } catch (e) {}
+            return true;
+          }
+
+          return false;
+        };
+
+        window.__observedNativeTriggerSet = new WeakSet();
+        window.__observedNativeTriggersCount = 0;
+
+        window.__observeNativeModelSelector = function() {
+          if (typeof window.__applyNativeModelSelectorLock === 'function') {
+            window.__applyNativeModelSelectorLock();
+          }
+          if (typeof MutationObserver !== 'function') return;
+          const triggers = Array.from(document.querySelectorAll('button[data-testid="model-selector-trigger"]'));
+          if (!triggers.length) {
+            const single = document.querySelector('button[data-testid="model-selector-trigger"]');
+            if (single) triggers.push(single);
+          }
+          if (!triggers.length) return;
+
+          if (
+            window.__antigravityNativeModelObserver &&
+            window.__observedNativeTriggerSet &&
+            window.__observedNativeTriggersCount === triggers.length &&
+            triggers.every(trigger => window.__observedNativeTriggerSet.has(trigger))
+          ) {
+            return;
+          }
+
+          if (window.__antigravityNativeModelObserver) {
+            window.__antigravityNativeModelObserver.disconnect();
+          }
+          window.__antigravityNativeModelObserver = new MutationObserver(() => {
+            if (window.__nativeModelSyncInProgress) return;
+            if (typeof window.__syncPlannerFromNativeSelector === 'function') {
+              window.__syncPlannerFromNativeSelector();
+            }
+          });
+          const nextSet = new WeakSet();
+          triggers.forEach(trigger => {
+            nextSet.add(trigger);
+            window.__antigravityNativeModelObserver.observe(trigger, {
+              childList: true,
+              subtree: true,
+              characterData: true
+            });
+          });
+          window.__observedNativeTriggerSet = nextSet;
+          window.__observedNativeTriggersCount = triggers.length;
+        };
+
+        window.__selectModelForSlot = function(role, modelId) {
+          if (!role || !modelId) return;
+          const current = window.__getSavedModelSlots();
+          current[role] = modelId;
+          if (role === 'planner') {
+            current.lockNative = true;
+            current.plannerSyncBroken = false;
+            current.nativeOverrideModel = null;
+          }
+          current.updatedAt = Date.now();
+          try {
+            localStorage.setItem('__antigravity_model_slots', JSON.stringify(current));
+          } catch (e) {}
+
+          const activeSubagent = (typeof window.__findActiveSubagentSession === 'function')
+            ? window.__findActiveSubagentSession()
+            : null;
+          if (activeSubagent && activeSubagent.sessionId && typeof window.__saveSubagentSessionSlots === 'function') {
+            window.__saveSubagentSessionSlots(activeSubagent.sessionId, { [role]: modelId });
+          }
+
+          if (typeof window.__updateMenubarSlotButtons === 'function') {
+            window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+          }
+          document.querySelectorAll('.antigravity-model-slot-btn[data-slot-role="' + role + '"]').forEach(btn => {
+            btn.classList.remove('open');
+          });
+
+          const portal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          if (portal) {
+            portal.classList.remove('open');
+            portal.__currentBtn = null;
+          }
+
+          if (typeof window.__syncSubagentModelBadges === 'function') {
+            window.__syncSubagentModelBadges();
+          }
+
+          if (role === 'planner') {
+            if (typeof window.__applyNativeModelSelectorLock === 'function') {
+              window.__applyNativeModelSelectorLock();
+            }
+            if (typeof window.__syncNativeModelSelector === 'function') {
+              window.__syncNativeModelSelector(modelId);
+            }
+          }
+
+          try {
+            if (typeof fetch === 'function') {
+              fetch('http://127.0.0.1:53912/model-slots', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  planner: current.planner,
+                  builder: current.builder,
+                  enabled: current.enabled !== false,
+                  lockNative: current.lockNative !== false,
+                  plannerSyncBroken: current.plannerSyncBroken === true,
+                  nativeOverrideModel: current.nativeOverrideModel || null
+                })
+              }).catch(function() {});
+            }
+          } catch (e) {}
+        };
+
+        window.__toggleModelSlotDropdown = function(e, btnEl, role) {
+          if (e) {
+            e.stopPropagation();
+            e.preventDefault();
+          }
+          const btn = btnEl || (e ? e.currentTarget : null);
+          if (!btn) return;
+          const slotRole = role || btn.getAttribute('data-slot-role') || 'planner';
+
+          // Close other popovers
+          const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
+          if (aPortal) {
+            aPortal.classList.remove('open');
+            aPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+
+          const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+          if (tachPortal) {
+            tachPortal.classList.remove('open');
+            tachPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+          const mPortal = document.getElementById('antigravity-mods-manager-portal');
+          if (mPortal) {
+            mPortal.classList.remove('open');
+            mPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+
+          const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+          if (pwPortal) {
+            pwPortal.classList.remove('open');
+            pwPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+
+          let portal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          if (!portal) {
+            portal = document.createElement('div');
+            portal.id = 'antigravity-model-slot-dropdown-portal';
+            portal.className = 'antigravity-model-slot-dropdown-portal';
+            document.body.appendChild(portal);
+          }
+
+          const isCurrentOpen = portal.classList.contains('open') && portal.__currentBtn === btn;
+
+          document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+          portal.classList.remove('open');
+          portal.__currentBtn = null;
+
+          if (!isCurrentOpen) {
+            if (typeof window.__discoverNativeModelCatalog === 'function') {
+              window.__discoverNativeModelCatalog();
+            }
+            btn.classList.add('open');
+            portal.__currentBtn = btn;
+
+            const savedSlots = (typeof window.__getActiveMenubarSlotModels === 'function')
+              ? window.__getActiveMenubarSlotModels()
+              : window.__getSavedModelSlots();
+            const currentSelectedId = savedSlots[slotRole] || btn.getAttribute('data-model-id');
+
+            if (window.__renderModelSlotDropdownHtml) {
+              const lockNative = (typeof window.__isNativeSelectorLocked === 'function') ? window.__isNativeSelectorLocked() : true;
+              portal.innerHTML = window.__renderModelSlotDropdownHtml(
+                slotRole,
+                currentSelectedId,
+                window.__BASE_MODELS || window.__MODEL_CATALOG,
+                { lockNative }
+              );
+            }
+
+            const lockToggleBtn = portal.querySelector('.model-slot-lock-toggle');
+            if (lockToggleBtn) {
+              lockToggleBtn.onclick = (ev) => {
+                ev.stopPropagation();
+                ev.preventDefault();
+                if (typeof window.__syncPlannerModelToChat === 'function') {
+                  window.__syncPlannerModelToChat();
+                  lockToggleBtn.classList.add('locked');
+                  lockToggleBtn.classList.remove('desynced');
+                  lockToggleBtn.setAttribute('data-locked', 'true');
+                  lockToggleBtn.setAttribute('aria-pressed', 'true');
+                  lockToggleBtn.setAttribute('title', 'Chat synced with Planner slot. Change model in chat anytime to override.');
+                  const lbl = lockToggleBtn.querySelector('.model-lock-label');
+                  if (lbl) lbl.textContent = 'Chat Synced';
+                }
+              };
+            }
+
+            portal.querySelectorAll('.model-pack-header').forEach(header => {
+              header.onclick = (ev) => {
+                ev.stopPropagation();
+                ev.preventDefault();
+                const pack = header.closest('.model-pack');
+                if (!pack) return;
+                const willExpand = !pack.classList.contains('expanded');
+                portal.querySelectorAll('.model-pack.expanded').forEach(other => {
+                  other.classList.remove('expanded');
+                  const oh = other.querySelector('.model-pack-header');
+                  if (oh) oh.setAttribute('aria-expanded', 'false');
+                });
+                if (willExpand) {
+                  pack.classList.add('expanded');
+                  header.setAttribute('aria-expanded', 'true');
+                }
+              };
+            });
+
+            portal.querySelectorAll('.model-effort-option, .model-slot-option').forEach(opt => {
+              opt.onclick = (ev) => {
+                ev.stopPropagation();
+                ev.preventDefault();
+                const mId = opt.getAttribute('data-model-id');
+                const sRole = opt.getAttribute('data-slot-role') || slotRole;
+                window.__selectModelForSlot(sRole, mId);
+              };
+            });
+
+            portal.querySelectorAll('.model-slot-row').forEach(row => {
+              row.onclick = (ev) => {
+                if (ev.target.closest('.model-effort-option, .model-slot-option')) return;
+                const singleEffortId = row.getAttribute('data-model-id');
+                if (singleEffortId) {
+                  ev.stopPropagation();
+                  ev.preventDefault();
+                  const sRole = row.getAttribute('data-slot-role') || slotRole;
+                  window.__selectModelForSlot(sRole, singleEffortId);
+                  return;
+                }
+                const isOpen = row.classList.contains('open');
+                portal.querySelectorAll('.model-slot-row.open').forEach(r => r.classList.remove('open'));
+                if (!isOpen) {
+                  row.classList.add('open');
+                }
+              };
+            });
+
+            const rect = btn.getBoundingClientRect();
+            portal.style.top = (rect.bottom + 6) + 'px';
+            const portalWidth = 250;
+            const clampedLeft = Math.max(10, Math.min(window.innerWidth - portalWidth - 10, rect.left));
+            portal.style.left = clampedLeft + 'px';
+            portal.classList.add('open');
+
+            if (rect.left + 380 > window.innerWidth) {
+              portal.querySelectorAll('.model-slot-submenu').forEach(sub => {
+                sub.classList.add('submenu-left');
+              });
+            }
+          }
+        };
+
         window.__applyChatboxModsCompact = function() {
-          const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
-          document.querySelectorAll('.antigravity-tachometer-badge').forEach(tach => {
-            const footer = tach.closest('[class*="input-footer"]') || tach.closest('.flex.items-center.justify-between') || tach.parentElement;
-            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
-            tach.classList.toggle('compact', isForcedCompact || isNarrow);
-          });
-          document.querySelectorAll('.antigravity-agent-badge').forEach(agent => {
-            const footer = agent.closest('[class*="input-footer"]') || agent.closest('.flex.items-center.justify-between') || agent.parentElement;
-            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
-            agent.classList.toggle('compact', isForcedCompact || isNarrow);
-          });
+          if (document.hidden || window.innerWidth <= 0) return;
+          const chatboxSlots = document.querySelectorAll('#antigravity-slot-header-actions, .antigravity-slot-header-actions');
+          if (chatboxSlots.length) {
+            chatboxSlots.forEach(slot => applyCompactToChatboxScope(slot));
+            return;
+          }
+          document.querySelectorAll('.antigravity-tachometer-badge').forEach(el => applyCompactToChatboxScope(el));
+          document.querySelectorAll('.antigravity-agent-badge').forEach(el => applyCompactToChatboxScope(el));
+        };
+
+        window.__dockNativeVoiceToast = function(rootDoc) {
+          const doc = rootDoc || (typeof document !== 'undefined' ? document : null);
+          if (!doc) return null;
+
+          const EXCLUDED_IDS = [
+            'antigravity-git-panel-host',
+            'antigravity-agent-dropdown-portal',
+            'antigravity-tachometer-popover-portal',
+            'antigravity-mods-manager-portal'
+          ];
+
+          const isExcludedContainer = (el) => {
+            if (!el) return true;
+            for (const exId of EXCLUDED_IDS) {
+              if (el.id === exId) return true;
+              if (el.closest && el.closest('#' + exId)) return true;
+            }
+            if (el.matches && el.matches('[role="dialog"]:not([data-testid*="voice"]):not([class*="voice"])')) return true;
+            return false;
+          };
+
+          const getAttr = (el, name) => (el && typeof el.getAttribute === 'function' ? (el.getAttribute(name) || '') : '');
+          const setAttrIfMissing = (el, name, value) => {
+            if (el && typeof el.setAttribute === 'function' && !getAttr(el, name)) {
+              el.setAttribute(name, value);
+            }
+          };
+
+          const hasAudioControls = (el) => {
+            if (!el || typeof el.querySelector !== 'function') return false;
+            return Boolean(el.querySelector(
+              'button[aria-label*="mic" i], button[aria-label*="mute" i], button[aria-label*="audio" i], ' +
+              'button[aria-label*="speaker" i], button[aria-label*="speed" i], [data-testid*="mic"], ' +
+              '[data-testid*="mute"], [data-testid*="audio"], [data-testid="voice-call-speed"], ' +
+              '[data-testid="voice-speed-button"], [data-voice-control], button[title*="Mute" i], button[title*="Audio" i]'
+            ));
+          };
+
+          const resolveVoiceVariant = (el) => {
+            const tid = getAttr(el, 'data-testid').toLowerCase();
+            if (tid === 'voice-teleprompter-slot' || (el.querySelector && el.querySelector('[data-testid="live-docked"]'))) {
+              return 'teleprompter';
+            }
+            if (tid === 'voice-dock') return 'dock';
+            if (tid === 'voice-pill') return 'pill';
+            return 'generic';
+          };
+
+          const candidateButtons = Array.from(doc.querySelectorAll('button'));
+          let targetBar = null;
+
+          for (const btn of candidateButtons) {
+            if (isExcludedContainer(btn)) continue;
+
+            const text = (btn.textContent || '').trim().toLowerCase();
+            const label = getAttr(btn, 'aria-label').toLowerCase();
+            const testid = getAttr(btn, 'data-testid').toLowerCase();
+
+            const isEndBtn =
+              text === 'end' || text === 'end call' || text === 'terminar' || text === 'finalizar' ||
+              label.includes('end call') || label === 'end' || label.includes('end voice') || label.includes('end live') ||
+              label.includes('terminar llamada') || label.includes('finalizar llamada') ||
+              testid.includes('voice-end') || testid.includes('call-end') ||
+              testid === 'voice-dock-end' || testid === 'voice-call-end' || testid === 'voice-end-button';
+
+            if (!isEndBtn) continue;
+
+            let curr = btn.parentElement;
+            let bestMatch = null;
+
+            while (curr && curr !== doc.body && curr !== doc.documentElement) {
+              if (isExcludedContainer(curr)) break;
+
+              const currTestId = getAttr(curr, 'data-testid').toLowerCase();
+              const isNativeVoiceShell =
+                currTestId === 'voice-teleprompter-slot' ||
+                currTestId === 'voice-dock' ||
+                currTestId === 'live-docked' ||
+                currTestId === 'voice-pill';
+
+              if (!isNativeVoiceShell && curr.querySelector && curr.querySelector('textarea, [contenteditable="true"], .antigravity-slot-chat-input-actions')) {
+                break;
+              }
+
+              if (hasAudioControls(curr)) {
+                bestMatch = curr;
+              }
+
+              // Stop climbing once we capture the complete outer Voice HUD wrapper (which keeps mic warnings & drawers grouped).
+              if (currTestId === 'voice-teleprompter-slot' || currTestId === 'voice-dock') {
+                break;
+              }
+
+              curr = curr.parentElement;
+            }
+
+            if (bestMatch) {
+              targetBar = bestMatch;
+              break;
+            }
+          }
+
+          if (!targetBar) {
+            const directBar = doc.querySelector && doc.querySelector(
+              '[data-testid="voice-teleprompter-slot"], [data-testid="voice-dock"], ' +
+              '.antigravity-voice-toast, [data-testid*="voice-call-bar"], [data-testid*="voice-toast"], [data-voice-call-bar]'
+            );
+            if (directBar && !isExcludedContainer(directBar)) {
+              targetBar = directBar;
+            }
+          }
+
+          if (!targetBar) return null;
+
+          if (!targetBar.classList.contains('antigravity-voice-toast-docked')) {
+            targetBar.classList.add('antigravity-voice-toast-docked');
+            targetBar.setAttribute('data-antigravity-voice-docked', 'true');
+          }
+
+          // Annotate semantic HTML5 boxes-inside-boxes attributes cleanly without detaching React nodes.
+          const variant = resolveVoiceVariant(targetBar);
+          targetBar.setAttribute('data-voice-hud-box', 'viewport-anchor');
+          targetBar.setAttribute('data-voice-hud-variant', variant);
+          setAttrIfMissing(targetBar, 'role', 'region');
+          setAttrIfMissing(targetBar, 'aria-label', 'Voice mode HUD');
+
+          if (targetBar.querySelector) {
+            const surfaceEl = targetBar.querySelector('[data-testid="live-docked"]');
+            if (surfaceEl && surfaceEl !== targetBar) {
+              surfaceEl.setAttribute('data-voice-hud-box', 'surface');
+            }
+            const controlsEl = targetBar.querySelector('[data-testid="voice-call-controls"]');
+            if (controlsEl) {
+              controlsEl.setAttribute('data-voice-hud-box', 'header');
+            }
+            const drawerEl = targetBar.querySelector('[data-testid="live-docked-replies"], [data-testid="voice-dock-composer"]');
+            if (drawerEl) {
+              drawerEl.setAttribute('data-voice-hud-box', 'drawer');
+              drawerEl.setAttribute('data-voice-hud-placement', 'below');
+            }
+          }
+
+          if (targetBar.querySelectorAll) {
+            const alertEls = targetBar.querySelectorAll('[data-testid="voice-mic-warning"], [data-testid="voice-mic-switched"], [data-testid="voice-error-tip"]');
+            for (const alertEl of alertEls) {
+              if (alertEl && alertEl.setAttribute) {
+                alertEl.setAttribute('data-voice-hud-box', 'alert');
+                alertEl.setAttribute('data-voice-hud-placement', 'below');
+              }
+            }
+          }
+
+          // Compute live Top HUD vertical clearance below the 35px menubar if present.
+          const menuBar = doc.querySelector && doc.querySelector('[data-testid="title-menu-bar"]');
+          let hudTopPx = 4;
+          if (menuBar && typeof menuBar.getBoundingClientRect === 'function') {
+            const mbRect = menuBar.getBoundingClientRect();
+            if (mbRect && mbRect.height > 0 && mbRect.bottom > 0 && mbRect.bottom < 80) {
+              hudTopPx = Math.round(mbRect.bottom + 4);
+            }
+          }
+          if (targetBar.style && typeof targetBar.style.setProperty === 'function') {
+            targetBar.style.setProperty('--agy-voice-hud-top', hudTopPx + 'px');
+          }
+
+          const collapseBtn = targetBar.querySelector && targetBar.querySelector(
+            'button[aria-label*="collapse" i], button[aria-label*="minim" i], .collapse-btn, ' +
+            '[data-testid*="collapse"], [data-testid*="minim"], [data-mod-action="collapse-voice"]'
+          );
+          let isMinimized = false;
+          if (collapseBtn) {
+            const expanded = collapseBtn.getAttribute('aria-expanded');
+            if (expanded === 'false') {
+              isMinimized = true;
+            } else if (expanded === 'true') {
+              isMinimized = false;
+            } else {
+              isMinimized = collapseBtn.classList.contains('collapsed') || targetBar.classList.contains('minimized');
+            }
+          } else {
+            isMinimized = targetBar.classList.contains('minimized');
+          }
+
+          if (isMinimized) {
+            targetBar.classList.add('is-minimized');
+            targetBar.setAttribute('data-minimized', 'true');
+          } else {
+            targetBar.classList.remove('is-minimized');
+            targetBar.removeAttribute('data-minimized');
+          }
+
+          if (collapseBtn && !collapseBtn.__collapseSyncBound) {
+            collapseBtn.__collapseSyncBound = true;
+            collapseBtn.addEventListener('click', () => {
+              setTimeout(() => {
+                if (typeof window.__dockNativeVoiceToast === 'function') {
+                  window.__dockNativeVoiceToast(doc);
+                }
+              }, 40);
+            });
+          }
+
+          // Keep portaled speed slider & mic switcher popovers onscreen below Top HUD if BaseUI opens them upward.
+          if (targetBar.querySelectorAll && typeof targetBar.getBoundingClientRect === 'function') {
+            const popoverTriggers = targetBar.querySelectorAll(
+              '[data-testid="voice-call-speed"], [data-testid="voice-speed-button"], [data-testid="voice-mic-warning-switch"]'
+            );
+            for (const triggerEl of popoverTriggers) {
+              if (!triggerEl || triggerEl.__agyHudPopoverBound || typeof triggerEl.addEventListener !== 'function') continue;
+              triggerEl.__agyHudPopoverBound = true;
+              triggerEl.addEventListener('click', () => {
+                setTimeout(() => {
+                  const popEl = doc.querySelector && (
+                    doc.querySelector('[data-testid="voice-speed-panel"]') ||
+                    doc.querySelector('[data-popover-popup]')
+                  );
+                  const popupBox = popEl && popEl.closest ? (popEl.closest('[data-popover-popup]') || popEl) : popEl;
+                  const positioner = popupBox && popupBox.parentElement ? popupBox.parentElement : popupBox;
+                  if (positioner && typeof positioner.getBoundingClientRect === 'function' && positioner.style) {
+                    const barRect = targetBar.getBoundingClientRect();
+                    const posRect = positioner.getBoundingClientRect();
+                    if (posRect && barRect && posRect.top < Math.max(4, barRect.bottom + 4)) {
+                      positioner.style.top = Math.round(barRect.bottom + 8) + 'px';
+                      positioner.style.bottom = 'auto';
+                      positioner.style.zIndex = '10020';
+                    }
+                  }
+                }, 24);
+              });
+            }
+          }
+
+          return targetBar;
         };
 
         window.__applyModsVisibility = function() {
@@ -1253,6 +3361,17 @@ class ModLoader {
           const gitGraphEnabled = localStorage.getItem('__antigravity_mod_enabled_git-graph') !== 'false';
           document.querySelectorAll('#antigravity-git-tab-trigger, .antigravity-git-tab-trigger').forEach(b => {
             b.style.display = gitGraphEnabled ? 'inline-flex' : 'none';
+          });
+          if (!gitGraphEnabled && typeof window.__closeGitGraphPanel === 'function') {
+            window.__closeGitGraphPanel();
+          }
+          const modelSlotsEnabled = localStorage.getItem('__antigravity_mod_enabled_model-slots') !== 'false';
+          document.querySelectorAll('.antigravity-model-slots-group').forEach(b => {
+            b.style.display = modelSlotsEnabled ? 'inline-flex' : 'none';
+          });
+          const pitWallEnabled = localStorage.getItem('__antigravity_mod_enabled_pit-wall') !== 'false';
+          document.querySelectorAll('.antigravity-pit-wall-btn').forEach(b => {
+            b.style.display = pitWallEnabled ? 'inline-flex' : 'none';
           });
         };
 
@@ -1278,6 +3397,13 @@ class ModLoader {
             tachPortal.__currentBadge = null;
           }
           document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+          const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+          if (pwPortal) {
+            pwPortal.classList.remove('open');
+            pwPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
 
           let portal = document.getElementById('antigravity-mods-manager-portal');
           if (!portal) {
@@ -1356,6 +3482,26 @@ class ModLoader {
               };
             }
 
+            const modelSlotsEnabled = localStorage.getItem('__antigravity_mod_enabled_model-slots') !== 'false';
+            const modelSlotsInput = portal.querySelector('#mod-toggle-model-slots');
+            if (modelSlotsInput) {
+              modelSlotsInput.checked = modelSlotsEnabled;
+              modelSlotsInput.onchange = (ev) => {
+                localStorage.setItem('__antigravity_mod_enabled_model-slots', ev.target.checked);
+                window.__applyModsVisibility();
+              };
+            }
+
+            const pitWallEnabled = localStorage.getItem('__antigravity_mod_enabled_pit-wall') !== 'false';
+            const pitWallInput = portal.querySelector('#mod-toggle-pit-wall');
+            if (pitWallInput) {
+              pitWallInput.checked = pitWallEnabled;
+              pitWallInput.onchange = (ev) => {
+                localStorage.setItem('__antigravity_mod_enabled_pit-wall', ev.target.checked);
+                window.__applyModsVisibility();
+              };
+            }
+
             const daemonInput = portal.querySelector('#mod-toggle-daemon');
             const daemonPill = portal.querySelector('#daemon-status-pill');
             if (daemonInput) {
@@ -1393,6 +3539,229 @@ class ModLoader {
           }
         };
 
+        window.__hidePitWallTooltip = function() {
+          const tip = document.getElementById('antigravity-pit-wall-tooltip');
+          if (tip) {
+            tip.classList.remove('visible');
+            tip.setAttribute('aria-hidden', 'true');
+            if (typeof tip.hidePopover === 'function') {
+              try { tip.hidePopover(); } catch {}
+            }
+          }
+        };
+
+        window.__togglePitWallModal = function(e, btnEl) {
+          if (e) {
+            e.stopPropagation();
+            e.preventDefault();
+          }
+          const btn = btnEl || (e ? e.currentTarget : document.getElementById('antigravity-pit-wall-trigger'));
+          let portal = document.getElementById('antigravity-pit-wall-portal');
+          if (!portal) {
+            portal = document.createElement('div');
+            portal.id = 'antigravity-pit-wall-portal';
+            portal.className = 'antigravity-pit-wall-portal';
+            document.body.appendChild(portal);
+          }
+
+          const isCurrentOpen = portal.classList.contains('open');
+
+          const agentPortal = document.getElementById('antigravity-agent-dropdown-portal');
+          if (agentPortal) {
+            agentPortal.classList.remove('open');
+            agentPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+
+          const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+          if (tachPortal) {
+            tachPortal.classList.remove('open');
+            tachPortal.__currentBadge = null;
+          }
+          document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+          const msPortal = document.getElementById('antigravity-model-slot-dropdown-portal');
+          if (msPortal) {
+            msPortal.classList.remove('open');
+            msPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+
+          const mPortal = document.getElementById('antigravity-mods-manager-portal');
+          if (mPortal) {
+            mPortal.classList.remove('open');
+            mPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+
+          document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+          portal.classList.remove('open');
+          portal.__currentBtn = null;
+          if (typeof window.__hidePitWallTooltip === 'function') {
+            window.__hidePitWallTooltip();
+          }
+
+          const bindPitWallClose = () => {
+            const closeBtn = portal.querySelector('#antigravity-pit-wall-close');
+            if (closeBtn) {
+              closeBtn.onclick = (ev) => {
+                if (ev) {
+                  ev.stopPropagation();
+                  ev.preventDefault();
+                }
+                portal.classList.remove('open');
+                portal.__currentBtn = null;
+                if (typeof window.__hidePitWallTooltip === 'function') {
+                  window.__hidePitWallTooltip();
+                }
+                document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+              };
+            }
+          };
+
+          const bindPitWallTooltips = (pwPortal) => {
+            if (!pwPortal || pwPortal.__pitWallTipsBound) return;
+            pwPortal.__pitWallTipsBound = true;
+
+            const escTip = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+            const showTip = (target) => {
+              if (!target) return;
+              const rawTip = target.getAttribute('data-pw-tip');
+              if (!rawTip) return;
+              let tipData;
+              try {
+                tipData = JSON.parse(rawTip);
+              } catch {
+                return;
+              }
+              const tip = pwPortal.querySelector('#antigravity-pit-wall-tooltip') || document.getElementById('antigravity-pit-wall-tooltip');
+              if (!tip) return;
+
+              const titleHtml = tipData.title ? ('<div class="pit-wall-tip-title">' + escTip(tipData.title) + '</div>') : '';
+              const rowsHtml = Array.isArray(tipData.rows)
+                ? ('<div class="pit-wall-tip-rows">' + tipData.rows.map(function(r) {
+                    return '<div class="pit-wall-tip-row">' +
+                      '<span class="pit-wall-tip-label">' + escTip(r.label) + '</span>' +
+                      '<span class="pit-wall-tip-val' + (r.accent ? ' accent' : '') + '">' + escTip(r.val) + '</span>' +
+                    '</div>';
+                  }).join('') + '</div>')
+                : '';
+
+              tip.innerHTML = titleHtml + rowsHtml;
+
+              let rect = { top: 100, left: 100, width: 20, height: 20, bottom: 120, right: 120 };
+              if (typeof target.getBoundingClientRect === 'function') {
+                try {
+                  const r = target.getBoundingClientRect();
+                  if (r && (r.width || r.height || r.top || r.left || r.bottom || r.right)) {
+                    rect = {
+                      top: r.top ?? 100,
+                      left: r.left ?? 100,
+                      width: r.width ?? 20,
+                      height: r.height ?? 20,
+                      bottom: r.bottom ?? ((r.top ?? 100) + (r.height ?? 20)),
+                      right: r.right ?? ((r.left ?? 100) + (r.width ?? 20))
+                    };
+                  }
+                } catch {}
+              }
+
+              let tipW = tip.offsetWidth || 220;
+              let tipH = tip.offsetHeight || 120;
+              tip.style.display = 'block';
+              if (tip.offsetWidth) tipW = tip.offsetWidth;
+              if (tip.offsetHeight) tipH = tip.offsetHeight;
+
+              const winW = (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : 1280;
+              let top = rect.top - tipH - 10;
+              let placement = 'top';
+              if (top < 8) {
+                top = rect.bottom + 10;
+                placement = 'bottom';
+              }
+
+              const targetCenter = rect.left + (rect.width / 2);
+              let left = targetCenter - (tipW / 2);
+              left = Math.max(10, Math.min(winW - tipW - 10, left));
+
+              const caretOffset = Math.max(12, Math.min(tipW - 12, targetCenter - left));
+              tip.setAttribute('data-placement', placement);
+              if (typeof tip.style.setProperty === 'function') {
+                tip.style.setProperty('--pw-tip-caret-left', caretOffset + 'px');
+              }
+              tip.style.top = top + 'px';
+              tip.style.left = left + 'px';
+
+              tip.classList.add('visible');
+              tip.setAttribute('aria-hidden', 'false');
+              if (typeof tip.showPopover === 'function') {
+                try { tip.showPopover(); } catch {}
+              }
+            };
+
+            const handlePointerEnter = (ev) => {
+              const target = ev.target && typeof ev.target.closest === 'function' ? ev.target.closest('[data-pw-tip]') : null;
+              if (target) {
+                showTip(target);
+              } else {
+                if (typeof window.__hidePitWallTooltip === 'function') window.__hidePitWallTooltip();
+              }
+            };
+
+            const handlePointerLeave = (ev) => {
+              const rel = ev.relatedTarget && typeof ev.relatedTarget.closest === 'function' ? ev.relatedTarget.closest('[data-pw-tip]') : null;
+              if (!rel && typeof window.__hidePitWallTooltip === 'function') {
+                window.__hidePitWallTooltip();
+              }
+            };
+
+            pwPortal.addEventListener('mouseover', handlePointerEnter);
+            pwPortal.addEventListener('focusin', handlePointerEnter);
+            pwPortal.addEventListener('mouseout', handlePointerLeave);
+            pwPortal.addEventListener('focusout', (ev) => {
+              const rel = ev.relatedTarget && typeof ev.relatedTarget.closest === 'function' ? ev.relatedTarget.closest('[data-pw-tip]') : null;
+              if (!rel && typeof window.__hidePitWallTooltip === 'function') {
+                window.__hidePitWallTooltip();
+              }
+            });
+            pwPortal.addEventListener('mouseleave', () => {
+              if (typeof window.__hidePitWallTooltip === 'function') {
+                window.__hidePitWallTooltip();
+              }
+            });
+          };
+
+          if (!isCurrentOpen) {
+            if (btn) btn.classList.add('open');
+            portal.__currentBtn = btn || null;
+            if (typeof window.__renderPitWallModalHtml === 'function') {
+              portal.innerHTML = window.__renderPitWallModalHtml(window.__antigravityPitWall || {});
+            }
+            bindPitWallClose();
+            bindPitWallTooltips(portal);
+            portal.classList.add('open');
+
+            if (typeof fetch === 'function') {
+              try {
+                fetch('http://127.0.0.1:53912/pit-wall')
+                  .then(r => (r && r.ok ? r.json() : null))
+                  .then(json => {
+                    if (json && json.status === 'ok' && json.pitWall) {
+                      window.__antigravityPitWall = json.pitWall;
+                      if (portal.classList.contains('open') && typeof window.__renderPitWallModalHtml === 'function') {
+                        portal.innerHTML = window.__renderPitWallModalHtml(json.pitWall);
+                        bindPitWallClose();
+                        bindPitWallTooltips(portal);
+                      }
+                    }
+                  })
+                  .catch(() => {});
+              } catch (err) {}
+            }
+          }
+        };
+
 
         const getLaneColor = ${getLaneColor.toString()};
         const renderGitGraphSvg = ${renderGitGraphSvg.toString()};
@@ -1409,7 +3778,8 @@ class ModLoader {
 
           const filtered = commits.filter(function(c) {
             const hasOrigin = Array.isArray(c.refs) && c.refs.some(function(r) { return r.indexOf('origin/') !== -1; });
-            const cType = (c.pushed !== undefined) ? (c.pushed === false ? 'local' : 'remote') : (hasOrigin ? 'remote' : 'local');
+            const isLocal = c.pushed === false || c.syncStatus === 'ahead' || !!c.isUnpushed;
+            const cType = isLocal ? 'local' : (hasOrigin ? 'remote' : 'local');
             return cType === filterType;
           });
 
@@ -1542,8 +3912,81 @@ class ModLoader {
           }
         };
 
+        const isStubVcsData = function(d) {
+          if (!d || typeof d !== 'object') return true;
+          const hasBranch = !!(d.status && d.status.branch);
+          const hasCommits = Array.isArray(d.commits) && d.commits.length > 0;
+          const hasGh = !!(d.github && d.github.isGitHub);
+          const hasLocalBranches = !!(d.branches && Array.isArray(d.branches.local) && d.branches.local.length > 0);
+          const hasRemoteBranches = !!(d.branches && Array.isArray(d.branches.remote) && d.branches.remote.length > 0);
+          return !hasBranch && !hasCommits && !hasGh && !hasLocalBranches && !hasRemoteBranches;
+        };
+
+        const computeVcsDataSignature = function(d) {
+          if (!d || typeof d !== 'object') return 'empty';
+          const gh = d.github || {};
+          const st = d.status || {};
+          const pr = d.pullRequest || {};
+          const br = d.branches || {};
+          const commits = Array.isArray(d.commits) ? d.commits : [];
+          const commitSig = commits.map(function(c) {
+            return (c.hash || '') + ':' + (c.pushed === false ? '0' : '1') + ':' + (c.syncStatus || '') + ':' + (c.expanded ? '1' : '0');
+          }).join(',');
+          const checks = pr.checksSummary || {};
+          return [
+            d.activeRepo || '',
+            st.branch || '',
+            st.ahead || 0,
+            st.behind || 0,
+            st.isClean ? '1' : '0',
+            gh.isGitHub ? '1' : '0',
+            gh.fullName || '',
+            pr.number || '',
+            checks.status || '',
+            Array.isArray(br.local) ? br.local.length : 0,
+            Array.isArray(br.remote) ? br.remote.length : 0,
+            commitSig
+          ].join('|');
+        };
+
+        const getVcsOverviewUrl = function() {
+          const rp = (window.__antigravityVcsData && window.__antigravityVcsData.repoPath) || window.__antigravityActiveRepoPath || '';
+          return rp
+            ? ('http://127.0.0.1:53912/vcs/overview?repoPath=' + encodeURIComponent(rp))
+            : 'http://127.0.0.1:53912/vcs/overview';
+        };
+
+        const applyGitFilterSelection = function(hostEl, filterType) {
+          if (!hostEl) return;
+          const targetFilter = filterType || window.__antigravityGitFilter || 'all';
+          window.__antigravityGitFilter = targetFilter;
+          if (typeof hostEl.querySelectorAll === 'function') {
+            hostEl.querySelectorAll('.git-filter-pill').forEach(function(p) {
+              const pType = (typeof p.getAttribute === 'function' ? p.getAttribute('data-branch-filter') : null) || 'all';
+              if (p.classList) {
+                p.classList.toggle('active', pType === targetFilter);
+              }
+            });
+            hostEl.querySelectorAll('.git-commit-item').forEach(function(item) {
+              const type = typeof item.getAttribute === 'function' ? item.getAttribute('data-commit-type') : null;
+              if (targetFilter === 'all') {
+                item.style.display = '';
+              } else if (targetFilter === 'local') {
+                item.style.display = type === 'local' ? '' : 'none';
+              } else if (targetFilter === 'remote') {
+                item.style.display = type === 'remote' ? '' : 'none';
+              }
+            });
+          }
+          if (typeof window.__antigravityRefreshGitSvg === 'function') {
+            window.__antigravityRefreshGitSvg(hostEl);
+          }
+        };
+
         window.__antigravityUpdateVcsData = function(data) {
           if (!data || typeof data !== 'object') return;
+          if (isStubVcsData(data) && !isStubVcsData(window.__antigravityVcsData)) return;
+
           const prevMap = {};
           if (window.__antigravityVcsData && Array.isArray(window.__antigravityVcsData.commits)) {
             window.__antigravityVcsData.commits.forEach(function(c) {
@@ -1559,17 +4002,68 @@ class ModLoader {
               }
             });
           }
+          if (!data.repoPath && window.__antigravityActiveRepoPath) {
+            data.repoPath = window.__antigravityActiveRepoPath;
+          }
           window.__antigravityVcsData = data;
+          const nextSig = computeVcsDataSignature(data);
+          window.__antigravityVcsSig = nextSig;
 
           if (typeof window.__antigravityRenderGitPanel === 'function') {
             const html = window.__antigravityRenderGitPanel(data);
             const tpl = document.getElementById('antigravity-git-panel-template');
-            if (tpl) tpl.innerHTML = html;
+            const prevTplSig = (tpl && typeof tpl.getAttribute === 'function') ? tpl.getAttribute('data-vcs-sig') : null;
+            if (tpl && prevTplSig !== nextSig) {
+              tpl.innerHTML = html;
+              if (typeof tpl.setAttribute === 'function') tpl.setAttribute('data-vcs-sig', nextSig);
+            }
             const hostEl = document.getElementById('antigravity-git-panel-host');
-            if (hostEl && hostEl.style.display !== 'none') {
+            const isHostOpen = !!(hostEl && hostEl.style && hostEl.style.display !== 'none' && (typeof hostEl.getAttribute !== 'function' || hostEl.getAttribute('data-open') !== 'false'));
+            if (isHostOpen) {
+              const curHostSig = typeof hostEl.getAttribute === 'function' ? hostEl.getAttribute('data-vcs-sig') : null;
+              const hasContent = hostEl.children ? hostEl.children.length > 0 : !!hostEl.innerHTML;
+              if (curHostSig === nextSig && hasContent) {
+                return;
+              }
+              const activePill = typeof hostEl.querySelector === 'function' ? hostEl.querySelector('.git-filter-pill.active') : null;
+              const savedFilter = activePill && typeof activePill.getAttribute === 'function'
+                ? (activePill.getAttribute('data-branch-filter') || window.__antigravityGitFilter || 'all')
+                : (window.__antigravityGitFilter || 'all');
+              const branchesDrawerEl = typeof hostEl.querySelector === 'function' ? hostEl.querySelector('#antigravity-git-branches-drawer') : null;
+              const branchesDrawerOpen = !!(branchesDrawerEl && branchesDrawerEl.style && branchesDrawerEl.style.display !== 'none');
+              const prDrawerEl = typeof hostEl.querySelector === 'function' ? hostEl.querySelector('#antigravity-git-pr-drawer') : null;
+              const prDrawerOpen = !!(prDrawerEl && prDrawerEl.style && prDrawerEl.style.display !== 'none');
+              const ciAccordionEl = typeof hostEl.querySelector === 'function' ? hostEl.querySelector('#antigravity-git-ci-accordion') : null;
+              const ciAccordionOpen = !!(ciAccordionEl && ciAccordionEl.style && ciAccordionEl.style.display !== 'none');
+              const graphContainerEl = typeof hostEl.querySelector === 'function' ? hostEl.querySelector('.git-graph-container') : null;
+              const savedScrollTop = graphContainerEl ? (graphContainerEl.scrollTop || 0) : 0;
+
               hostEl.__skipInitialStateParse = true;
               hostEl.innerHTML = html;
+              if (typeof hostEl.setAttribute === 'function') hostEl.setAttribute('data-vcs-sig', nextSig);
               window.__bindGitPanelEvents(hostEl);
+              applyGitFilterSelection(hostEl, savedFilter);
+
+              if (branchesDrawerOpen && typeof hostEl.querySelector === 'function') {
+                const newDrawer = hostEl.querySelector('#antigravity-git-branches-drawer');
+                if (newDrawer) newDrawer.style.display = 'block';
+                const caret = hostEl.querySelector('#antigravity-git-branches-drawer-btn .git-drawer-caret');
+                if (caret) caret.textContent = '▴';
+              }
+              if (prDrawerOpen && typeof hostEl.querySelector === 'function') {
+                const newPrDrawer = hostEl.querySelector('#antigravity-git-pr-drawer');
+                if (newPrDrawer) newPrDrawer.style.display = 'block';
+              }
+              if (ciAccordionOpen && typeof hostEl.querySelector === 'function') {
+                const newCiAcc = hostEl.querySelector('#antigravity-git-ci-accordion');
+                if (newCiAcc) newCiAcc.style.display = 'block';
+                const caret = hostEl.querySelector('#antigravity-git-ci-rollup-trigger .git-ci-caret');
+                if (caret) caret.textContent = '▴';
+              }
+              if (savedScrollTop > 0 && typeof hostEl.querySelector === 'function') {
+                const newGraphContainer = hostEl.querySelector('.git-graph-container');
+                if (newGraphContainer) newGraphContainer.scrollTop = savedScrollTop;
+              }
             }
           }
         };
@@ -1597,19 +4091,31 @@ class ModLoader {
           };
           window.__antigravityShowGitToast(hostEl, labelMap[payload.action] || ('Ejecutando ' + payload.action + '...'), false);
 
+          const cascadeId = (window.__resolveCascadeId ? window.__resolveCascadeId() : '') || '';
+          const repoPath = (window.__antigravityVcsData && window.__antigravityVcsData.repoPath) || '';
+          const actionPayload = Object.assign({}, payload, {
+            cascadeId: cascadeId,
+            repoPath: repoPath
+          });
+
           try {
             if (payload.action === 'create-pr' && payload.branch) {
               await fetch('http://127.0.0.1:53912/vcs/action', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'push', branch: payload.branch })
+                body: JSON.stringify({
+                  action: 'push',
+                  branch: payload.branch,
+                  cascadeId: cascadeId,
+                  repoPath: repoPath
+                })
               }).catch(function() {});
             }
 
             const res = await fetch('http://127.0.0.1:53912/vcs/action', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
+              body: JSON.stringify(actionPayload)
             });
             const result = await res.json();
 
@@ -1624,10 +4130,17 @@ class ModLoader {
               window.open(result.output, '_blank');
             }
 
-            const ovRes = await fetch('http://127.0.0.1:53912/vcs/overview');
-            if (ovRes.ok) {
-              const freshData = await ovRes.json();
-              window.__antigravityUpdateVcsData(freshData);
+            let freshData = null;
+            if (typeof window.__antigravityFetchSessionVcsOverview === 'function') {
+              freshData = await window.__antigravityFetchSessionVcsOverview();
+            } else {
+              const ovRes = await fetch(getVcsOverviewUrl());
+              if (ovRes.ok) {
+                freshData = await ovRes.json();
+                window.__antigravityUpdateVcsData(freshData);
+              }
+            }
+            if (freshData) {
               const newHost = document.getElementById('antigravity-git-panel-host') || hostEl;
               window.__antigravityShowGitToast(newHost, 'Accion completada: ' + payload.action, false);
             }
@@ -1644,7 +4157,10 @@ class ModLoader {
             const stateScript = hostEl.querySelector('#antigravity-git-vcs-state');
             if (stateScript && stateScript.textContent) {
               try {
-                window.__antigravityVcsData = JSON.parse(stateScript.textContent);
+                const parsedState = JSON.parse(stateScript.textContent);
+                if (!(isStubVcsData(parsedState) && !isStubVcsData(window.__antigravityVcsData))) {
+                  window.__antigravityVcsData = parsedState;
+                }
               } catch (e) {}
             }
           }
@@ -1795,22 +4311,9 @@ class ModLoader {
           // Branch filter pills (Todas / Locales / GitHub) with synchronized SVG re-projection
           hostEl.querySelectorAll('.git-filter-pill').forEach(function(pill) {
             pill.onclick = function(e) {
-              e.stopPropagation();
-              hostEl.querySelectorAll('.git-filter-pill.active').forEach(function(p) { p.classList.remove('active'); });
-              pill.classList.add('active');
-
+              if (e) e.stopPropagation();
               const filterType = pill.getAttribute('data-branch-filter') || 'all';
-              hostEl.querySelectorAll('.git-commit-item').forEach(function(item) {
-                const type = item.getAttribute('data-commit-type');
-                if (filterType === 'all') {
-                  item.style.display = '';
-                } else if (filterType === 'local') {
-                  item.style.display = type === 'local' ? '' : 'none';
-                } else if (filterType === 'remote') {
-                  item.style.display = type === 'remote' ? '' : 'none';
-                }
-              });
-              window.__antigravityRefreshGitSvg(hostEl);
+              applyGitFilterSelection(hostEl, filterType);
             };
           });
 
@@ -1870,16 +4373,21 @@ class ModLoader {
               refreshBtn.style.transition = 'transform 0.5s ease';
               setTimeout(function() { refreshBtn.style.transform = ''; }, 500);
 
-              try {
-                const res = await fetch('http://127.0.0.1:53912/vcs/overview');
-                if (res.ok) {
-                  const data = await res.json();
-                  if (window.__antigravityUpdateVcsData) {
-                    window.__antigravityUpdateVcsData(data);
-                    return;
+              if (typeof window.__antigravityFetchSessionVcsOverview === 'function') {
+                const liveData = await window.__antigravityFetchSessionVcsOverview();
+                if (liveData) return;
+              } else {
+                try {
+                  const res = await fetch(getVcsOverviewUrl());
+                  if (res.ok) {
+                    const data = await res.json();
+                    if (window.__antigravityUpdateVcsData) {
+                      window.__antigravityUpdateVcsData(data);
+                      return;
+                    }
                   }
-                }
-              } catch (err) {}
+                } catch (err) {}
+              }
 
               if (window.__antigravityMountAll) {
                 window.__antigravityMountAll();
@@ -1890,22 +4398,69 @@ class ModLoader {
           const closeBtn = hostEl.querySelector('#antigravity-git-close-btn');
           if (closeBtn) {
             closeBtn.onclick = function(e) {
-              e.stopPropagation();
-              window.__toggleGitGraphPanel();
+              if (e) {
+                e.stopPropagation();
+                e.preventDefault();
+              }
+              if (typeof window.__closeGitGraphPanel === 'function') {
+                window.__closeGitGraphPanel();
+              } else if (typeof window.__toggleGitGraphPanel === 'function') {
+                window.__toggleGitGraphPanel();
+              }
             };
+          }
+        };
+
+        window.__closeGitGraphPanel = function() {
+          window.__antigravityGitPanelOpen = false;
+          window.__antigravityVcsReqSeq = (window.__antigravityVcsReqSeq || 0) + 1;
+          const hosts = typeof document.querySelectorAll === 'function'
+            ? Array.from(document.querySelectorAll('#antigravity-git-panel-host'))
+            : [];
+          if (hosts.length === 0 && typeof document.getElementById === 'function') {
+            const fallbackHost = document.getElementById('antigravity-git-panel-host');
+            if (fallbackHost) hosts.push(fallbackHost);
+          }
+          hosts.forEach(function(host, idx) {
+            if (idx > 0 && typeof host.remove === 'function') {
+              host.remove();
+              return;
+            }
+            if (host && host.style) host.style.display = 'none';
+            if (host && typeof host.setAttribute === 'function') host.setAttribute('data-open', 'false');
+          });
+          if (typeof document.querySelectorAll === 'function') {
+            document.querySelectorAll('#antigravity-git-tab-trigger, .antigravity-git-tab-btn').forEach(function(triggerBtn) {
+              if (triggerBtn && triggerBtn.classList) triggerBtn.classList.remove('active');
+            });
           }
         };
 
         window.__toggleGitGraphPanel = function(e, btnEl) {
           if (e) {
-            e.stopPropagation();
-            e.preventDefault();
+            if (typeof e.stopPropagation === 'function') e.stopPropagation();
+            if (typeof e.preventDefault === 'function') e.preventDefault();
           }
-          const btn = btnEl || (e ? e.currentTarget : document.querySelector('#antigravity-git-tab-trigger'));
-          if (!btn) return;
+          const btn = btnEl || (e && e.currentTarget ? e.currentTarget : (typeof document.querySelector === 'function' ? document.querySelector('#antigravity-git-tab-trigger') : null));
+          const hosts = typeof document.querySelectorAll === 'function'
+            ? Array.from(document.querySelectorAll('#antigravity-git-panel-host'))
+            : [];
+          if (hosts.length === 0 && typeof document.getElementById === 'function') {
+            const singleHost = document.getElementById('antigravity-git-panel-host');
+            if (singleHost) hosts.push(singleHost);
+          }
+          const hostVisible = hosts.some(function(h) {
+            return !!(h && h.style && h.style.display !== 'none' && (typeof h.getAttribute !== 'function' || h.getAttribute('data-open') !== 'false'));
+          });
+          const isCurrentActive = !!window.__antigravityGitPanelOpen || hostVisible || !!(btn && btn.classList && btn.classList.contains('active'));
 
-          const isCurrentActive = btn.classList.contains('active');
-          btn.classList.toggle('active', !isCurrentActive);
+          if (isCurrentActive) {
+            window.__closeGitGraphPanel();
+            return;
+          }
+          if (!btn) return;
+          window.__antigravityGitPanelOpen = true;
+          if (btn.classList) btn.classList.add('active');
 
           const trigger = btn || document.querySelector('#antigravity-git-tab-trigger');
           let auxContainer = trigger ? (trigger.closest('.h-full.w-full.flex.flex-col') || trigger.closest('.flex.flex-col')) : null;
@@ -1933,27 +4488,54 @@ class ModLoader {
           }
 
           if (hostEl.parentElement === auxBody) {
-            hostEl.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:' + (isCurrentActive ? 'none' : 'flex') + '; flex-direction:column; overflow:hidden; z-index:50; background:#0f111a;';
+            hostEl.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; display:flex; flex-direction:column; overflow:hidden; z-index:50; background:#0f111a;';
           } else {
-            hostEl.style.cssText = 'position:fixed; right:0; top:40px; bottom:24px; width:420px; display:' + (isCurrentActive ? 'none' : 'flex') + '; flex-direction:column; overflow:hidden; z-index:99999; background:#0f111a; box-shadow:-12px 0 30px rgba(0,0,0,0.7); border-left:1px solid #1e2438;';
+            hostEl.style.cssText = 'position:fixed; right:0; top:40px; bottom:24px; width:420px; display:flex; flex-direction:column; overflow:hidden; z-index:99999; background:#0f111a; box-shadow:-12px 0 30px rgba(0,0,0,0.7); border-left:1px solid #1e2438;';
           }
 
-          if (!isCurrentActive) {
-            if (window.__antigravityVcsData && typeof window.__antigravityRenderGitPanel === 'function') {
+          hostEl.style.display = 'flex';
+          if (typeof hostEl.setAttribute === 'function') hostEl.setAttribute('data-open', 'true');
+
+          if (!isStubVcsData(window.__antigravityVcsData) && typeof window.__antigravityRenderGitPanel === 'function') {
+            const cachedSig = computeVcsDataSignature(window.__antigravityVcsData);
+            const curHostSig = typeof hostEl.getAttribute === 'function' ? hostEl.getAttribute('data-vcs-sig') : null;
+            const hasContent = hostEl.children ? hostEl.children.length > 0 : !!hostEl.innerHTML;
+            if (curHostSig !== cachedSig || !hasContent) {
               hostEl.__skipInitialStateParse = true;
               hostEl.innerHTML = window.__antigravityRenderGitPanel(window.__antigravityVcsData);
-            } else {
-              const template = document.getElementById('antigravity-git-panel-template');
-              if (template) {
-                hostEl.innerHTML = template.innerHTML;
-              }
+              if (typeof hostEl.setAttribute === 'function') hostEl.setAttribute('data-vcs-sig', cachedSig);
+              window.__bindGitPanelEvents(hostEl);
+              applyGitFilterSelection(hostEl, window.__antigravityGitFilter || 'all');
             }
-            hostEl.style.display = 'flex';
-            window.__bindGitPanelEvents(hostEl);
+          } else {
+            const template = document.getElementById('antigravity-git-panel-template');
+            const hasContent = hostEl.children ? hostEl.children.length > 0 : !!hostEl.innerHTML;
+            if (template && (!hasContent || isStubVcsData(window.__antigravityVcsData))) {
+              hostEl.innerHTML = template.innerHTML;
+              window.__bindGitPanelEvents(hostEl);
+            }
+          }
 
-            fetch('http://127.0.0.1:53912/vcs/overview')
-              .then(function(r) { return r.ok ? r.json() : null; })
+          const reqSeq = (window.__antigravityVcsReqSeq = (window.__antigravityVcsReqSeq || 0) + 1);
+          const activeCascadeId = window.__resolveCascadeId ? window.__resolveCascadeId() : '';
+          const hasCachedRepo = !!(activeCascadeId && window.__antigravityCascadeRepos && window.__antigravityCascadeRepos[activeCascadeId]);
+          if (window.__APP_CONFIG__?.csrfToken && !hasCachedRepo && typeof window.__antigravityFetchSessionVcsOverview === 'function') {
+            window.__antigravityFetchSessionVcsOverview().then(function(liveData) {
+              if (!window.__antigravityGitPanelOpen || reqSeq !== window.__antigravityVcsReqSeq) return;
+              if (liveData && window.__antigravityUpdateVcsData) {
+                window.__antigravityUpdateVcsData(liveData);
+              }
+            }).catch(function() {});
+          } else {
+            const sessionRepo = (activeCascadeId && window.__antigravityCascadeRepos && window.__antigravityCascadeRepos[activeCascadeId]) || '';
+            const baseUrl = getVcsOverviewUrl();
+            const overviewUrl = sessionRepo && !baseUrl.includes('repoPath=')
+              ? (baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'repoPath=' + encodeURIComponent(sessionRepo))
+              : baseUrl;
+            fetch(overviewUrl)
+              .then(function(r) { return r && r.ok ? r.json() : null; })
               .then(function(liveData) {
+                if (!window.__antigravityGitPanelOpen || reqSeq !== window.__antigravityVcsReqSeq) return;
                 if (liveData && window.__antigravityUpdateVcsData) {
                   window.__antigravityUpdateVcsData(liveData);
                 }
@@ -1985,6 +4567,13 @@ class ModLoader {
             mPortal.__currentBtn = null;
           }
           document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+
+          const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+          if (pwPortal) {
+            pwPortal.classList.remove('open');
+            pwPortal.__currentBtn = null;
+          }
+          document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
 
 
           let portal = document.getElementById('antigravity-tachometer-popover-portal');
@@ -2084,12 +4673,21 @@ class ModLoader {
         // Store all per-conversation metrics, active agents, and current primary snapshot
         window.__antigravityAllMetrics = ${JSON.stringify(context.allMetrics || {})};
         window.__antigravityLatestMetric = ${JSON.stringify(context.telemetry || {})};
+        window.__antigravityLiveTelemetryReceived = false;
         window.__antigravityActiveAgents = Object.assign(
           window.__antigravityActiveAgents || {},
           ${JSON.stringify(context.activeAgents || {})}
         );
 
         window.__syncAgentBadges = function() {
+          const currentCascadeId = window.__resolveCascadeId ? window.__resolveCascadeId() : null;
+          if (currentCascadeId && currentCascadeId !== window.__lastGitCascadeId) {
+            window.__lastGitCascadeId = currentCascadeId;
+            if (typeof window.__antigravityFetchSessionVcsOverview === 'function') {
+              window.__antigravityFetchSessionVcsOverview();
+            }
+          }
+
           document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {
             const cId = window.__resolveCascadeId(badge);
             const agentToApply = window.__resolveAgentForCascade(cId);
@@ -2099,7 +4697,12 @@ class ModLoader {
               const nextEffMode = agentToApply.id === 'auto'
                 ? ((agentToApply.effectiveMode || 'PLAN').toUpperCase() === 'BUILD' ? 'BUILD' : 'PLAN')
                 : null;
-              if (currentAgentId !== agentToApply.id || currentEffMode !== nextEffMode || badge.__lastCascadeId !== cId) {
+              const labelEl = badge.querySelector('.antigravity-active-agent-name');
+              const isLabelDesynced = labelEl && (
+                (agentToApply.id === 'auto' && !labelEl.querySelector('.auto-oscillate-track')) ||
+                (agentToApply.id !== 'auto' && labelEl.textContent !== agentToApply.name)
+              );
+              if (currentAgentId !== agentToApply.id || currentEffMode !== nextEffMode || badge.__lastCascadeId !== cId || isLabelDesynced) {
                 badge.__lastCascadeId = cId;
                 window.__applyAgentToBadge(badge, agentToApply);
               }
@@ -2107,18 +4710,7 @@ class ModLoader {
 
             // Sync exterior reticle trigger in the same group
             const group = badge.closest('.antigravity-agent-selector-group');
-            const reticleBtn = group ? group.querySelector('.antigravity-caveman-reticle-trigger') : null;
-            if (reticleBtn) {
-              const isFocus = window.__resolveCavemanForCascade ? window.__resolveCavemanForCascade(cId) : false;
-              const focusTitle = 'Modo Focus: Concentracion activa (~70% ahorro de tokens) - Clic para alternar a Explicativo';
-              const explicativoTitle = 'Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus';
-              reticleBtn.classList.toggle('is-focus', isFocus);
-              reticleBtn.setAttribute('title', isFocus ? focusTitle : explicativoTitle);
-              const box = reticleBtn.querySelector('.caveman-reticle-box');
-              if (box && window.__renderReticleSvg) {
-                box.innerHTML = window.__renderReticleSvg(isFocus, 14);
-              }
-            }
+            syncReticleTrigger(group ? group.querySelector('.antigravity-caveman-reticle-trigger') : null, cId);
           });
         };
 
@@ -2161,9 +4753,25 @@ class ModLoader {
           }
         };
 
-        window.__updateAntigravityTelemetry = function(fallbackMetric) {
+        window.__updateAntigravityTelemetry = function(fallbackMetric, isInitialSnapshot) {
+          if (isInitialSnapshot && window.__antigravityLiveTelemetryReceived) {
+            return;
+          }
           const all = window.__antigravityAllMetrics || {};
           const latest = fallbackMetric || window.__antigravityLatestMetric;
+
+          if (!isInitialSnapshot) {
+            const hasLiveMetrics = Boolean(
+              Object.keys(all).length > 0 ||
+              (latest && (Number(latest.estTokens) > 0 || Number(latest.steps) > 0 || parseFloat(latest.pct) > 0))
+            );
+            if (hasLiveMetrics) {
+              window.__antigravityLiveTelemetryReceived = true;
+              if (fallbackMetric) {
+                window.__antigravityLatestMetric = fallbackMetric;
+              }
+            }
+          }
 
           const nativeGroups = window.__antigravityNativeQuotaSummary || (() => {
             try {
@@ -2193,36 +4801,74 @@ class ModLoader {
             }
 
             const pctNum = parseFloat(m.pct) || 0;
-            let statusColor = '#22c55e';
-            if (pctNum >= 85) statusColor = '#ef4444';
-            else if (pctNum >= 60) statusColor = '#f97316';
-            else if (pctNum >= 25) statusColor = '#eab308';
+            const gm = (typeof window.__getGaugeMetrics === 'function')
+              ? window.__getGaugeMetrics(pctNum)
+              : { angle: -120 + (Math.min(pctNum, 100) / 100) * 240, needleColor: pctNum >= 85 ? '#ef4444' : pctNum >= 60 ? '#f97316' : pctNum >= 25 ? '#eab308' : '#22c55e' };
+            const statusColor = gm.needleColor;
 
-            badge.setAttribute('title', 'Context: ' + m.displayTokens + ' tokens (' + m.pct + '%)');
+            const nextTitle = 'Context: ' + m.displayTokens + ' tokens (' + m.pct + '%)';
+            if (badge.getAttribute('title') !== nextTitle) {
+              badge.setAttribute('title', nextTitle);
+            }
             const tokenSpan = badge.querySelector('.tachometer-tokens');
-            if (tokenSpan) tokenSpan.textContent = m.displayTokens;
+            if (tokenSpan && tokenSpan.textContent !== m.displayTokens) {
+              tokenSpan.textContent = m.displayTokens;
+            }
             const pctSpan = badge.querySelector('.tachometer-pct');
-            if (pctSpan) pctSpan.textContent = '(' + m.pct + '%)';
+            const nextPctText = '(' + m.pct + '%)';
+            if (pctSpan && pctSpan.textContent !== nextPctText) {
+              pctSpan.textContent = nextPctText;
+            }
             const needle = badge.querySelector('g[filter]');
             if (needle) {
-              const angle = -120 + (Math.min(pctNum, 100) / 100) * 240;
-              needle.style.transform = 'rotate(' + angle.toFixed(1) + 'deg)';
+              const angle = gm.angle;
+              const nextTransform = 'rotate(' + angle.toFixed(1) + 'deg)';
+              if (needle.style.transform !== nextTransform) {
+                needle.style.transform = nextTransform;
+              }
               const poly = needle.querySelector('polygon');
-              if (poly) poly.setAttribute('fill', statusColor);
+              if (poly && poly.getAttribute('fill') !== statusColor) {
+                poly.setAttribute('fill', statusColor);
+              }
             }
 
             if (window.__renderTachometerPopoverHtml) {
               const renderedPopover = window.__renderTachometerPopoverHtml(m);
               const tpl = badge.querySelector('.antigravity-popover-template') ||
                 badge.parentElement?.querySelector('.antigravity-popover-template');
-              if (tpl) {
+              if (tpl && tpl.innerHTML !== renderedPopover) {
                 tpl.innerHTML = renderedPopover;
               }
 
-              // Update live popover content if currently open on screen
+              // Update live popover content only when open and owned by this exact badge (split-view safety)
               const portal = document.getElementById('antigravity-tachometer-popover-portal');
-              if (portal && portal.classList.contains('open')) {
+              if (portal && portal.classList.contains('open') && portal.__currentBadge === badge && portal.innerHTML !== renderedPopover) {
+                const openKeys = new Set();
+                const scrollByKey = new Map();
+                portal.querySelectorAll('details.tach-model-details[open]').forEach(det => {
+                  const key = det.getAttribute('data-model-key');
+                  if (key) {
+                    openKeys.add(key);
+                    const listEl = det.querySelector('.tach-subagent-list');
+                    if (listEl && listEl.scrollTop > 0) {
+                      scrollByKey.set(key, listEl.scrollTop);
+                    }
+                  }
+                });
                 portal.innerHTML = renderedPopover;
+                if (openKeys.size > 0) {
+                  portal.querySelectorAll('details.tach-model-details').forEach(det => {
+                    const key = det.getAttribute('data-model-key');
+                    if (key && openKeys.has(key)) {
+                      det.setAttribute('open', '');
+                      const savedScroll = scrollByKey.get(key);
+                      const listEl = det.querySelector('.tach-subagent-list');
+                      if (listEl && savedScroll) {
+                        listEl.scrollTop = savedScroll;
+                      }
+                    }
+                  });
+                }
               }
             }
           });
@@ -2258,100 +4904,229 @@ class ModLoader {
           window.__applyAgentToBadge(badge, currentAgent);
         };
 
-        if (!window.__antigravityGlobalEventsBound) {
-          window.__antigravityGlobalEventsBound = true;
-          document.addEventListener('click', (e) => {
-            const sendBtn = e.target.closest('button[data-testid="send-button"]');
-            if (sendBtn) {
-              const container = sendBtn.closest('[data-cascade-id]') || document;
-              const editor = container.querySelector('[contenteditable="true"], textarea');
-              const text = editor ? (editor.value || editor.textContent || '') : '';
-              if (text && window.__handleAutoPromptContextUpdate) {
-                window.__handleAutoPromptContextUpdate(text, sendBtn);
+        window.__conditionAgentFromVoice = window.__conditionAgentFromVoice || function(transcriptText, sourceEl) {
+          if (!transcriptText || typeof transcriptText !== 'string' || !transcriptText.trim()) return null;
+          const mode = typeof window.__classifyPromptMode === 'function'
+            ? window.__classifyPromptMode(transcriptText)
+            : 'PLAN';
+          if (typeof window.__handleAutoPromptContextUpdate === 'function') {
+            window.__handleAutoPromptContextUpdate(transcriptText, sourceEl);
+          }
+          return mode;
+        };
+
+        window.__scanVoiceTranscriptsForAgent = function() {
+          document.querySelectorAll('[data-voice-transcript], [data-testid*="voice-transcript"], .voice-transcript, .antigravity-voice-transcript, [data-voice-turn]').forEach(el => {
+            const transcriptText = (el.getAttribute('data-voice-transcript') || el.textContent || '').trim();
+            if (transcriptText && el.__lastVoiceConditionedText !== transcriptText) {
+              el.__lastVoiceConditionedText = transcriptText;
+              if (typeof window.__conditionAgentFromVoice === 'function') {
+                window.__conditionAgentFromVoice(transcriptText, el);
+              } else if (typeof window.__classifyPromptMode === 'function' && typeof window.__handleAutoPromptContextUpdate === 'function') {
+                window.__handleAutoPromptContextUpdate(transcriptText, el);
               }
             }
+          });
+        };
 
-            const reticleBtn = e.target.closest('.antigravity-caveman-reticle-trigger');
-            if (reticleBtn) {
-              e.preventDefault();
-              e.stopPropagation();
-              window.__toggleCavemanMode(undefined, reticleBtn);
-              return;
-            }
-
-            const isAgentBadge = e.target.closest('.antigravity-agent-badge');
-            const isAgentPortal = e.target.closest('#antigravity-agent-dropdown-portal');
-            if (!isAgentBadge && !isAgentPortal) {
-              const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
-              if (aPortal) aPortal.classList.remove('open');
-              document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
-            }
-
-            const isTachBadge = e.target.closest('.antigravity-tachometer-badge');
-            const isTachPortal = e.target.closest('#antigravity-tachometer-popover-portal');
-            if (!isTachBadge && !isTachPortal) {
-              const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
-              if (tachPortal) {
-                tachPortal.classList.remove('open');
-                tachPortal.__currentBadge = null;
-              }
-              document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
-            }
-
-            const isModsBtn = e.target.closest('.antigravity-mods-manager-btn');
-            const isModsPortal = e.target.closest('#antigravity-mods-manager-portal');
-            if (!isModsBtn && !isModsPortal) {
-              const mPortal = document.getElementById('antigravity-mods-manager-portal');
-              if (mPortal) {
-                mPortal.classList.remove('open');
-                mPortal.__currentBtn = null;
-              }
-              document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
-            }
-          }, true);
-
-          document.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-              const editor = e.target.closest('[contenteditable="true"], textarea');
-              if (editor) {
-                const text = editor.value || editor.textContent || '';
-                if (text && window.__handleAutoPromptContextUpdate) {
-                  window.__handleAutoPromptContextUpdate(text, editor);
-                }
-              }
-            }
-            if (e.key === 'Escape') {
-              const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
-              if (aPortal) {
-                aPortal.classList.remove('open');
-                aPortal.__currentBadge = null;
-              }
-              document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
-
-              const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
-              if (tachPortal) {
-                tachPortal.classList.remove('open');
-                tachPortal.__currentBadge = null;
-              }
-              document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
-
-              const mPortal = document.getElementById('antigravity-mods-manager-portal');
-              if (mPortal) {
-                mPortal.classList.remove('open');
-                mPortal.__currentBtn = null;
-              }
-              document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
-            }
-          }, true);
+        if (window.__antigravityDocClickHandler && typeof document.removeEventListener === 'function') {
+          document.removeEventListener('click', window.__antigravityDocClickHandler, true);
         }
+        if (window.__antigravityDocKeydownHandler && typeof document.removeEventListener === 'function') {
+          document.removeEventListener('keydown', window.__antigravityDocKeydownHandler, true);
+        }
+        if (window.__antigravityDocFocusinHandler && typeof document.removeEventListener === 'function') {
+          document.removeEventListener('focusin', window.__antigravityDocFocusinHandler, true);
+        }
+
+        window.__antigravityDocClickHandler = (e) => {
+          const clickTarget = (e && e.target && typeof e.target.closest === 'function')
+            ? e.target
+            : (e && e.target && e.target.parentElement && typeof e.target.parentElement.closest === 'function' ? e.target.parentElement : null);
+          if (!clickTarget) return;
+
+          const sendBtn = clickTarget.closest('button[data-testid="send-button"]');
+          if (sendBtn) {
+            const container = sendBtn.closest('[data-cascade-id]') || document;
+            const editor = container.querySelector('[contenteditable="true"], textarea');
+            const text = editor ? (editor.value || editor.textContent || '') : '';
+            if (text && window.__handleAutoPromptContextUpdate) {
+              window.__handleAutoPromptContextUpdate(text, sendBtn);
+            }
+          }
+
+          const reticleBtn = clickTarget.closest('.antigravity-caveman-reticle-trigger');
+          if (reticleBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            window.__toggleCavemanMode(undefined, reticleBtn);
+            return;
+          }
+
+          const isAgentBadge = clickTarget.closest('.antigravity-agent-badge');
+          const isAgentPortal = clickTarget.closest('#antigravity-agent-dropdown-portal');
+          if (!isAgentBadge && !isAgentPortal) {
+            const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
+            if (aPortal) aPortal.classList.remove('open');
+            document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+          }
+
+          const isTachBadge = clickTarget.closest('.antigravity-tachometer-badge');
+          const isTachPortal = clickTarget.closest('#antigravity-tachometer-popover-portal');
+          if (!isTachBadge && !isTachPortal) {
+            const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+            if (tachPortal) {
+              tachPortal.classList.remove('open');
+              tachPortal.__currentBadge = null;
+            }
+            document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+          }
+
+          const isModsBtn = clickTarget.closest('.antigravity-mods-manager-btn');
+          const isModsPortal = clickTarget.closest('#antigravity-mods-manager-portal');
+          if (!isModsBtn && !isModsPortal) {
+            const mPortal = document.getElementById('antigravity-mods-manager-portal');
+            if (mPortal) {
+              mPortal.classList.remove('open');
+              mPortal.__currentBtn = null;
+            }
+            document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+          }
+
+          const isPitWallBtn = clickTarget.closest('.antigravity-pit-wall-btn');
+          const isPitWallPortal = clickTarget.closest('#antigravity-pit-wall-portal');
+          if (!isPitWallBtn && !isPitWallPortal) {
+            const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+            if (pwPortal) {
+              pwPortal.classList.remove('open');
+              pwPortal.__currentBtn = null;
+              if (typeof window.__hidePitWallTooltip === 'function') {
+                window.__hidePitWallTooltip();
+              }
+            }
+            document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+          }
+
+          const plannerSyncBtn = clickTarget.closest('.antigravity-planner-sync-btn, .antigravity-chat-planner-sync-btn');
+          if (plannerSyncBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof window.__syncPlannerModelToChat === 'function') {
+              window.__syncPlannerModelToChat();
+            }
+            return;
+          }
+
+          const modelSlotBtn = clickTarget.closest('.antigravity-model-slot-btn');
+          if (modelSlotBtn) {
+            const role = modelSlotBtn.getAttribute('data-slot-role');
+            window.__toggleModelSlotDropdown(e, modelSlotBtn, role);
+            return;
+          }
+
+          const isModelSlotPortal = clickTarget.closest('#antigravity-model-slot-dropdown-portal');
+          if (!modelSlotBtn && !isModelSlotPortal) {
+            const msPortal = document.getElementById('antigravity-model-slot-dropdown-portal');
+            if (msPortal) {
+              msPortal.classList.remove('open');
+              msPortal.__currentBtn = null;
+            }
+            document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+          }
+        };
+
+        window.__antigravityDocKeydownHandler = (e) => {
+          if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.target && typeof e.target.closest === 'function') {
+            const editor = e.target.closest('[contenteditable="true"], textarea');
+            if (editor) {
+              const text = editor.value || editor.textContent || '';
+              if (text && window.__handleAutoPromptContextUpdate) {
+                window.__handleAutoPromptContextUpdate(text, editor);
+              }
+            }
+          }
+          if (e.key === 'Escape') {
+            if (window.__antigravityGitPanelOpen && typeof window.__closeGitGraphPanel === 'function') {
+              window.__closeGitGraphPanel();
+            }
+            const aPortal = document.getElementById('antigravity-agent-dropdown-portal');
+            if (aPortal) {
+              aPortal.classList.remove('open');
+              aPortal.__currentBadge = null;
+            }
+            document.querySelectorAll('.antigravity-agent-badge.open').forEach(b => b.classList.remove('open'));
+
+            const tachPortal = document.getElementById('antigravity-tachometer-popover-portal');
+            if (tachPortal) {
+              tachPortal.classList.remove('open');
+              tachPortal.__currentBadge = null;
+            }
+            document.querySelectorAll('.antigravity-tachometer-badge.open').forEach(b => b.classList.remove('open'));
+
+            const mPortal = document.getElementById('antigravity-mods-manager-portal');
+            if (mPortal) {
+              mPortal.classList.remove('open');
+              mPortal.__currentBtn = null;
+            }
+            document.querySelectorAll('.antigravity-mods-manager-btn.open').forEach(b => b.classList.remove('open'));
+
+            const msPortal = document.getElementById('antigravity-model-slot-dropdown-portal');
+            if (msPortal) {
+              msPortal.classList.remove('open');
+              msPortal.__currentBtn = null;
+            }
+            document.querySelectorAll('.antigravity-model-slot-btn.open').forEach(b => b.classList.remove('open'));
+
+            const pwPortal = document.getElementById('antigravity-pit-wall-portal');
+            if (pwPortal) {
+              pwPortal.classList.remove('open');
+              pwPortal.__currentBtn = null;
+              if (typeof window.__hidePitWallTooltip === 'function') {
+                window.__hidePitWallTooltip();
+              }
+            }
+            document.querySelectorAll('.antigravity-pit-wall-btn.open').forEach(b => b.classList.remove('open'));
+          }
+        };
+
+        window.__antigravityDocFocusinHandler = () => {
+          if (typeof window.__updateMenubarSlotButtons === 'function' && typeof window.__getActiveMenubarSlotModels === 'function') {
+            window.__updateMenubarSlotButtons(window.__getActiveMenubarSlotModels());
+          }
+        };
+
+        document.addEventListener('click', window.__antigravityDocClickHandler, true);
+        document.addEventListener('keydown', window.__antigravityDocKeydownHandler, true);
+        document.addEventListener('focusin', window.__antigravityDocFocusinHandler, true);
+        window.__antigravityGlobalEventsBound = true;
 
         // 3. Mount individual mods into target slots across all conversations
         function mountAllMods() {
-          // Permanently remove legacy duplicate unmanaged badges & misplaced slot containers
-          document.querySelectorAll('.antigravity-context-badge').forEach(el => el.remove());
-          document.querySelectorAll('.min-w-0 > #antigravity-slot-header-actions, .no-focus-agent-input > #antigravity-slot-header-actions').forEach(el => el.remove());
+          if (window.__antigravityIsMountingMods) return;
+          window.__antigravityIsMountingMods = true;
+          if (window.__antigravityModObserver) {
+            try { window.__antigravityModObserver.disconnect(); } catch (e) {}
+          }
+          try {
+            // Preserve last known compact state before slot innerHTML updates
+            document.querySelectorAll('.antigravity-slot-container').forEach(slot => {
+              const prevTach = slot.querySelector('.antigravity-tachometer-badge');
+              const prevAgent = slot.querySelector('.antigravity-agent-badge');
+              if (prevTach) slot.__lastTachCompact = prevTach.classList.contains('compact');
+              if (prevAgent) slot.__lastAgentCompact = prevAgent.classList.contains('compact');
+            });
 
-          ${mountSnippets.join('\n')}
+            // Permanently remove legacy duplicate unmanaged badges, speaker icon wrappers & misplaced non-flex slot containers
+            document.querySelectorAll('.antigravity-context-badge').forEach(el => el.remove());
+            document.querySelectorAll('.min-w-0:not(.flex) > #antigravity-slot-header-actions, .no-focus-agent-input > #antigravity-slot-header-actions').forEach(el => el.remove());
+            document.querySelectorAll('#antigravity-voice-assistant-wrapper, .antigravity-voice-assistant-wrapper, #antigravity-voice-assistant-btn, #antigravity-mod-voice-assistant').forEach(el => el.remove());
+            document.querySelectorAll('#antigravity-slot-chat-input-actions, .antigravity-slot-chat-input-actions').forEach(slot => {
+              if (!slot.children || slot.children.length === 0) {
+                slot.remove();
+              }
+            });
+
+            ${mountSnippets.join('\n')}
 
           // 3.1 Initialize Floating Portals in document.body
           let agentPortal = document.getElementById('antigravity-agent-dropdown-portal');
@@ -2362,7 +5137,7 @@ class ModLoader {
             document.body.appendChild(agentPortal);
           }
           const agentTemplate = document.querySelector('.antigravity-agent-dropdown-template');
-          if (agentTemplate && !agentPortal.classList.contains('open')) {
+          if (agentTemplate && !agentPortal.classList.contains('open') && (!agentPortal.firstElementChild || agentPortal.getAttribute('data-v') !== '2')) {
             agentPortal.innerHTML = agentTemplate.innerHTML;
             agentPortal.setAttribute('data-v', '2');
           }
@@ -2398,9 +5173,11 @@ class ModLoader {
             });
           });
 
-          // Bind Mods Manager click handler
-          // Bind Git Graph Tab trigger
+          // Bind Git Graph Tab trigger and keep .active synced with panel visibility
           document.querySelectorAll('#antigravity-git-tab-trigger').forEach(btn => {
+            if (btn.classList) {
+              btn.classList.toggle('active', !!window.__antigravityGitPanelOpen);
+            }
             if (btn.__gitClickBound) return;
             btn.__gitClickBound = true;
             btn.addEventListener('click', (e) => {
@@ -2408,6 +5185,7 @@ class ModLoader {
             });
           });
 
+          // Bind Mods Manager click handler
           document.querySelectorAll('.antigravity-mods-manager-btn').forEach(btn => {
             if (btn.__modsClickBound) return;
             btn.__modsClickBound = true;
@@ -2416,20 +5194,34 @@ class ModLoader {
             });
           });
 
+          document.querySelectorAll('.antigravity-pit-wall-btn').forEach(btn => {
+            if (btn.__pitWallClickBound) return;
+            btn.__pitWallClickBound = true;
+            btn.addEventListener('click', (e) => {
+              window.__togglePitWallModal(e, btn);
+            });
+          });
+
           // Restore saved mod visibility states
           window.__applyModsVisibility();
 
-          // Refresh active Git panel host if currently open
+          // Preserve active Git panel host if currently open; never overwrite hydrated data with stub template
           const activeGitHost = document.getElementById('antigravity-git-panel-host');
           const gitTemplate = document.getElementById('antigravity-git-panel-template');
-          if (activeGitHost && activeGitHost.style.display !== 'none' && gitTemplate) {
-            activeGitHost.innerHTML = gitTemplate.innerHTML;
-            if (window.__bindGitPanelEvents) {
-              window.__bindGitPanelEvents(activeGitHost);
+          const isGitHostVisible = !!(activeGitHost && activeGitHost.style && activeGitHost.style.display !== 'none' && (typeof activeGitHost.getAttribute !== 'function' || activeGitHost.getAttribute('data-open') !== 'false'));
+          if (isGitHostVisible && window.__antigravityGitPanelOpen) {
+            if (!isStubVcsData(window.__antigravityVcsData) && typeof window.__antigravityUpdateVcsData === 'function') {
+              window.__antigravityUpdateVcsData(window.__antigravityVcsData);
+            } else if (gitTemplate && (!activeGitHost.children || activeGitHost.children.length === 0)) {
+              activeGitHost.__skipInitialStateParse = true;
+              activeGitHost.innerHTML = gitTemplate.innerHTML;
+              if (window.__bindGitPanelEvents) {
+                window.__bindGitPanelEvents(activeGitHost);
+              }
             }
           }
 
-          // Restore saved agent selection across mounted badges (scoped per chat)
+          // Restore saved agent selection and caveman focus across mounted badges
           document.querySelectorAll('.antigravity-agent-badge').forEach(badge => {
             const cId = window.__resolveCascadeId(badge);
             const agentToApply = window.__resolveAgentForCascade(cId);
@@ -2437,55 +5229,104 @@ class ModLoader {
               badge.__lastCascadeId = cId;
               window.__applyAgentToBadge(badge, agentToApply);
             }
+            // Sync exterior reticle trigger in the same group immediately upon mount
+            const group = badge.closest('.antigravity-agent-selector-group');
+            syncReticleTrigger(group ? group.querySelector('.antigravity-caveman-reticle-trigger') : null, cId);
           });
 
           // Apply current telemetry
-          window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})});
+          if (window.__antigravityLiveTelemetryReceived) {
+            window.__updateAntigravityTelemetry();
+          } else {
+            window.__updateAntigravityTelemetry(${JSON.stringify(context.telemetry || {})}, true);
+          }
 
-          // Observe all slot containers for responsive auto-collapse
+          // Observe stable chatbox footer containers for responsive auto-collapse (guarded against RDP/minimize zero-dimension states & layout thrashing)
           document.querySelectorAll('.antigravity-slot-container').forEach(slot => {
-            if (window.__antigravityResizeObserver) {
-              window.__antigravityResizeObserver.observe(slot);
-              if (slot.parentElement) {
-                window.__antigravityResizeObserver.observe(slot.parentElement);
-              }
+            if (slot.id && slot.id !== 'antigravity-slot-header-actions') return;
+            const footer = resolveChatboxFooter(slot);
+            if (window.__antigravityResizeObserver && footer && footer !== slot && footer.__antigravityObservedBy !== window.__antigravityResizeObserver) {
+              footer.__antigravityObservedBy = window.__antigravityResizeObserver;
+              window.__antigravityResizeObserver.observe(footer);
             }
-            const footer = slot.closest('[class*="input-footer"]') || slot.closest('.flex.items-center.justify-between') || slot.parentElement || slot;
-            const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
-            const isNarrow = (footer && footer.offsetWidth < 440) || window.innerWidth < 960;
-            const shouldCompact = isForcedCompact || isNarrow;
             const tach = slot.querySelector('.antigravity-tachometer-badge');
-            if (tach) tach.classList.toggle('compact', shouldCompact);
             const agent = slot.querySelector('.antigravity-agent-badge');
-            if (agent) agent.classList.toggle('compact', shouldCompact);
+            const footerWidth = footer ? (footer.offsetWidth || footer.getBoundingClientRect?.().width || 0) : 0;
+            if (document.hidden || window.innerWidth <= 0 || footerWidth <= 0) {
+              if (tach && typeof slot.__lastTachCompact === 'boolean') {
+                tach.classList.toggle('compact', slot.__lastTachCompact);
+              }
+              if (agent && typeof slot.__lastAgentCompact === 'boolean') {
+                agent.classList.toggle('compact', slot.__lastAgentCompact);
+              }
+              return;
+            }
+            applyCompactToChatboxScope(slot, footerWidth);
           });
+
+            if (typeof window.__dockNativeVoiceToast === 'function') {
+              window.__dockNativeVoiceToast(document);
+            }
+            if (typeof window.__syncModelSlotsUI === 'function') {
+              window.__syncModelSlotsUI();
+            }
+            if (typeof window.__syncSubagentModelBadges === 'function') {
+              window.__syncSubagentModelBadges();
+            }
+            if (typeof window.__observeNativeModelSelector === 'function') {
+              window.__observeNativeModelSelector();
+            }
+          } finally {
+            window.__antigravityIsMountingMods = false;
+            if (window.__antigravityModObserver && document.body) {
+              try {
+                window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
+              } catch (e) {}
+            }
+          }
         }
 
-        // Initialize ResizeObserver for responsive auto-collapse
+        // Initialize ResizeObserver for responsive auto-collapse (coalesced per animation frame)
         if (window.__antigravityResizeObserver) {
           window.__antigravityResizeObserver.disconnect();
           window.__antigravityResizeObserver = null;
         }
 
+        const pendingResizeTargets = new Map();
+        let resizeRafScheduled = false;
+
+        const flushPendingResizeTargets = () => {
+          resizeRafScheduled = false;
+          if (document.hidden || window.innerWidth <= 0) {
+            pendingResizeTargets.clear();
+            return;
+          }
+          pendingResizeTargets.forEach((rawWidth, container) => {
+            const width = rawWidth > 0 ? rawWidth : 0;
+            if (width <= 0) return;
+            applyCompactToChatboxScope(container, width);
+          });
+          pendingResizeTargets.clear();
+        };
+
         window.__antigravityResizeObserver = new ResizeObserver((entries) => {
+          if (document.hidden || window.innerWidth <= 0) return;
           for (const entry of entries) {
             const container = entry.target;
-            const isForcedCompact = localStorage.getItem('__antigravity_compact_chatbox_mods') === 'true';
-            const width = (entry.contentRect && entry.contentRect.width > 0)
+            const footer = resolveChatboxFooter(container);
+            const rawWidth = (entry.contentRect && typeof entry.contentRect.width === 'number')
               ? entry.contentRect.width
-              : ((container.closest('[class*="input-footer"]') || container.parentElement || container).getBoundingClientRect?.().width || 500);
-            const isNarrow = width < 440 || window.innerWidth < 960;
-            const shouldCompact = isForcedCompact || isNarrow;
-
-            const tach = container.querySelector('.antigravity-tachometer-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-tachometer-badge') : null);
-            if (tach) {
-              tach.classList.toggle('compact', shouldCompact);
-            }
-
-            const agent = container.querySelector('.antigravity-agent-badge') || (container.parentElement ? container.parentElement.querySelector('.antigravity-agent-badge') : null);
-            if (agent) {
-              agent.classList.toggle('compact', shouldCompact);
-            }
+              : (footer.getBoundingClientRect?.().width || footer.offsetWidth || 0);
+            const width = rawWidth > 0 ? rawWidth : 0;
+            if (width <= 0) continue;
+            pendingResizeTargets.set(container, width);
+          }
+          if (!pendingResizeTargets.size || resizeRafScheduled) return;
+          if (typeof requestAnimationFrame === 'function') {
+            resizeRafScheduled = true;
+            requestAnimationFrame(flushPendingResizeTargets);
+          } else {
+            flushPendingResizeTargets();
           }
         });
 
@@ -2495,22 +5336,108 @@ class ModLoader {
           window.__fetchNativeUserQuotaSummary();
         }
 
-        // 4. Observe DOM mutations with smart slot check to avoid DOM thrashing
+        // 3.2 Recovery listener for Window Minimize & Remote Desktop (RDP) session reconnect
+        if (!window.__antigravityRdpRecoveryBound) {
+          window.__antigravityRdpRecoveryBound = true;
+          const handleRdpAndVisibilityRecovery = () => {
+            if (!document.hidden && window.innerWidth > 0) {
+              if (typeof window.__antigravityMountAll === 'function') {
+                window.__antigravityMountAll();
+              } else {
+                mountAllMods();
+              }
+              if (typeof window.__syncAgentBadges === 'function') {
+                window.__syncAgentBadges();
+              }
+            }
+          };
+          let resizeSyncRaf = null;
+          const handleWindowResizeSync = () => {
+            if (document.hidden || window.innerWidth <= 0) return;
+            const applyResize = () => {
+              resizeSyncRaf = null;
+              if (document.hidden || window.innerWidth <= 0) return;
+              const hasTrigger = document.querySelector('button[data-testid="model-selector-trigger"]');
+              const hasSlot = document.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions');
+              if (hasTrigger && !hasSlot) {
+                handleRdpAndVisibilityRecovery();
+              } else if (typeof window.__applyChatboxModsCompact === 'function') {
+                window.__applyChatboxModsCompact();
+              }
+            };
+            if (typeof requestAnimationFrame === 'function') {
+              if (resizeSyncRaf !== null) return;
+              resizeSyncRaf = requestAnimationFrame(applyResize);
+            } else {
+              applyResize();
+            }
+          };
+          if (typeof document.addEventListener === 'function') {
+            document.addEventListener('visibilitychange', handleRdpAndVisibilityRecovery);
+          }
+          if (typeof window.addEventListener === 'function') {
+            window.addEventListener('focus', handleRdpAndVisibilityRecovery);
+            window.addEventListener('resize', handleWindowResizeSync);
+          }
+        }
+
+        // 4. Observe DOM mutations with smart slot check & self-mutation exclusion to avoid DOM thrashing
         if (window.__antigravityModObserver) {
           window.__antigravityModObserver.disconnect();
           window.__antigravityModObserver = null;
         }
 
+        const isOwnedModNode = (node) => {
+          if (!node || node.nodeType !== 1) return false;
+          return Boolean(
+            node.classList?.contains('antigravity-slot-container') ||
+            node.classList?.contains('antigravity-voice-dock') ||
+            node.classList?.contains('antigravity-chat-planner-sync-btn') ||
+            (typeof node.id === 'string' && node.id.startsWith('antigravity-')) ||
+            node.closest?.('.antigravity-slot-container, .antigravity-voice-dock, .antigravity-chat-planner-sync-btn, [id^="antigravity-"]')
+          );
+        };
+
+        const hasExternalDomChanges = (mutations) => {
+          if (!Array.isArray(mutations) || !mutations.length) return true;
+          for (const m of mutations) {
+            if (m.removedNodes && m.removedNodes.length) {
+              for (const removed of m.removedNodes) {
+                if (removed?.nodeType === 1 && (
+                  removed.classList?.contains('antigravity-slot-container') ||
+                  removed.querySelector?.('.antigravity-slot-container')
+                )) {
+                  return true;
+                }
+              }
+            }
+            if (!isOwnedModNode(m.target)) {
+              return true;
+            }
+          }
+          return false;
+        };
+
         let mountDebounce = null;
-        window.__antigravityModObserver = new MutationObserver(() => {
+        window.__antigravityModObserver = new MutationObserver((mutations) => {
+          if (window.__antigravityIsMountingMods) return;
+          if (!hasExternalDomChanges(mutations)) return;
           if (mountDebounce) return;
           mountDebounce = setTimeout(() => {
             mountDebounce = null;
+            if (window.__antigravityIsMountingMods) return;
+            if (typeof window.__dockNativeVoiceToast === 'function') {
+              window.__dockNativeVoiceToast(document);
+            }
+            if (typeof window.__scanVoiceTranscriptsForAgent === 'function') {
+              window.__scanVoiceTranscriptsForAgent();
+            }
             const triggers = document.querySelectorAll('button[data-testid="model-selector-trigger"]');
             let missingSlot = false;
             for (const btn of triggers) {
               const parent = btn.parentElement;
               if (!parent) continue;
+              if (parent.closest && parent.closest('[role="dialog"], [role="menu"], .agy-overlay')) continue;
               const row = parent.closest('.flex.items-center') || parent;
               if (!row.querySelector('#antigravity-slot-header-actions, .antigravity-slot-header-actions')) {
                 missingSlot = true;
@@ -2519,36 +5446,64 @@ class ModLoader {
             }
 
             if (!missingSlot) {
-              const auxBtn = document.querySelector('button[data-testid="aux-pane-new-tab-button"]') || document.querySelector('.aux-pane-new-tab-button');
-              if (auxBtn && !document.querySelector('.antigravity-slot-aux-pane-tabs, #antigravity-slot-aux-pane-tabs')) {
+              const auxBtn = document.querySelector('button[data-testid="aux-pane-new-tab-button"], button[data-testid="side-panel-new-tab-button"], .aux-pane-new-tab-button, [data-active-tab-id], [data-side-panel-strip="true"]');
+              if (auxBtn && !document.querySelector('.antigravity-slot-aux-pane-tab, #antigravity-slot-aux-pane-tab')) {
                 missingSlot = true;
               }
             }
             if (!missingSlot) {
-              const sidebarSlot = document.querySelector('.shrink-0 > .bg-sidebar');
-              if (sidebarSlot && !document.querySelector('.antigravity-slot-sidebar-header, #antigravity-slot-sidebar-header')) {
+              const sidebarSlot = document.querySelector('.shrink-0 > .bg-sidebar') ||
+                                  document.querySelector('.shrink-0.bg-sidebar .flex.items-center.bg-sidebar') ||
+                                  document.querySelector('.shrink-0 .flex.items-center.bg-sidebar') ||
+                                  document.querySelector('.shrink-0.bg-sidebar');
+              if (sidebarSlot && !document.querySelector('.antigravity-slot-menubar-actions, #antigravity-slot-menubar-actions')) {
                 missingSlot = true;
               }
             }
 
             if (missingSlot) {
               mountAllMods();
-            } else if (typeof window.__syncAgentBadges === 'function') {
-              window.__syncAgentBadges();
+            } else {
+              if (typeof window.__syncAgentBadges === 'function') {
+                window.__syncAgentBadges();
+              }
+              if (typeof window.__syncSubagentModelBadges === 'function') {
+                window.__syncSubagentModelBadges();
+              }
+              if (typeof window.__observeNativeModelSelector === 'function') {
+                window.__observeNativeModelSelector();
+              }
             }
           }, 150);
         });
 
         window.__antigravityModObserver.observe(document.body, { childList: true, subtree: true });
+        if (typeof window.__discoverNativeModelCatalog === 'function') {
+          window.__discoverNativeModelCatalog();
+        }
+        if (typeof window.__applyNativeModelSelectorLock === 'function') {
+          const isLocked = window.__applyNativeModelSelectorLock();
+          if (isLocked && typeof window.__getNativeModelContext === 'function' && window.__getNativeModelContext()) {
+            const initialSlots = (typeof window.__getSavedModelSlots === 'function') ? window.__getSavedModelSlots() : null;
+            if (initialSlots && initialSlots.planner && typeof window.__syncNativeModelSelector === 'function') {
+              window.__syncNativeModelSelector(initialSlots.planner);
+            }
+          }
+        }
         return {
           success: true,
-          selectedAgentsMap: localStorage.getItem('__antigravity_selected_agents_map')
+          selectedAgentsMap: localStorage.getItem('__antigravity_selected_agents_map'),
+          modelSlots: localStorage.getItem('__antigravity_model_slots'),
+          discoveredModelCatalog: window.__DISCOVERED_MODEL_CATALOG || null
         };
       })();
     `;
   }
 }
 
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
 
 
 
@@ -2569,6 +5524,39 @@ class TelemetryService {
     this.tokenLimit = options.tokenLimit ?? 1_000_000;
     this.charsPerToken = options.charsPerToken ?? 3.8;
     this.parseCache = new Map();
+    this.cache = this.parseCache;
+    this.pitWallCache = { ts: 0, data: null };
+    this.pitWallFileCache = new Map();
+  }
+
+  /**
+   * Estimates character weight of structured tool calls without calling JSON.stringify on large payloads.
+   * @param {any} toolCalls
+   * @returns {number}
+   */
+  estimateToolCallsChars(toolCalls) {
+    if (!toolCalls) return 0;
+    if (typeof toolCalls === 'string') return toolCalls.length;
+    if (!Array.isArray(toolCalls)) return 32;
+    let total = 2;
+    for (let i = 0; i < toolCalls.length; i++) {
+      const tc = toolCalls[i];
+      if (!tc || typeof tc !== 'object') {
+        total += typeof tc === 'string' ? tc.length : 8;
+        continue;
+      }
+      if (typeof tc.name === 'string') total += tc.name.length + 12;
+      const args = tc.arguments !== undefined ? tc.arguments : tc.args;
+      if (typeof args === 'string') {
+        total += args.length + 16;
+      } else if (args && typeof args === 'object') {
+        for (const k of Object.keys(args)) {
+          const v = args[k];
+          total += k.length + 6 + (typeof v === 'string' ? v.length : (Array.isArray(v) ? v.length * 16 : 16));
+        }
+      }
+    }
+    return total;
   }
 
   /**
@@ -2604,6 +5592,21 @@ class TelemetryService {
   }
 
   /**
+   * Validates whether a candidate model string is a realistic model identifier or junk.
+   * @param {string} [rawName='']
+   * @returns {boolean}
+   */
+  isValidModelName(rawName = '') {
+    if (!rawName || typeof rawName !== 'string') return false;
+    const trimmed = rawName.trim();
+    if (!trimmed || trimmed.length > 48) return false;
+    const lower = trimmed.toLowerCase();
+    if (['none', 'null', 'undefined', 'unknown', 'default', 'fakemodel'].includes(lower)) return false;
+    if (/fakemodel|[\\{};=<>]/i.test(trimmed)) return false;
+    return true;
+  }
+
+  /**
    * Classifies a model name into its quota family and returns its quota limits.
    * @param {string} modelName
    * @returns {{ family: 'argon' | 'claude' | 'gemini', hasDualLimit: boolean, rollingCeiling: number, weeklyCeiling: number }}
@@ -2634,9 +5637,334 @@ class TelemetryService {
   }
 
   /**
+   * Unwraps potentially JSON-encoded tool call arguments from transcript logs.
+   * @param {any} rawVal
+   * @returns {any}
+   */
+  unwrapToolArg(rawVal) {
+    if (rawVal === undefined || rawVal === null) return '';
+    if (typeof rawVal !== 'string') return rawVal;
+    const trimmed = rawVal.trim();
+    if (!trimmed) return '';
+    if (
+      (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
+      (trimmed.startsWith('{') && trimmed.endsWith('}'))
+    ) {
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return trimmed.replace(/^["']|["']$/g, '').trim();
+      }
+    }
+    return trimmed;
+  }
+
+  /**
+   * Resolves the effective model name used by a subagent given its requested Model
+   * argument ('inherit', 'flash', 'flash_lite', 'pro', or explicit name) and parent model.
+   * @param {any} rawModelArg
+   * @param {string} [parentActiveModel='']
+   * @returns {{ modelName: string, requestedModel: string, isInherited: boolean }}
+   */
+  resolveSubagentModel(rawModelArg, parentActiveModel = '') {
+    const unwrapped = this.unwrapToolArg(rawModelArg);
+    const requested = typeof unwrapped === 'string' ? unwrapped.trim() : '';
+    const lower = (requested || 'inherit').toLowerCase();
+    const fallbackParent = this.sanitizeModelName(parentActiveModel) || 'Gemini 3.8 Flash';
+
+    if (!requested || lower === 'inherit') {
+      return {
+        modelName: fallbackParent,
+        requestedModel: 'inherit',
+        isInherited: true
+      };
+    }
+    if (lower === 'flash') {
+      return {
+        modelName: 'Gemini 3.8 Flash',
+        requestedModel: 'flash',
+        isInherited: false
+      };
+    }
+    if (lower === 'flash_lite' || lower === 'flash-lite') {
+      return {
+        modelName: 'Gemini 3.8 Flash-Lite',
+        requestedModel: 'flash_lite',
+        isInherited: false
+      };
+    }
+    if (lower === 'pro') {
+      return {
+        modelName: 'Gemini 3.8 Pro',
+        requestedModel: 'pro',
+        isInherited: false
+      };
+    }
+
+    return {
+      modelName: this.sanitizeModelName(requested) || fallbackParent,
+      requestedModel: requested,
+      isInherited: false
+    };
+  }
+
+  /**
+   * Infers conversation ID, conversation directory, and brain root from a transcript path.
+   * @param {string} filePath
+   * @returns {{ convId: string|null, convDir: string|null, brainRoot: string|null }}
+   */
+  inferConversationPaths(filePath) {
+    try {
+      const logsDir = path.dirname(filePath);
+      const sysGenDir = path.dirname(logsDir);
+      const convDir = path.dirname(sysGenDir);
+      const convName = path.basename(convDir);
+      if (
+        path.basename(sysGenDir) === '.system_generated' &&
+        /^[0-9a-fA-F-]{36}$/.test(convName)
+      ) {
+        return {
+          convId: convName,
+          convDir,
+          brainRoot: path.dirname(convDir)
+        };
+      }
+    } catch {}
+    return { convId: null, convDir: null, brainRoot: null };
+  }
+
+  /**
+   * Resolves the transcript file path for a given conversation ID inside brainRoot.
+   * @param {string} convId
+   * @param {string} [brainRoot]
+   * @returns {string|null}
+   */
+  resolveConversationTranscriptPath(convId, brainRoot = this.brainDir) {
+    if (!convId || !brainRoot) return null;
+    const baseLogs = path.join(brainRoot, convId, '.system_generated', 'logs');
+    const compactPath = path.join(baseLogs, 'transcript.jsonl');
+    if (fs.existsSync(compactPath)) return compactPath;
+    const fullPath = path.join(baseLogs, 'transcript_full.jsonl');
+    if (fs.existsSync(fullPath)) return fullPath;
+    return null;
+  }
+
+  /**
+   * Resolves display palette, short name, and quota pool classification for a model name.
+   * @param {string} [modelName='']
+   * @returns {{ color: string, shortName: string, poolId: 'gemini_unified'|'argon_weekly'|'third_party', poolLabel: string }}
+   */
+  resolveModelVisualMeta(modelName = '') {
+    const cleaned = this.sanitizeModelName(modelName) || 'Gemini 3.8 Flash';
+    const lower = cleaned.toLowerCase();
+
+    let color = '#94a3b8';
+    let poolId = 'gemini_unified';
+    let poolLabel = 'Gemini Unificado';
+
+    if (/argon|g1-pro/i.test(lower)) {
+      color = '#38bdf8';
+      poolId = 'argon_weekly';
+      poolLabel = 'Argon Semanal';
+    } else if (/opus/i.test(lower)) {
+      color = '#c084fc';
+      poolId = 'third_party';
+      poolLabel = 'Claude / GPT-OSS';
+    } else if (/sonnet|claude/i.test(lower)) {
+      color = '#a78bfa';
+      poolId = 'third_party';
+      poolLabel = 'Claude / GPT-OSS';
+    } else if (/gpt-oss|gpt|120b/i.test(lower)) {
+      color = '#f472b6';
+      poolId = 'third_party';
+      poolLabel = 'Claude / GPT-OSS';
+    } else if (/neon/i.test(lower)) {
+      color = '#a3e635';
+    } else if (/hydrogen/i.test(lower)) {
+      color = '#34d399';
+    } else if (/flash|gemini/i.test(lower)) {
+      color = '#fbbf24';
+    }
+
+    let shortName = cleaned;
+    if (/orchestrator/i.test(lower)) {
+      shortName = lower.includes('neon') ? 'Orch. Neon' : 'Orchestrator';
+    } else {
+      shortName = cleaned
+        .replace(/^Gemini\s+4\s+/i, '')
+        .replace(/^Gemini\s+([\d.]+)\s+Flash/i, 'Flash $1')
+        .replace(/^Claude\s+/i, '')
+        .replace(/\(([^)]+)\)/g, (_, eff) => {
+          const e = eff.trim();
+          return /^medium$/i.test(e) ? 'Med' : e;
+        })
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (/^GPT-OSS/i.test(shortName)) {
+        shortName = 'GPT-OSS 120B';
+      }
+    }
+
+    return { color, shortName, poolId, poolLabel };
+  }
+
+  /**
+   * Builds a 100-cell Claude-style waffle grid representing session context usage vs tokenLimit.
+   * @param {number} estTokens
+   * @param {Object} breakdown
+   * @returns {Array<{ index: number, key: string, label: string, color: string, tokens: number, pct: number }>}
+   */
+  buildWaffleCells(estTokens = 0, breakdown = {}) {
+    const limit = Math.max(1, this.tokenLimit || 1_000_000);
+    const cellSize = limit / 100;
+    const bd = breakdown || {};
+
+    const categories = [
+      { key: 'user', label: 'Prompts', color: '#38bdf8', tokens: bd.user?.tokens || 0 },
+      { key: 'model', label: 'Replies', color: '#a855f7', tokens: bd.model?.tokens || 0 },
+      { key: 'thinking', label: 'Thinking', color: '#ec4899', tokens: bd.thinking?.tokens || 0 },
+      { key: 'tools', label: 'Tools', color: '#f59e0b', tokens: bd.tools?.tokens || 0 },
+      { key: 'mcp', label: 'MCP', color: '#10b981', tokens: bd.mcp?.tokens || 0 },
+      { key: 'other', label: 'Context', color: '#64748b', tokens: bd.other?.tokens || 0 }
+    ];
+
+    const knownSum = categories.reduce((acc, c) => acc + c.tokens, 0);
+    if (estTokens > knownSum) {
+      categories[5].tokens += (estTokens - knownSum);
+    }
+
+    let usedCells = estTokens > 0 ? Math.min(100, Math.round(estTokens / cellSize)) : 0;
+    if (estTokens > 0 && usedCells === 0) usedCells = 1;
+
+    const counts = categories.map(c => {
+      const share = estTokens > 0 ? (c.tokens / estTokens) * usedCells : 0;
+      return { ...c, exact: share, cells: Math.floor(share) };
+    });
+
+    let allocated = counts.reduce((acc, c) => acc + c.cells, 0);
+    const remainders = [...counts]
+      .filter(c => c.tokens > 0)
+      .sort((a, b) => (b.exact - Math.floor(b.exact)) - (a.exact - Math.floor(a.exact)));
+
+    let idx = 0;
+    while (allocated < usedCells && remainders.length > 0) {
+      remainders[idx % remainders.length].cells++;
+      allocated++;
+      idx++;
+    }
+
+    const cells = [];
+    for (const c of counts) {
+      const pct = estTokens > 0 ? Number(((c.tokens / limit) * 100).toFixed(1)) : 0;
+      for (let i = 0; i < c.cells && cells.length < 100; i++) {
+        cells.push({
+          index: cells.length,
+          key: c.key,
+          label: c.label,
+          color: c.color,
+          tokens: c.tokens,
+          pct
+        });
+      }
+    }
+
+    const freeTokens = Math.max(0, limit - estTokens);
+    const freePct = Number(((freeTokens / limit) * 100).toFixed(1));
+    while (cells.length < 100) {
+      cells.push({
+        index: cells.length,
+        key: 'free',
+        label: 'Libre',
+        color: 'rgba(255, 255, 255, 0.08)',
+        tokens: freeTokens,
+        pct: freePct
+      });
+    }
+
+    return cells;
+  }
+
+  /**
+   * Aggregates chatModels entries into the 3 Antigravity quota pools.
+   * @param {Array<Object>} chatModels
+   * @returns {Array<Object>}
+   */
+  buildPoolsSummary(chatModels = []) {
+    const pools = {
+      gemini_unified: { id: 'gemini_unified', label: 'Gemini Unificado', accent: '#a3e635', tokens: 0, displayTokens: '0', pct: 0, models: [] },
+      argon_weekly: { id: 'argon_weekly', label: 'Argon Semanal', accent: '#38bdf8', tokens: 0, displayTokens: '0', pct: 0, models: [] },
+      third_party: { id: 'third_party', label: 'Claude / GPT-OSS', accent: '#c084fc', tokens: 0, displayTokens: '0', pct: 0, models: [] }
+    };
+
+    const list = Array.isArray(chatModels) ? chatModels : [];
+    const total = list.reduce((acc, m) => acc + (m.tokens || 0), 0);
+
+    for (const m of list) {
+      const meta = (m.poolId && m.color && m.shortName)
+        ? m
+        : this.resolveModelVisualMeta(m.modelName);
+      const pool = pools[meta.poolId] || pools.gemini_unified;
+      const t = m.tokens || 0;
+      pool.tokens += t;
+      pool.models.push({
+        modelName: m.modelName,
+        shortName: m.shortName || meta.shortName,
+        color: m.color || meta.color,
+        tokens: t,
+        displayTokens: m.displayTokens || this.formatTokens(t),
+        pct: total > 0 ? Math.round((t / total) * 100) : 0
+      });
+    }
+
+    return Object.values(pools).map(p => ({
+      ...p,
+      displayTokens: this.formatTokens(p.tokens),
+      pct: total > 0 ? Math.round((p.tokens / total) * 100) : 0
+    }));
+  }
+
+  /**
+   * Extracts { fromModel, toModel } from a <USER_SETTINGS_CHANGE> block when present.
+   * Supports both `<USER_SETTINGS_CHANGE>Model Selection from "A" to "B"</USER_SETTINGS_CHANGE>`
+   * and `The user changed setting \`Model Selection\` from A to B.` formats, including dotted versions.
+   * @param {string} content
+   * @returns {{ fromModel: string|null, toModel: string|null }}
+   */
+  extractModelSelectionChange(content) {
+    if (typeof content !== 'string' || !content.includes('<USER_SETTINGS_CHANGE>')) {
+      return { fromModel: null, toModel: null };
+    }
+    const sectionMatch = content.match(/<USER_SETTINGS_CHANGE>([\s\S]*?)<\/USER_SETTINGS_CHANGE>/i);
+    const settingsBlock = sectionMatch ? sectionMatch[1] : content;
+    const match = settingsBlock.match(
+      /(?:The user changed setting\s+)?[`'"]?Model Selection[`'"]?\s+from\s+(?:"([^"]+)"|'([^']+)'|`([^`]+)`|(.+?))\s+to\s+(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([^\n<]+?)(?:\.(?=\s|$)|\s*$))/i
+    );
+    if (!match) {
+      return { fromModel: null, toModel: null };
+    }
+    const rawFrom = (match[1] || match[2] || match[3] || match[4] || '').trim();
+    const rawTo = (match[5] || match[6] || match[7] || match[8] || '').trim();
+    const sanitizedFrom = rawFrom ? this.sanitizeModelName(rawFrom) : '';
+    const sanitizedTo = rawTo ? this.sanitizeModelName(rawTo) : '';
+    return {
+      fromModel: this.isValidModelName(sanitizedFrom) ? sanitizedFrom : null,
+      toModel: this.isValidModelName(sanitizedTo) ? sanitizedTo : null
+    };
+  }
+
+  /**
    * Default empty telemetry snapshot.
    */
   getEmptySnapshot() {
+    const emptyBreakdown = {
+      user: { tokens: 0, pct: 0 },
+      model: { tokens: 0, pct: 0 },
+      thinking: { tokens: 0, pct: 0 },
+      tools: { tokens: 0, pct: 0 },
+      mcp: { tokens: 0, pct: 0 },
+      other: { tokens: 0, pct: 0 }
+    };
     return {
       estTokens: 0,
       pct: '0.0',
@@ -2645,6 +5973,9 @@ class TelemetryService {
       steps: 0,
       compactions: [],
       chatModels: [],
+      subagents: [],
+      waffleCells: this.buildWaffleCells(0, emptyBreakdown),
+      poolsSummary: this.buildPoolsSummary([]),
       modelQuota: {
         hasDualLimit: true,
         modelName: 'Gemini 3.8 Flash',
@@ -2659,193 +5990,516 @@ class TelemetryService {
         singleLabel: 'Cuota Disponible',
         usagePct: 100
       },
-      breakdown: {
-        user: { tokens: 0, pct: 0 },
-        model: { tokens: 0, pct: 0 },
-        thinking: { tokens: 0, pct: 0 },
-        tools: { tokens: 0, pct: 0 },
-        mcp: { tokens: 0, pct: 0 },
-        other: { tokens: 0, pct: 0 }
-      }
+      breakdown: emptyBreakdown
     };
   }
 
   /**
-   * Parses a specific transcript JSONL file.
+   * Parses a single transcript file without resolving external child subagent files,
+   * caching raw results keyed by file path and inherited fallback model.
    * @param {string} filePath
+   * @param {string} [inheritedModel='']
+   * @returns {Object|null}
+   */
+  _parseSingleTranscript(filePath, inheritedModel = '') {
+    if (!filePath || !fs.existsSync(filePath)) {
+      return null;
+    }
+
+    const cleanInherited = this.sanitizeModelName(inheritedModel);
+    const stat = fs.statSync(filePath);
+    const totalBytes = stat.size;
+    const mtimeMs = stat.mtimeMs;
+
+    const { convDir } = this.inferConversationPaths(filePath);
+    const subagentsMetaDir = convDir ? path.join(convDir, '.system_generated', 'subagents') : null;
+    let subagentsDirSig = '';
+    if (subagentsMetaDir && fs.existsSync(subagentsMetaDir)) {
+      try {
+        const metaFiles = fs.readdirSync(subagentsMetaDir).filter(f => f.endsWith('.json'));
+        let maxSubMtime = 0;
+        for (const mf of metaFiles) {
+          const mst = fs.statSync(path.join(subagentsMetaDir, mf)).mtimeMs;
+          if (mst > maxSubMtime) maxSubMtime = mst;
+        }
+        subagentsDirSig = `${metaFiles.length}:${maxSubMtime}`;
+      } catch {}
+    }
+
+    const cacheKey = `${filePath}::${cleanInherited}`;
+    const cached = this.parseCache.get(cacheKey);
+    if (
+      cached &&
+      cached.mtimeMs === mtimeMs &&
+      cached.size === totalBytes &&
+      cached.subagentsDirSig === subagentsDirSig
+    ) {
+      return cached.rawResult;
+    }
+
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const lines = content.split('\n');
+
+    const raw = {
+      userChars: 0,
+      modelChars: 0,
+      thinkingChars: 0,
+      toolsChars: 0,
+      mcpChars: 0,
+      otherChars: 0,
+      totalChars: 0,
+      steps: 0
+    };
+
+    let totalRawChars = 0;
+    const stepEntries = [];
+    const compactions = [];
+    let detectedModel = cleanInherited || '';
+    const modelLedger = new Map();
+    let directBillingTokens = 0;
+
+    const pendingSubagentCalls = [];
+    const spawnedSubagentsMap = new Map();
+    const repliedSenders = new Set();
+    const killedSubagentIds = new Set();
+    let hasPlannerResponse = false;
+    let lastPlannerHasTools = false;
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      raw.steps++;
+
+      let obj;
+      try {
+        obj = JSON.parse(line);
+      } catch {
+        totalRawChars += line.length;
+        continue;
+      }
+
+      if (obj.type === 'CHECKPOINT') {
+        const preCompactTokens = Math.round(totalRawChars / this.charsPerToken);
+        const postCompactTokens = Math.round(line.length / this.charsPerToken);
+        compactions.push({
+          step: obj.step_index ?? raw.steps,
+          fromTokens: preCompactTokens,
+          toTokens: postCompactTokens,
+          displayFrom: this.formatTokens(preCompactTokens),
+          displayTo: this.formatTokens(postCompactTokens),
+          timestamp: obj.created_at || null
+        });
+        totalRawChars = line.length;
+        raw.userChars = 0;
+        raw.modelChars = 0;
+        raw.thinkingChars = 0;
+        raw.toolsChars = 0;
+        raw.mcpChars = 0;
+        raw.otherChars = 0;
+      } else {
+        totalRawChars += line.length;
+      }
+
+      if (
+        (obj.type === 'USER_INPUT' || obj.source === 'USER_EXPLICIT') &&
+        typeof obj.content === 'string' &&
+        obj.content.includes('<USER_SETTINGS_CHANGE>')
+      ) {
+        const sectionMatch = obj.content.match(/<USER_SETTINGS_CHANGE>([\s\S]*?)<\/USER_SETTINGS_CHANGE>/i);
+        const settingsBlock = sectionMatch ? sectionMatch[1] : obj.content;
+        const match = settingsBlock.match(/Model Selection[`'"]?\s+from\s+.*?\s+to\s+([^\n<]+)/i);
+        if (match && match[1]) {
+          detectedModel = this.sanitizeModelName(match[1]);
+        }
+      }
+
+      if (obj.model) {
+        detectedModel = this.sanitizeModelName(obj.model);
+      }
+
+      const activeModel = this.sanitizeModelName(detectedModel) || 'Gemini 3.8 Flash';
+      const len = (str) => (typeof str === 'string' ? str.length : 0);
+      const contentLen = len(obj.content);
+      const thinkingLen = len(obj.thinking);
+      const toolCallsLen = this.estimateToolCallsChars(obj.tool_calls);
+
+      if (obj.type === 'PLANNER_RESPONSE') {
+        hasPlannerResponse = true;
+        lastPlannerHasTools = Array.isArray(obj.tool_calls) && obj.tool_calls.length > 0;
+      }
+
+      if (Array.isArray(obj.tool_calls)) {
+        for (const tc of obj.tool_calls) {
+          if (!tc || !tc.name) continue;
+          const args = tc.args || tc.arguments || {};
+          if (tc.name === 'invoke_subagent') {
+            const batchSubagents = this.unwrapToolArg(args.Subagents);
+            if (Array.isArray(batchSubagents)) {
+              for (const subItem of batchSubagents) {
+                if (!subItem || typeof subItem !== 'object') continue;
+                pendingSubagentCalls.push({
+                  rawModel: subItem.Model,
+                  role: String(this.unwrapToolArg(subItem.Role) || '').trim(),
+                  typeName: String(this.unwrapToolArg(subItem.TypeName) || 'subagent').trim(),
+                  parentModel: activeModel,
+                  stepIndex: obj.step_index ?? raw.steps,
+                  timestamp: obj.created_at || null
+                });
+              }
+            } else {
+              pendingSubagentCalls.push({
+                rawModel: args.Model,
+                role: String(this.unwrapToolArg(args.Role) || '').trim(),
+                typeName: String(this.unwrapToolArg(args.TypeName) || 'subagent').trim(),
+                parentModel: activeModel,
+                stepIndex: obj.step_index ?? raw.steps,
+                timestamp: obj.created_at || null
+              });
+            }
+          } else if (tc.name === 'manage_subagents') {
+            const action = String(this.unwrapToolArg(args.Action) || '').toLowerCase();
+            if (action === 'kill_all') {
+              for (const existingId of spawnedSubagentsMap.keys()) {
+                killedSubagentIds.add(existingId);
+              }
+            } else if (action === 'kill') {
+              const ids = this.unwrapToolArg(args.ConversationIds);
+              if (Array.isArray(ids)) {
+                for (const id of ids) {
+                  if (typeof id === 'string') killedSubagentIds.add(id.trim());
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (
+        obj.type === 'GENERIC' &&
+        typeof obj.content === 'string' &&
+        obj.content.includes('Created the following subagent:')
+      ) {
+        const idMatch = obj.content.match(/Created the following subagent:[\s\S]*?"conversationId"\s*:\s*"([0-9a-fA-F-]{36})"/);
+        if (idMatch && idMatch[1]) {
+          const childId = idMatch[1];
+          const pending = pendingSubagentCalls.shift() || {
+            rawModel: 'inherit',
+            role: '',
+            typeName: 'subagent',
+            parentModel: activeModel,
+            stepIndex: obj.step_index ?? raw.steps,
+            timestamp: obj.created_at || null
+          };
+          spawnedSubagentsMap.set(childId, {
+            conversationId: childId,
+            rawModel: pending.rawModel,
+            role: pending.role,
+            typeName: pending.typeName || 'subagent',
+            parentModel: pending.parentModel || activeModel,
+            spawnStepIndex: pending.stepIndex,
+            timestamp: pending.timestamp || obj.created_at || null,
+            state: 'SUBAGENT_STATE_ALIVE'
+          });
+        }
+      }
+
+      if (typeof obj.content === 'string' && obj.content.includes('sender=')) {
+        const senderMatches = obj.content.matchAll(/\bsender=([0-9a-fA-F-]{36})\b/g);
+        for (const sm of senderMatches) {
+          if (sm[1]) repliedSenders.add(sm[1]);
+        }
+      }
+
+      let stepBillingTokens = 0;
+      if (obj.type === 'PLANNER_RESPONSE' && (obj.input_tokens !== undefined || obj.output_tokens !== undefined)) {
+        if (obj.cache_read_tokens !== undefined) {
+          stepBillingTokens = Math.max(
+            obj.output_tokens || 0,
+            Math.round((contentLen + thinkingLen + toolCallsLen) / this.charsPerToken)
+          );
+        } else {
+          stepBillingTokens = (obj.input_tokens || 0) + (obj.output_tokens || 0);
+        }
+      } else if (obj.type === 'USER_INPUT' || obj.type === 'PLANNER_RESPONSE') {
+        stepBillingTokens = Math.round((contentLen + thinkingLen) / this.charsPerToken);
+      }
+
+      directBillingTokens += stepBillingTokens;
+      const stepContextTokens = Math.round(line.length / this.charsPerToken);
+
+      if (!modelLedger.has(activeModel)) {
+        modelLedger.set(activeModel, {
+          tokens: 0,
+          contextTokens: 0
+        });
+      }
+      const ledgerEntry = modelLedger.get(activeModel);
+      ledgerEntry.tokens += stepBillingTokens;
+      ledgerEntry.contextTokens += stepContextTokens;
+
+      if (obj.created_at) {
+        const t = new Date(obj.created_at).getTime();
+        if (!isNaN(t)) {
+          stepEntries.push({
+            timestamp: t,
+            tokens: stepBillingTokens,
+            model: activeModel
+          });
+        }
+      }
+
+      if (obj.thinking) {
+        raw.thinkingChars += thinkingLen;
+      }
+
+      if (obj.tool_calls && Array.isArray(obj.tool_calls)) {
+        const isMcp = obj.tool_calls.some(tc =>
+          tc.name && (tc.name.startsWith('mcp_') || tc.name === 'call_mcp_tool')
+        );
+        if (isMcp) raw.mcpChars += contentLen + toolCallsLen;
+        else raw.toolsChars += contentLen + toolCallsLen;
+      } else if (obj.type === 'USER_INPUT') {
+        raw.userChars += contentLen;
+      } else if (obj.type === 'PLANNER_RESPONSE') {
+        raw.modelChars += contentLen;
+      } else if (obj.type === 'GENERIC') {
+        raw.toolsChars += contentLen + toolCallsLen;
+      } else {
+        raw.otherChars += contentLen;
+      }
+    }
+
+    if (subagentsMetaDir && fs.existsSync(subagentsMetaDir)) {
+      try {
+        const metaFiles = fs.readdirSync(subagentsMetaDir)
+          .filter(f => f.endsWith('.json'))
+          .sort();
+        for (const mf of metaFiles) {
+          try {
+            const metaObj = JSON.parse(fs.readFileSync(path.join(subagentsMetaDir, mf), 'utf-8'));
+            const cid = metaObj.conversationId || path.basename(mf, '.json');
+            if (!cid) continue;
+            const existing = spawnedSubagentsMap.get(cid);
+            const metaRole = metaObj.subagentDescriptor?.role || '';
+            const metaType = metaObj.subagentDescriptor?.typeName || '';
+            if (existing) {
+              if (metaRole && !existing.role) existing.role = metaRole;
+              if (metaType && (!existing.typeName || existing.typeName === 'subagent')) {
+                existing.typeName = metaType;
+              }
+              if (metaObj.state) existing.state = metaObj.state;
+              if (metaObj.spawnStepIndex !== undefined) existing.spawnStepIndex = metaObj.spawnStepIndex;
+            } else {
+              spawnedSubagentsMap.set(cid, {
+                conversationId: cid,
+                rawModel: 'inherit',
+                role: metaRole,
+                typeName: metaType || 'subagent',
+                parentModel: this.sanitizeModelName(detectedModel) || 'Gemini 3.8 Flash',
+                spawnStepIndex: metaObj.spawnStepIndex ?? 0,
+                timestamp: null,
+                state: metaObj.state || 'SUBAGENT_STATE_ALIVE'
+              });
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+
+    for (const killedId of killedSubagentIds) {
+      const entry = spawnedSubagentsMap.get(killedId);
+      if (entry) entry.state = 'SUBAGENT_STATE_KILLED';
+    }
+
+    raw.totalChars = totalRawChars;
+    const estTokens = Math.round(raw.totalChars / this.charsPerToken);
+    const pctVal = (estTokens / this.tokenLimit) * 100;
+    const pct = pctVal < 0.01 && estTokens > 0 ? '<0.01' : pctVal.toFixed(pctVal < 1 ? 2 : 1);
+
+    const toTokens = (chars) => Math.round(chars / this.charsPerToken);
+    const catPct = (t) => (estTokens > 0 ? Math.round((t / estTokens) * 100) : 0);
+
+    const userTokens = toTokens(raw.userChars);
+    const modelTokens = toTokens(raw.modelChars);
+    const thinkingTokens = toTokens(raw.thinkingChars);
+    const toolsTokens = toTokens(raw.toolsChars);
+    const mcpTokens = toTokens(raw.mcpChars);
+    const otherTokens = toTokens(raw.otherChars);
+
+    const rawModelEntries = Array.from(modelLedger.entries()).map(([modelName, data]) => ({
+      modelName,
+      tokens: data.tokens,
+      contextTokens: data.contextTokens
+    }));
+
+    const rawResult = {
+      estTokens,
+      pct,
+      displayTokens: this.formatTokens(estTokens),
+      sizeKb: Math.round(totalBytes / 1024),
+      steps: raw.steps,
+      compactions,
+      detectedModel: this.sanitizeModelName(detectedModel) || 'Gemini 3.8 Flash',
+      directBillingTokens,
+      stepEntries,
+      rawModelEntries,
+      spawnedSubagents: Array.from(spawnedSubagentsMap.values()),
+      repliedSenders: Array.from(repliedSenders),
+      hasPlannerResponse,
+      lastPlannerHasTools,
+      breakdown: {
+        user: { tokens: userTokens, pct: catPct(userTokens) },
+        model: { tokens: modelTokens, pct: catPct(modelTokens) },
+        thinking: { tokens: thinkingTokens, pct: catPct(thinkingTokens) },
+        tools: { tokens: toolsTokens, pct: catPct(toolsTokens) },
+        mcp: { tokens: mcpTokens, pct: catPct(mcpTokens) },
+        other: { tokens: otherTokens, pct: catPct(otherTokens) }
+      }
+    };
+
+    this.parseCache.set(cacheKey, {
+      mtimeMs,
+      size: totalBytes,
+      subagentsDirSig,
+      rawResult
+    });
+
+    return rawResult;
+  }
+
+  /**
+   * Recursively resolves the subagent execution tree for a parsed parent transcript.
+   * @param {Object} parentRaw
+   * @param {string} brainRoot
+   * @param {Set<string>} visitedIds
+   * @param {number} [depth=0]
+   * @returns {Array<Object>}
+   */
+  _collectSubagentTree(parentRaw, brainRoot, visitedIds, depth = 0) {
+    if (!parentRaw || !Array.isArray(parentRaw.spawnedSubagents) || depth > 6) {
+      return [];
+    }
+
+    const repliedSet = new Set(parentRaw.repliedSenders || []);
+    const collected = [];
+
+    for (const spawn of parentRaw.spawnedSubagents) {
+      const cid = spawn.conversationId;
+      if (!cid || visitedIds.has(cid)) continue;
+      visitedIds.add(cid);
+
+      const resolved = this.resolveSubagentModel(spawn.rawModel, spawn.parentModel);
+      const childPath = brainRoot ? this.resolveConversationTranscriptPath(cid, brainRoot) : null;
+      const childRaw = childPath ? this._parseSingleTranscript(childPath, resolved.modelName) : null;
+
+      const effectiveModel = childRaw && childRaw.detectedModel
+        ? childRaw.detectedModel
+        : resolved.modelName;
+      const childTokens = childRaw ? childRaw.directBillingTokens : 0;
+      const childSteps = childRaw ? childRaw.steps : 0;
+
+      let status = 'running';
+      if (spawn.state === 'SUBAGENT_STATE_KILLED') {
+        status = 'killed';
+      } else if (
+        repliedSet.has(cid) ||
+        (childRaw && childRaw.hasPlannerResponse && !childRaw.lastPlannerHasTools)
+      ) {
+        status = 'done';
+      }
+
+      collected.push({
+        conversationId: cid,
+        role: spawn.role || spawn.typeName || 'Subagent',
+        typeName: spawn.typeName || 'subagent',
+        modelName: effectiveModel,
+        requestedModel: resolved.requestedModel,
+        isInherited: resolved.isInherited,
+        tokens: childTokens,
+        displayTokens: this.formatTokens(childTokens),
+        steps: childSteps,
+        status,
+        spawnStepIndex: spawn.spawnStepIndex ?? 0,
+        depth,
+        stepEntries: childRaw ? childRaw.stepEntries : []
+      });
+
+      if (childRaw && Array.isArray(childRaw.spawnedSubagents) && childRaw.spawnedSubagents.length > 0) {
+        const nested = this._collectSubagentTree(childRaw, brainRoot, visitedIds, depth + 1);
+        collected.push(...nested);
+      }
+    }
+
+    return collected;
+  }
+
+  /**
+   * Parses a specific transcript JSONL file and resolves any spawned subagents
+   * along with their effective models and per-model consumption breakdown.
+   * @param {string} filePath
+   * @param {Object} [options]
+   * @param {string} [options.inheritedModel]
+   * @param {string} [options.brainDir]
    * @returns {Object}
    */
-  parseTranscriptFile(filePath) {
+  parseTranscriptFile(filePath, options = {}) {
     try {
-      if (!fs.existsSync(filePath)) {
+      if (!filePath || !fs.existsSync(filePath)) {
         return this.getEmptySnapshot();
       }
 
-      const stat = fs.statSync(filePath);
-      const totalBytes = stat.size;
-      const mtimeMs = stat.mtimeMs;
-      const cached = this.parseCache.get(filePath);
-      if (cached && cached.mtimeMs === mtimeMs && cached.size === totalBytes) {
-        return JSON.parse(JSON.stringify(cached.snapshot));
+      const { convId, brainRoot: inferredBrainRoot } = this.inferConversationPaths(filePath);
+      const effectiveBrainRoot = options.brainDir || inferredBrainRoot || this.brainDir;
+      const rawParsed = this._parseSingleTranscript(filePath, options.inheritedModel || '');
+      if (!rawParsed) {
+        return this.getEmptySnapshot();
       }
 
-      const content = fs.readFileSync(filePath, 'utf-8');
-      const lines = content.split('\n');
+      const visitedIds = new Set();
+      if (convId) visitedIds.add(convId);
 
-      const raw = {
-        userChars: 0,
-        modelChars: 0,
-        thinkingChars: 0,
-        toolsChars: 0,
-        mcpChars: 0,
-        otherChars: 0,
-        totalChars: 0,
-        steps: 0
-      };
+      const subagentNodes = this._collectSubagentTree(rawParsed, effectiveBrainRoot, visitedIds, 0);
 
-      let totalRawChars = 0;
-      const stepEntries = [];
-      const compactions = [];
-      let detectedModel = '';
-      const modelLedger = new Map();
+      const combinedLedger = new Map();
+      for (const entry of rawParsed.rawModelEntries) {
+        combinedLedger.set(entry.modelName, {
+          directTokens: entry.tokens,
+          subagentTokens: 0,
+          tokens: entry.tokens,
+          contextTokens: entry.contextTokens,
+          subagents: []
+        });
+      }
 
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        raw.steps++;
+      const combinedStepEntries = [...rawParsed.stepEntries];
+      const subagents = [];
 
-        let obj;
-        try {
-          obj = JSON.parse(line);
-        } catch {
-          totalRawChars += line.length;
-          continue;
+      for (const node of subagentNodes) {
+        const { stepEntries: childSteps, ...publicSubagent } = node;
+        subagents.push(publicSubagent);
+
+        if (Array.isArray(childSteps) && childSteps.length > 0) {
+          combinedStepEntries.push(...childSteps);
         }
 
-        if (obj.type === 'CHECKPOINT') {
-          const preCompactTokens = Math.round(totalRawChars / this.charsPerToken);
-          const postCompactTokens = Math.round(line.length / this.charsPerToken);
-          compactions.push({
-            step: obj.step_index ?? raw.steps,
-            fromTokens: preCompactTokens,
-            toTokens: postCompactTokens,
-            displayFrom: this.formatTokens(preCompactTokens),
-            displayTo: this.formatTokens(postCompactTokens),
-            timestamp: obj.created_at || null
-          });
-          totalRawChars = line.length;
-          raw.userChars = 0;
-          raw.modelChars = 0;
-          raw.thinkingChars = 0;
-          raw.toolsChars = 0;
-          raw.mcpChars = 0;
-          raw.otherChars = 0;
-        } else {
-          totalRawChars += line.length;
-        }
-
-        if (
-          (obj.type === 'USER_INPUT' || obj.source === 'USER_EXPLICIT') &&
-          typeof obj.content === 'string' &&
-          obj.content.includes('<USER_SETTINGS_CHANGE>')
-        ) {
-          const sectionMatch = obj.content.match(/<USER_SETTINGS_CHANGE>([\s\S]*?)<\/USER_SETTINGS_CHANGE>/i);
-          const settingsBlock = sectionMatch ? sectionMatch[1] : obj.content;
-          const match = settingsBlock.match(/Model Selection[`'"]?\s+from\s+.*?\s+to\s+([^\n<]+)/i);
-          if (match && match[1]) {
-            detectedModel = this.sanitizeModelName(match[1]);
-          }
-        }
-
-        if (obj.model) {
-          detectedModel = this.sanitizeModelName(obj.model);
-        }
-
-        const activeModel = this.sanitizeModelName(detectedModel) || 'Gemini 3.8 Flash';
-        const len = (str) => (typeof str === 'string' ? str.length : 0);
-        const contentLen = len(obj.content);
-        const thinkingLen = len(obj.thinking);
-        const toolCallsLen = obj.tool_calls ? JSON.stringify(obj.tool_calls).length : 0;
-
-        let stepBillingTokens = 0;
-        if (obj.type === 'PLANNER_RESPONSE' && (obj.input_tokens !== undefined || obj.output_tokens !== undefined)) {
-          if (obj.cache_read_tokens !== undefined) {
-            stepBillingTokens = Math.max(
-              obj.output_tokens || 0,
-              Math.round((contentLen + thinkingLen + toolCallsLen) / this.charsPerToken)
-            );
-          } else {
-            stepBillingTokens = (obj.input_tokens || 0) + (obj.output_tokens || 0);
-          }
-        } else if (obj.type === 'USER_INPUT' || obj.type === 'PLANNER_RESPONSE') {
-          stepBillingTokens = Math.round((contentLen + thinkingLen) / this.charsPerToken);
-        }
-
-        const stepContextTokens = Math.round(line.length / this.charsPerToken);
-
-        if (!modelLedger.has(activeModel)) {
-          modelLedger.set(activeModel, {
+        if (!combinedLedger.has(publicSubagent.modelName)) {
+          combinedLedger.set(publicSubagent.modelName, {
+            directTokens: 0,
+            subagentTokens: 0,
             tokens: 0,
-            contextTokens: 0
+            contextTokens: 0,
+            subagents: []
           });
         }
-        const ledgerEntry = modelLedger.get(activeModel);
-        ledgerEntry.tokens += stepBillingTokens;
-        ledgerEntry.contextTokens += stepContextTokens;
-
-        if (obj.created_at) {
-          const t = new Date(obj.created_at).getTime();
-          if (!isNaN(t)) {
-            stepEntries.push({
-              timestamp: t,
-              tokens: stepBillingTokens,
-              model: activeModel
-            });
-          }
-        }
-
-        if (obj.thinking) {
-          raw.thinkingChars += thinkingLen;
-        }
-
-        if (obj.tool_calls && Array.isArray(obj.tool_calls)) {
-          const isMcp = obj.tool_calls.some(tc =>
-            tc.name && (tc.name.startsWith('mcp_') || tc.name === 'call_mcp_tool')
-          );
-          if (isMcp) raw.mcpChars += contentLen + toolCallsLen;
-          else raw.toolsChars += contentLen + toolCallsLen;
-        } else if (obj.type === 'USER_INPUT') {
-          raw.userChars += contentLen;
-        } else if (obj.type === 'PLANNER_RESPONSE') {
-          raw.modelChars += contentLen;
-        } else if (obj.type === 'GENERIC') {
-          raw.toolsChars += contentLen + toolCallsLen;
-        } else {
-          raw.otherChars += contentLen;
-        }
+        const target = combinedLedger.get(publicSubagent.modelName);
+        target.subagentTokens += publicSubagent.tokens;
+        target.tokens += publicSubagent.tokens;
+        target.subagents.push(publicSubagent);
       }
-
-      // Total characters reflects real serialized message envelope sent to context window
-      raw.totalChars = totalRawChars;
-
-      const estTokens = Math.round(raw.totalChars / this.charsPerToken);
-      const pctVal = (estTokens / this.tokenLimit) * 100;
-      const pct = pctVal < 0.01 && estTokens > 0 ? '<0.01' : pctVal.toFixed(pctVal < 1 ? 2 : 1);
-
-      const toTokens = (chars) => Math.round(chars / this.charsPerToken);
-      const catPct = (t) => (estTokens > 0 ? Math.round((t / estTokens) * 100) : 0);
-
-      const userTokens = toTokens(raw.userChars);
-      const modelTokens = toTokens(raw.modelChars);
-      const thinkingTokens = toTokens(raw.thinkingChars);
-      const toolsTokens = toTokens(raw.toolsChars);
-      const mcpTokens = toTokens(raw.mcpChars);
-      const otherTokens = toTokens(raw.otherChars);
-
-      const displayTokens = this.formatTokens(estTokens);
 
       const chatModels = [];
-      for (const [modelName, data] of modelLedger.entries()) {
+      for (const [modelName, data] of combinedLedger.entries()) {
         const { family, hasDualLimit, rollingCeiling, weeklyCeiling } = this.classifyModelFamily(modelName);
+        const visualMeta = this.resolveModelVisualMeta(modelName);
         const chatRollingPct = hasDualLimit && rollingCeiling > 0
           ? Math.min(100, Math.round((data.tokens / rollingCeiling) * 100))
           : 0;
@@ -2855,40 +6509,43 @@ class TelemetryService {
 
         chatModels.push({
           modelName,
+          shortName: visualMeta.shortName,
+          color: visualMeta.color,
+          poolId: visualMeta.poolId,
+          poolLabel: visualMeta.poolLabel,
           family,
           hasDualLimit,
+          directTokens: data.directTokens,
+          subagentTokens: data.subagentTokens,
           tokens: data.tokens,
           contextTokens: data.contextTokens,
           displayTokens: this.formatTokens(data.tokens),
           chatRollingPct,
-          chatWeeklyPct
+          chatWeeklyPct,
+          subagentCount: data.subagents.length,
+          subagents: data.subagents
         });
       }
 
-      const modelQuota = this.resolveModelQuota(detectedModel, stepEntries, chatModels);
+      const modelQuota = this.resolveModelQuota(rawParsed.detectedModel, combinedStepEntries, chatModels);
 
-      const snapshotResult = {
-        estTokens,
-        pct,
-        displayTokens,
-        sizeKb: Math.round(totalBytes / 1024),
-        steps: raw.steps,
-        compactions,
-        detectedModel: detectedModel || 'Gemini 3.8 Flash',
-        stepEntries,
+      return JSON.parse(JSON.stringify({
+        estTokens: rawParsed.estTokens,
+        pct: rawParsed.pct,
+        displayTokens: rawParsed.displayTokens,
+        sizeKb: rawParsed.sizeKb,
+        steps: rawParsed.steps,
+        compactions: rawParsed.compactions,
+        detectedModel: rawParsed.detectedModel,
+        directStepEntries: rawParsed.stepEntries,
+        stepEntries: combinedStepEntries,
         chatModels,
+        waffleCells: this.buildWaffleCells(rawParsed.estTokens, rawParsed.breakdown),
+        poolsSummary: this.buildPoolsSummary(chatModels),
+        subagents,
         modelQuota,
-        breakdown: {
-          user: { tokens: userTokens, pct: catPct(userTokens) },
-          model: { tokens: modelTokens, pct: catPct(modelTokens) },
-          thinking: { tokens: thinkingTokens, pct: catPct(thinkingTokens) },
-          tools: { tokens: toolsTokens, pct: catPct(toolsTokens) },
-          mcp: { tokens: mcpTokens, pct: catPct(mcpTokens) },
-          other: { tokens: otherTokens, pct: catPct(otherTokens) }
-        }
-      };
-      this.parseCache.set(filePath, { mtimeMs, size: totalBytes, snapshot: snapshotResult });
-      return snapshotResult;
+        breakdown: rawParsed.breakdown
+      }));
     } catch {
       return this.getEmptySnapshot();
     }
@@ -3063,17 +6720,65 @@ class TelemetryService {
         .sort((a, b) => b.mtime - a.mtime);
 
       const activeDirs = dirs.filter((item, idx) => idx < 25 || (now - item.mtime) <= sevenDaysMs);
+      const inheritedModelByConv = new Map();
 
-      const globalStepEntries = [];
+      // First pass: discover parent -> subagent model inheritance across active conversations
       for (const item of activeDirs) {
-        const snapshot = this.parseTranscriptFile(item.targetPath);
-        metrics[item.id] = snapshot;
-        if (Array.isArray(snapshot.stepEntries)) {
-          globalStepEntries.push(...snapshot.stepEntries);
+        const raw = this._parseSingleTranscript(item.targetPath, inheritedModelByConv.get(item.id) || '');
+        if (!raw || !Array.isArray(raw.spawnedSubagents)) continue;
+        for (const spawn of raw.spawnedSubagents) {
+          if (!spawn.conversationId) continue;
+          const resolved = this.resolveSubagentModel(spawn.rawModel, spawn.parentModel || raw.detectedModel);
+          if (!inheritedModelByConv.has(spawn.conversationId)) {
+            inheritedModelByConv.set(spawn.conversationId, resolved.modelName);
+          }
         }
       }
 
-      // Re-resolve account-wide quota using global steps across active chats in brain
+      // Propagate multi-level inheritance (e.g. coordinator -> worker subagents)
+      for (const item of activeDirs) {
+        const inherited = inheritedModelByConv.get(item.id);
+        if (!inherited) continue;
+        const raw = this._parseSingleTranscript(item.targetPath, inherited);
+        if (!raw || !Array.isArray(raw.spawnedSubagents)) continue;
+        for (const spawn of raw.spawnedSubagents) {
+          if (!spawn.conversationId) continue;
+          const resolved = this.resolveSubagentModel(spawn.rawModel, spawn.parentModel || raw.detectedModel);
+          inheritedModelByConv.set(spawn.conversationId, resolved.modelName);
+        }
+      }
+
+      const countedConvIds = new Set();
+      const globalStepEntries = [];
+
+      for (const item of activeDirs) {
+        const snapshot = this.parseTranscriptFile(item.targetPath, {
+          inheritedModel: inheritedModelByConv.get(item.id) || '',
+          brainDir: this.brainDir
+        });
+        metrics[item.id] = snapshot;
+
+        if (!countedConvIds.has(item.id)) {
+          countedConvIds.add(item.id);
+          if (Array.isArray(snapshot.directStepEntries)) {
+            globalStepEntries.push(...snapshot.directStepEntries);
+          }
+        }
+
+        if (Array.isArray(snapshot.subagents)) {
+          for (const sub of snapshot.subagents) {
+            if (!sub.conversationId || countedConvIds.has(sub.conversationId)) continue;
+            countedConvIds.add(sub.conversationId);
+            const subPath = this.resolveConversationTranscriptPath(sub.conversationId, this.brainDir);
+            const subRaw = subPath ? this._parseSingleTranscript(subPath, sub.modelName) : null;
+            if (subRaw && Array.isArray(subRaw.stepEntries)) {
+              globalStepEntries.push(...subRaw.stepEntries);
+            }
+          }
+        }
+      }
+
+      // Re-resolve account-wide quota using deduplicated global steps across active chats & subagents
       for (const id of Object.keys(metrics)) {
         const snap = metrics[id];
         snap.modelQuota = this.resolveModelQuota(
@@ -3082,11 +6787,814 @@ class TelemetryService {
           snap.chatModels
         );
         delete snap.stepEntries;
+        delete snap.directStepEntries;
       }
     } catch {
       // Gracefully prevent background hook crashes
     }
     return metrics;
+  }
+
+  /**
+   * Resolves list API pricing ($ per 1M input/output tokens) and canonical base name for Pit Wall analytics.
+   * @param {string} [modelName='']
+   * @returns {{ baseName: string, compactName: string, packId: string, packLabel: string, packColor: string, inputPerM: number, cacheReadPerM: number, outputPerM: number }}
+   */
+  resolveModelPricing(modelName = '') {
+    const cleaned = this.sanitizeModelName(modelName) || 'Gemini 3.8 Flash';
+    const lower = cleaned.toLowerCase();
+
+    let baseName = '';
+    let compactName = '';
+    let packId = 'other';
+    let packLabel = 'Otros';
+    let packColor = '#94a3b8';
+    let inputPerM = 1.25;
+    let outputPerM = 5;
+
+    if (/orchestrator/i.test(lower)) {
+      packId = 'orchestrators';
+      packLabel = 'Orquestadores';
+      packColor = '#38bdf8';
+      inputPerM = 10;
+      outputPerM = 40;
+      if (/neon/i.test(lower)) {
+        baseName = 'Orchestrator (Neon)';
+        compactName = 'Neon';
+      } else {
+        baseName = 'Orchestrator (Argon)';
+        compactName = 'Argon';
+      }
+    } else if (/opus/i.test(lower)) {
+      baseName = 'Claude Opus 5.5';
+      compactName = 'Opus 5.5';
+      packId = 'claude';
+      packLabel = 'Claude';
+      packColor = '#c084fc';
+      inputPerM = 15;
+      outputPerM = 75;
+    } else if (/sonnet/i.test(lower)) {
+      baseName = 'Claude Sonnet 5.5';
+      compactName = 'Sonnet 5.5';
+      packId = 'claude';
+      packLabel = 'Claude';
+      packColor = '#c084fc';
+      inputPerM = 3;
+      outputPerM = 15;
+    } else if (/argon/i.test(lower)) {
+      baseName = 'Gemini 4 Argon';
+      compactName = '4 Argon';
+      packId = 'gemini';
+      packLabel = 'Gemini';
+      packColor = '#a3e635';
+      inputPerM = 15;
+      outputPerM = 75;
+    } else if (/neon/i.test(lower)) {
+      baseName = 'Gemini 4 Neon';
+      compactName = '4 Neon';
+      packId = 'gemini';
+      packLabel = 'Gemini';
+      packColor = '#a3e635';
+      inputPerM = 10;
+      outputPerM = 40;
+    } else if (/hydrogen/i.test(lower)) {
+      baseName = 'Gemini 4 Hydrogen';
+      compactName = '4 Hydrogen';
+      packId = 'gemini';
+      packLabel = 'Gemini';
+      packColor = '#a3e635';
+      inputPerM = 3;
+      outputPerM = 15;
+    } else if (/gpt-oss|120b/i.test(lower)) {
+      baseName = 'GPT-OSS 120B';
+      compactName = 'GPT-OSS 120B';
+      packId = 'openai-oss';
+      packLabel = 'OpenAI OSS';
+      packColor = '#f472b6';
+      inputPerM = 2;
+      outputPerM = 8;
+    } else if (/flash/i.test(lower)) {
+      baseName = 'Gemini 3.8 Flash';
+      compactName = '3.8 Flash';
+      packId = 'gemini';
+      packLabel = 'Gemini';
+      packColor = '#a3e635';
+      inputPerM = 1.25;
+      outputPerM = 5;
+    } else {
+      baseName = cleaned
+        .replace(/\s*\((?:Low|Medium|Med|High|XHigh|Minimal|Max|Standard)\)\s*$/i, '')
+        .trim() || cleaned;
+      compactName = baseName;
+      packId = 'other';
+      packLabel = 'Otros';
+      packColor = '#94a3b8';
+      inputPerM = 1.25;
+      outputPerM = 5;
+    }
+
+    const cacheReadPerM = Number((inputPerM * 0.1).toFixed(4));
+    return { baseName, compactName, packId, packLabel, packColor, inputPerM, cacheReadPerM, outputPerM };
+  }
+
+  /**
+   * Aggregates all-time Pit Wall metrics (stretches, hours worked, day streaks, consistency heatmap,
+   * and API price cost estimates across every conversation in brainDir).
+   * @param {Object} [options={}]
+   * @param {boolean} [options.bypassCache=false]
+   * @param {number} [options.now=Date.now()]
+   * @returns {Object}
+   */
+  getPitWallMetrics(options = {}) {
+    const now = options.now ?? Date.now();
+    if (!options.bypassCache && this.pitWallCache.data && (now - this.pitWallCache.ts) < 15_000) {
+      return this.pitWallCache.data;
+    }
+
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const toLocalDateKey = (ms) => {
+      const d = new Date(ms);
+      return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    };
+    const monthsShort = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    const monthsLong = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    const daysShort = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+
+    const formatShortDate = (ms) => {
+      const d = new Date(ms);
+      return `${monthsShort[d.getMonth()]} ${d.getDate()}`;
+    };
+    const formatLongDate = (ms) => {
+      const d = new Date(ms);
+      return `${d.getDate()} de ${monthsLong[d.getMonth()]} de ${d.getFullYear()}`;
+    };
+    const formatFullDate = (ms) => {
+      const d = new Date(ms);
+      return `${daysShort[d.getDay()]}, ${d.getDate()} ${monthsShort[d.getMonth()]} ${d.getFullYear()}`;
+    };
+    const formatDuration = (hours) => {
+      const totalMins = Math.max(0, Math.round((Number(hours) || 0) * 60));
+      const h = Math.floor(totalMins / 60);
+      const m = totalMins % 60;
+      if (h > 0 && m > 0) return `${h}h ${m}m`;
+      if (h > 0) return `${h}h`;
+      return `${m}m`;
+    };
+    const formatStretchStart = (ms) => {
+      const d = new Date(ms);
+      return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    };
+    const formatBigTokens = (n) => {
+      const num = Number(n) || 0;
+      if (num >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(1).replace(/\.0$/, '')}B`;
+      if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+      if (num >= 1_000) return `${(num / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
+      return String(Math.round(num));
+    };
+    const formatUsd = (val) => `$${Math.round(val || 0).toLocaleString('en-US')}`;
+    const formatExactUsd = (val) => '$' + Number(val || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    const allTimestamps = [];
+    const dailyCostMap = new Map();
+    const dailyHoursMap = new Map();
+    const daySessionsMap = new Map();
+    const modelStatsMap = new Map();
+    let totalTokens = 0;
+    let writtenTokens = 0;
+    let totalUncachedInputTokens = 0;
+    let totalCacheReadTokens = 0;
+    let totalCostUsd = 0;
+    let totalSessions = 0;
+
+    try {
+      if (fs.existsSync(this.brainDir)) {
+        const dirs = fs.readdirSync(this.brainDir)
+          .filter(d => /^[0-9a-fA-F-]{8,}$/.test(d))
+          .map(d => {
+            const logsDir = path.join(this.brainDir, d, '.system_generated', 'logs');
+            const compactPath = path.join(logsDir, 'transcript.jsonl');
+            const fullPath = path.join(logsDir, 'transcript_full.jsonl');
+            let targetPath = '';
+            let mtimeMs = 0;
+            let size = 0;
+            try {
+              if (fs.existsSync(compactPath)) {
+                const st = fs.statSync(compactPath);
+                targetPath = compactPath;
+                mtimeMs = st.mtimeMs;
+                size = st.size;
+              } else if (fs.existsSync(fullPath)) {
+                const st = fs.statSync(fullPath);
+                targetPath = fullPath;
+                mtimeMs = st.mtimeMs;
+                size = st.size;
+              }
+            } catch {}
+            return { id: d, targetPath, mtimeMs, size };
+          })
+          .filter(item => item.targetPath && item.size > 0)
+          .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+        totalSessions = dirs.length;
+
+        for (const item of dirs) {
+          let summary;
+          const cached = this.pitWallFileCache.get(item.targetPath);
+          if (cached && cached.mtimeMs === item.mtimeMs && cached.size === item.size) {
+            summary = cached.summary;
+          } else {
+            summary = this._parseTranscriptForPitWall(item.targetPath, toLocalDateKey);
+            this.pitWallFileCache.set(item.targetPath, { mtimeMs: item.mtimeMs, size: item.size, summary });
+          }
+
+          if (!summary) continue;
+          totalTokens += summary.totalTokens || 0;
+          writtenTokens += summary.writtenTokens || 0;
+          totalUncachedInputTokens += summary.totalUncachedInputTokens || 0;
+          totalCacheReadTokens += summary.totalCacheReadTokens || 0;
+          totalCostUsd += summary.totalCostUsd || 0;
+
+          for (const ts of summary.timestamps) {
+            allTimestamps.push(ts);
+          }
+
+          const sessionDays = summary.sessionDays || Object.keys(summary.dailyStats || summary.dailyCosts || {});
+          for (const dayKey of sessionDays) {
+            daySessionsMap.set(dayKey, (daySessionsMap.get(dayKey) || 0) + 1);
+          }
+
+          const statsToIterate = summary.dailyStats || summary.dailyCosts || {};
+          for (const [dayKey, dStat] of Object.entries(statsToIterate)) {
+            if (!dailyCostMap.has(dayKey)) {
+              dailyCostMap.set(dayKey, {
+                mainCostUsd: 0,
+                bgCostUsd: 0,
+                totalCostUsd: 0,
+                tokens: 0,
+                uncachedInput: 0,
+                cacheRead: 0,
+                output: 0
+              });
+            }
+            const dc = dailyCostMap.get(dayKey);
+            dc.mainCostUsd += dStat.mainCostUsd || 0;
+            dc.bgCostUsd += dStat.bgCostUsd || 0;
+            dc.totalCostUsd += (dStat.mainCostUsd || 0) + (dStat.bgCostUsd || 0);
+            dc.tokens += dStat.tokens || 0;
+            dc.uncachedInput += dStat.uncachedInput || 0;
+            dc.cacheRead += dStat.cacheRead || 0;
+            dc.output += dStat.output || 0;
+          }
+
+          if (summary.modelStats) {
+            for (const [mName, mStat] of Object.entries(summary.modelStats)) {
+              if (!modelStatsMap.has(mName)) {
+                modelStatsMap.set(mName, {
+                  costUsd: 0,
+                  tokens: 0,
+                  uncachedInput: 0,
+                  cacheRead: 0,
+                  output: 0,
+                  packId: mStat.packId,
+                  packLabel: mStat.packLabel,
+                  packColor: mStat.packColor,
+                  compactName: mStat.compactName,
+                  inputPerM: mStat.inputPerM,
+                  cacheReadPerM: mStat.cacheReadPerM,
+                  outputPerM: mStat.outputPerM
+                });
+              }
+              const ms = modelStatsMap.get(mName);
+              ms.costUsd += mStat.costUsd || 0;
+              ms.tokens += mStat.tokens || 0;
+              ms.uncachedInput += mStat.uncachedInput || 0;
+              ms.cacheRead += mStat.cacheRead || 0;
+              ms.output += mStat.output || 0;
+            }
+          } else if (summary.modelCosts) {
+            for (const [mName, mCost] of Object.entries(summary.modelCosts)) {
+              if (!modelStatsMap.has(mName)) {
+                const pricing = this.resolveModelPricing(mName);
+                modelStatsMap.set(mName, {
+                  costUsd: 0,
+                  tokens: 0,
+                  uncachedInput: 0,
+                  cacheRead: 0,
+                  output: 0,
+                  packId: pricing.packId,
+                  packLabel: pricing.packLabel,
+                  packColor: pricing.packColor,
+                  compactName: pricing.compactName,
+                  inputPerM: pricing.inputPerM,
+                  cacheReadPerM: pricing.cacheReadPerM,
+                  outputPerM: pricing.outputPerM
+                });
+              }
+              modelStatsMap.get(mName).costUsd += mCost;
+            }
+          }
+        }
+      }
+    } catch {
+      // Keep graceful empty metrics
+    }
+
+    // Merge global timestamps across sessions into contiguous stretches (gap <= 20 minutes)
+    const GAP_MS = 20 * 60 * 1000;
+    const MIN_EVENT_MS = 2.5 * 60 * 1000;
+    allTimestamps.sort((a, b) => a - b);
+
+    const intervals = [];
+    if (allTimestamps.length > 0) {
+      let curStart = allTimestamps[0];
+      let curEnd = allTimestamps[0];
+      for (let i = 1; i < allTimestamps.length; i++) {
+        const ts = allTimestamps[i];
+        if (ts - curEnd <= GAP_MS) {
+          curEnd = ts;
+        } else {
+          intervals.push({ start: curStart, end: Math.max(curEnd, curStart + MIN_EVENT_MS) });
+          curStart = ts;
+          curEnd = ts;
+        }
+      }
+      intervals.push({ start: curStart, end: Math.max(curEnd, curStart + MIN_EVENT_MS) });
+    }
+
+    let totalDurationMs = 0;
+    for (const iv of intervals) {
+      const dur = Math.max(MIN_EVENT_MS, iv.end - iv.start);
+      totalDurationMs += dur;
+
+      // Distribute interval duration across local calendar days it touches
+      let cursor = iv.start;
+      const effectiveEnd = iv.start + dur;
+      while (cursor < effectiveEnd) {
+        const d = new Date(cursor);
+        const nextMidnight = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
+        const sliceEnd = Math.min(effectiveEnd, nextMidnight);
+        const dayKey = toLocalDateKey(cursor);
+        dailyHoursMap.set(dayKey, (dailyHoursMap.get(dayKey) || 0) + ((sliceEnd - cursor) / 3_600_000));
+        cursor = sliceEnd;
+      }
+    }
+
+    const totalHours = Number((totalDurationMs / 3_600_000).toFixed(1));
+    const lastInterval = intervals.length > 0 ? intervals[intervals.length - 1] : null;
+    const currentStretchHours = lastInterval
+      ? Number(((lastInterval.end - lastInterval.start) / 3_600_000).toFixed(1))
+      : 0;
+    const isStretchActive = lastInterval ? (now - lastInterval.end) <= GAP_MS : false;
+    const currentStretchSub = lastInterval
+      ? `${isStretchActive ? 'activo, desde' : 'último bloque'} ${formatStretchStart(lastInterval.start)}`
+      : 'sin actividad reciente';
+
+    const activeDayKeys = Array.from(new Set([
+      ...Array.from(dailyHoursMap.keys()),
+      ...Array.from(dailyCostMap.keys())
+    ])).sort();
+
+    const activeDaysCount = activeDayKeys.length;
+    const avgHoursPerDay = activeDaysCount > 0 ? Number((totalHours / activeDaysCount).toFixed(1)) : 0;
+    const firstSessionDate = allTimestamps.length > 0 ? formatLongDate(allTimestamps[0]) : formatLongDate(now);
+
+    // Day streaks (best run & current streak up to today/yesterday)
+    const activeSet = new Set(activeDayKeys);
+    let bestStreak = 0;
+    let runStreak = 0;
+    if (activeDayKeys.length > 0) {
+      let prevDayMs = null;
+      for (const dk of activeDayKeys) {
+        const [yy, mm, dd] = dk.split('-').map(Number);
+        const dayMs = new Date(yy, mm - 1, dd).getTime();
+        if (prevDayMs !== null && Math.round((dayMs - prevDayMs) / 86_400_000) === 1) {
+          runStreak++;
+        } else {
+          runStreak = 1;
+        }
+        if (runStreak > bestStreak) bestStreak = runStreak;
+        prevDayMs = dayMs;
+      }
+    }
+
+    let currentStreak = 0;
+    const todayDate = new Date(now);
+    let checkDate = new Date(todayDate.getFullYear(), todayDate.getMonth(), todayDate.getDate());
+    if (!activeSet.has(toLocalDateKey(checkDate.getTime()))) {
+      checkDate.setDate(checkDate.getDate() - 1);
+    }
+    while (activeSet.has(toLocalDateKey(checkDate.getTime()))) {
+      currentStreak++;
+      checkDate.setDate(checkDate.getDate() - 1);
+    }
+
+    // Last 60 days series
+    const last60Days = [];
+    const todayStart = new Date(todayDate.getFullYear(), todayDate.getMonth(), todayDate.getDate());
+    for (let i = 59; i >= 0; i--) {
+      const d = new Date(todayStart);
+      d.setDate(d.getDate() - i);
+      const ms = d.getTime();
+      const key = toLocalDateKey(ms);
+      const hrs = Number((dailyHoursMap.get(key) || 0).toFixed(4));
+      const costObj = dailyCostMap.get(key) || {
+        mainCostUsd: 0,
+        bgCostUsd: 0,
+        totalCostUsd: 0,
+        tokens: 0,
+        uncachedInput: 0,
+        cacheRead: 0,
+        output: 0
+      };
+      last60Days.push({
+        date: key,
+        label: formatShortDate(ms),
+        fullDate: formatFullDate(ms),
+        hours: hrs,
+        durationLabel: formatDuration(hrs),
+        sessions: daySessionsMap.get(key) || 0,
+        tokens: costObj.tokens || 0,
+        uncachedInput: costObj.uncachedInput || 0,
+        cacheRead: costObj.cacheRead || 0,
+        output: costObj.output || 0,
+        mainCostUsd: Number(costObj.mainCostUsd.toFixed(2)),
+        bgCostUsd: Number(costObj.bgCostUsd.toFixed(2)),
+        totalCostUsd: Number(costObj.totalCostUsd.toFixed(2))
+      });
+    }
+
+    // Consistency heatmap grid (last 20 weeks, Monday..Sunday)
+    const numWeeks = 20;
+    const todayDowMon0 = (todayStart.getDay() + 6) % 7; // Mon=0 .. Sun=6
+    const currentWeekMon = new Date(todayStart);
+    currentWeekMon.setDate(currentWeekMon.getDate() - todayDowMon0);
+    const firstWeekMon = new Date(currentWeekMon);
+    firstWeekMon.setDate(firstWeekMon.getDate() - ((numWeeks - 1) * 7));
+
+    const consistencyWeeks = [];
+    let lastMonthSeen = -1;
+    for (let w = 0; w < numWeeks; w++) {
+      const weekMon = new Date(firstWeekMon);
+      weekMon.setDate(weekMon.getDate() + w * 7);
+      const mIdx = weekMon.getMonth();
+      const monthLabel = mIdx !== lastMonthSeen ? monthsShort[mIdx] : '';
+      lastMonthSeen = mIdx;
+
+      const days = [];
+      for (let dow = 0; dow < 7; dow++) {
+        const cellDate = new Date(weekMon);
+        cellDate.setDate(cellDate.getDate() + dow);
+        const ms = cellDate.getTime();
+        const isFuture = ms > todayStart.getTime();
+        const key = toLocalDateKey(ms);
+        const hrsRaw = isFuture ? 0 : (dailyHoursMap.get(key) || 0);
+        const hours = isFuture ? 0 : Number(hrsRaw.toFixed(2));
+        const costObj = isFuture ? null : dailyCostMap.get(key);
+        let level = 0;
+        if (!isFuture && hours > 0) {
+          if (hours > 6) level = 4;
+          else if (hours > 3) level = 3;
+          else if (hours > 1) level = 2;
+          else level = 1;
+        }
+        days.push({
+          date: key,
+          fullDate: formatFullDate(ms),
+          hours,
+          durationLabel: formatDuration(hrsRaw),
+          sessions: isFuture ? 0 : (daySessionsMap.get(key) || 0),
+          tokens: costObj ? (costObj.tokens || 0) : 0,
+          totalCostUsd: costObj ? Number(costObj.totalCostUsd.toFixed(2)) : 0,
+          level,
+          isFuture
+        });
+      }
+      consistencyWeeks.push({ monthLabel, days });
+    }
+
+    // Cost by model sorted descending (up to 10 models with spend > 0)
+    const sortedModels = Array.from(modelStatsMap.entries())
+      .map(([name, entry]) => ({ name, ...entry }))
+      .filter(e => e.costUsd > 0)
+      .sort((a, b) => b.costUsd - a.costUsd);
+
+    const modelsToUse = sortedModels.length > 0
+      ? sortedModels
+      : Array.from(modelStatsMap.entries()).map(([name, entry]) => ({ name, ...entry })).sort((a, b) => b.costUsd - a.costUsd);
+
+    const maxModelCost = modelsToUse.length > 0 ? Math.max(0.0001, modelsToUse[0].costUsd) : 1;
+    const costByModel = modelsToUse.slice(0, 10).map((entry, idx) => {
+      const pricing = this.resolveModelPricing(entry.name);
+      return {
+        name: entry.name,
+        compactName: entry.compactName || pricing.compactName,
+        packId: entry.packId || pricing.packId,
+        packLabel: entry.packLabel || pricing.packLabel,
+        packColor: entry.packColor || pricing.packColor,
+        costUsd: Math.round(entry.costUsd),
+        exactCostUsd: Number(entry.costUsd.toFixed(2)),
+        displayCost: entry.costUsd > 0 && entry.costUsd < 10 ? formatExactUsd(entry.costUsd) : formatUsd(entry.costUsd),
+        exactDisplayCost: formatExactUsd(entry.costUsd),
+        pctOfTotal: Number(((entry.costUsd / Math.max(0.0001, totalCostUsd)) * 100).toFixed(1)),
+        pctOfMax: Math.max(2, Math.round((entry.costUsd / maxModelCost) * 100)),
+        tokens: entry.tokens || 0,
+        uncachedInput: entry.uncachedInput || 0,
+        cacheRead: entry.cacheRead || 0,
+        output: entry.output || 0,
+        inputPerM: entry.inputPerM ?? pricing.inputPerM,
+        cacheReadPerM: entry.cacheReadPerM ?? pricing.cacheReadPerM,
+        outputPerM: entry.outputPerM ?? pricing.outputPerM,
+        isTop: idx === 0
+      };
+    });
+
+    // Group models by 4 Planner packages (costByModelPacks)
+    const packsMap = new Map();
+    for (const m of costByModel) {
+      const pId = m.packId || 'other';
+      if (!packsMap.has(pId)) {
+        packsMap.set(pId, {
+          packId: pId,
+          packLabel: m.packLabel || 'Otros',
+          packColor: m.packColor || '#94a3b8',
+          costUsd: 0,
+          exactCostUsd: 0,
+          tokens: 0,
+          uncachedInput: 0,
+          cacheRead: 0,
+          output: 0,
+          modelCount: 0,
+          models: []
+        });
+      }
+      const p = packsMap.get(pId);
+      p.costUsd += m.costUsd || 0;
+      p.exactCostUsd = Number((p.exactCostUsd + (m.exactCostUsd || 0)).toFixed(2));
+      p.tokens += m.tokens || 0;
+      p.uncachedInput += m.uncachedInput || 0;
+      p.cacheRead += m.cacheRead || 0;
+      p.output += m.output || 0;
+      p.modelCount++;
+      p.models.push(m);
+    }
+
+    const sortedPacks = Array.from(packsMap.values()).sort((a, b) => b.exactCostUsd - a.exactCostUsd);
+    const maxPackCost = sortedPacks.length > 0 ? Math.max(0.0001, sortedPacks[0].exactCostUsd) : 1;
+    const costByModelPacks = sortedPacks.map(p => {
+      p.models.sort((a, b) => (b.exactCostUsd || 0) - (a.exactCostUsd || 0));
+      return {
+        ...p,
+        displayCost: p.exactCostUsd > 0 && p.exactCostUsd < 10 ? formatExactUsd(p.exactCostUsd) : formatUsd(p.exactCostUsd),
+        exactDisplayCost: formatExactUsd(p.exactCostUsd),
+        pctOfTotal: Number(((p.exactCostUsd / Math.max(0.0001, totalCostUsd)) * 100).toFixed(1)),
+        pctOfMax: Math.max(2, Math.round((p.exactCostUsd / maxPackCost) * 100))
+      };
+    });
+
+    const result = {
+      currentStreak,
+      bestStreak,
+      totalHours,
+      exactTotalHours: Number((totalDurationMs / 3_600_000).toFixed(4)),
+      exactTotalDurationLabel: formatDuration(totalDurationMs / 3_600_000),
+      activeDaysCount,
+      firstSessionDate,
+      avgHoursPerDay,
+      currentStretchHours,
+      exactCurrentStretchDurationLabel: formatDuration(lastInterval ? (lastInterval.end - lastInterval.start) / 3_600_000 : 0),
+      currentStretchSub,
+      isStretchActive,
+      totalCostUsd: Math.round(totalCostUsd),
+      exactTotalCostUsd: Number(totalCostUsd.toFixed(2)),
+      displayTotalCost: formatUsd(totalCostUsd),
+      exactDisplayTotalCost: formatExactUsd(totalCostUsd),
+      totalTokens,
+      uncachedInputTokens: totalUncachedInputTokens,
+      cacheReadTokens: totalCacheReadTokens,
+      displayTotalTokens: formatBigTokens(totalTokens),
+      writtenTokens,
+      displayWrittenTokens: formatBigTokens(writtenTokens),
+      totalSessions,
+      last60Days,
+      consistencyWeeks,
+      costByModel,
+      costByModelPacks,
+      updatedAt: now
+    };
+
+    this.pitWallCache = { ts: now, data: result };
+    return result;
+  }
+
+  /**
+   * Parses a single transcript into compact Pit Wall timeline & cost aggregates for caching.
+   * @private
+   */
+  _parseTranscriptForPitWall(filePath, toLocalDateKey) {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const lines = content.split('\n');
+      const parsedLines = [];
+
+      let hasExactTokenTelemetry = false;
+      let firstFromModel = '';
+      let firstObjModel = '';
+
+      // Pass 1: Parse JSON and detect exact telemetry capability and initial model
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        let obj;
+        try {
+          obj = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        parsedLines.push({ obj, rawLine });
+
+        if (obj.input_tokens !== undefined || obj.output_tokens !== undefined) {
+          hasExactTokenTelemetry = true;
+        }
+
+        if (!firstFromModel) {
+          const { fromModel } = this.extractModelSelectionChange(obj.content);
+          if (fromModel) {
+            firstFromModel = fromModel;
+          }
+        }
+
+        if (!firstObjModel && typeof obj.model === 'string' && obj.model.trim()) {
+          const sanitized = this.sanitizeModelName(obj.model);
+          if (this.isValidModelName(sanitized)) {
+            firstObjModel = sanitized;
+          }
+        }
+      }
+
+      const initialModel = (firstFromModel && this.isValidModelName(firstFromModel))
+        ? firstFromModel
+        : ((firstObjModel && this.isValidModelName(firstObjModel)) ? firstObjModel : 'Gemini 3.8 Flash');
+
+      // Pass 2: Aggregate timestamps, tokens, and pricing with model state tracking
+      const timestamps = [];
+      const sessionDays = new Set();
+      const dailyCosts = {};
+      const dailyStats = {};
+      const modelCosts = {};
+      const modelStats = {};
+      let totalUncachedInputTokens = 0;
+      let totalCacheReadTokens = 0;
+      let totalTokens = 0;
+      let writtenTokens = 0;
+      let totalCostUsd = 0;
+      let detectedModel = initialModel;
+      let subagentWindowSteps = 0;
+
+      for (const { obj, rawLine } of parsedLines) {
+        const { toModel } = this.extractModelSelectionChange(obj.content);
+        if (toModel) {
+          detectedModel = toModel;
+        }
+
+        if (typeof obj.model === 'string' && obj.model.trim()) {
+          const sanitized = this.sanitizeModelName(obj.model);
+          if (this.isValidModelName(sanitized)) {
+            detectedModel = sanitized;
+          }
+        }
+
+        const activeModel = (this.isValidModelName(detectedModel) ? this.sanitizeModelName(detectedModel) : '') || 'Gemini 3.8 Flash';
+        const pricing = this.resolveModelPricing(activeModel);
+
+        let tsMs = obj.created_at ? Date.parse(obj.created_at) : NaN;
+        if (!Number.isFinite(tsMs)) {
+          tsMs = 0;
+        } else {
+          timestamps.push(tsMs);
+        }
+
+        let uncachedInputTok = 0;
+        let cacheReadTok = 0;
+        let outputTok = 0;
+
+        if (obj.input_tokens !== undefined || obj.output_tokens !== undefined) {
+          uncachedInputTok = Number(obj.input_tokens) || 0;
+          cacheReadTok = Number(obj.cache_read_tokens) || 0;
+          outputTok = Number(obj.output_tokens) || 0;
+        } else if (!hasExactTokenTelemetry) {
+          const thinkingLen = typeof obj.thinking === 'string' ? obj.thinking.length : 0;
+          const contentLen = typeof obj.content === 'string' ? obj.content.length : 0;
+          const toolCallsLen = this.estimateToolCallsChars(obj.tool_calls);
+          const approx = Math.round(Math.max(rawLine.length, contentLen + thinkingLen + toolCallsLen) / this.charsPerToken);
+          if (obj.type === 'PLANNER_RESPONSE') {
+            outputTok = approx;
+          } else {
+            uncachedInputTok = approx;
+          }
+        } else {
+          uncachedInputTok = 0;
+          cacheReadTok = 0;
+          outputTok = 0;
+        }
+
+        const stepTokens = uncachedInputTok + cacheReadTok + outputTok;
+        const stepCost = ((uncachedInputTok / 1e6) * pricing.inputPerM) +
+          ((cacheReadTok / 1e6) * pricing.cacheReadPerM) +
+          ((outputTok / 1e6) * pricing.outputPerM);
+
+        totalUncachedInputTokens += uncachedInputTok;
+        totalCacheReadTokens += cacheReadTok;
+        totalTokens += stepTokens;
+        writtenTokens += outputTok;
+        totalCostUsd += stepCost;
+
+        let isBackground = subagentWindowSteps > 0;
+        if (Array.isArray(obj.tool_calls) && obj.tool_calls.some(tc => tc.name === 'invoke_subagent' || tc.name === 'swarm')) {
+          isBackground = true;
+          subagentWindowSteps = 2;
+        } else if (subagentWindowSteps > 0) {
+          subagentWindowSteps--;
+        }
+
+        if (tsMs > 0) {
+          const dayKey = toLocalDateKey(tsMs);
+          sessionDays.add(dayKey);
+
+          if (!dailyStats[dayKey]) {
+            dailyStats[dayKey] = {
+              mainCostUsd: 0,
+              bgCostUsd: 0,
+              totalCostUsd: 0,
+              tokens: 0,
+              uncachedInput: 0,
+              cacheRead: 0,
+              output: 0
+            };
+          }
+          const ds = dailyStats[dayKey];
+          if (isBackground) {
+            ds.bgCostUsd += stepCost;
+          } else {
+            ds.mainCostUsd += stepCost;
+          }
+          ds.totalCostUsd = ds.mainCostUsd + ds.bgCostUsd;
+          ds.tokens += stepTokens;
+          ds.uncachedInput += uncachedInputTok;
+          ds.cacheRead += cacheReadTok;
+          ds.output += outputTok;
+
+          if (!dailyCosts[dayKey]) {
+            dailyCosts[dayKey] = { mainCostUsd: 0, bgCostUsd: 0 };
+          }
+          if (isBackground) {
+            dailyCosts[dayKey].bgCostUsd += stepCost;
+          } else {
+            dailyCosts[dayKey].mainCostUsd += stepCost;
+          }
+        }
+
+        if (!modelStats[pricing.baseName]) {
+          modelStats[pricing.baseName] = {
+            costUsd: 0,
+            tokens: 0,
+            uncachedInput: 0,
+            cacheRead: 0,
+            output: 0,
+            packId: pricing.packId,
+            packLabel: pricing.packLabel,
+            packColor: pricing.packColor,
+            compactName: pricing.compactName,
+            inputPerM: pricing.inputPerM,
+            cacheReadPerM: pricing.cacheReadPerM,
+            outputPerM: pricing.outputPerM
+          };
+        }
+        const ms = modelStats[pricing.baseName];
+        ms.costUsd += stepCost;
+        ms.tokens += stepTokens;
+        ms.uncachedInput += uncachedInputTok;
+        ms.cacheRead += cacheReadTok;
+        ms.output += outputTok;
+
+        modelCosts[pricing.baseName] = (modelCosts[pricing.baseName] || 0) + stepCost;
+      }
+
+      return {
+        timestamps,
+        sessionDays: Array.from(sessionDays),
+        dailyCosts,
+        dailyStats,
+        modelCosts,
+        modelStats,
+        totalUncachedInputTokens,
+        totalCacheReadTokens,
+        totalTokens,
+        writtenTokens,
+        totalCostUsd
+      };
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -3221,6 +7729,9 @@ function resolveNativeQuotaForModel(groups, activeModelName = '', now = Date.now
 }
 
 
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 
 
 
@@ -3310,7 +7821,8 @@ class GitService {
       const remoteUrl = execSync('git remote get-url origin', {
         cwd: repoPath,
         encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true
       }).trim();
       const data = this.parseGitHubRemote(remoteUrl);
       this.metadataCache.set(repoPath, { timestamp: now, data });
@@ -3353,10 +7865,11 @@ class GitService {
     const remoteHashes = new Set();
     const localHashes = new Set();
     try {
-      const trunkLog = execSync('git rev-list --first-parent origin/main || git rev-list --first-parent main || git rev-list origin/main || git rev-list main', {
+      const trunkLog = execSync('git rev-list --first-parent origin/main || git rev-list --first-parent main || git rev-list --first-parent origin/master || git rev-list --first-parent master || git rev-list origin/main || git rev-list main', {
         cwd: repoPath,
         encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true
       });
       for (const h of trunkLog.split('\n')) {
         const tr = h.trim();
@@ -3370,7 +7883,8 @@ class GitService {
       const locLog = execSync('git rev-list --branches HEAD', {
         cwd: repoPath,
         encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true
       });
       for (const h of locLog.split('\n')) {
         const tr = h.trim();
@@ -3384,7 +7898,8 @@ class GitService {
       const remLog = execSync('git rev-list --remotes', {
         cwd: repoPath,
         encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true
       });
       for (const h of remLog.split('\n')) {
         const tr = h.trim();
@@ -3616,7 +8131,8 @@ class GitService {
       const raw = execSync('git branch -a --format="%(refname:short)%00%(objectname:short)%00%(HEAD)%00%(upstream:short)%00%(upstream:track)"', {
         cwd: repoPath,
         encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true
       });
 
       // 2. Get merged branches in main
@@ -3625,7 +8141,8 @@ class GitService {
         const mergedRaw = execSync('git branch --merged main', {
           cwd: repoPath,
           encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'ignore']
+          stdio: ['ignore', 'pipe', 'ignore'],
+          windowsHide: true
         });
         mergedRaw.split('\n').forEach(b => {
           const name = b.replace(/^[*\s]+/, '').trim();
@@ -3641,7 +8158,8 @@ class GitService {
         const statusRaw = execSync('git status --porcelain', {
           cwd: repoPath,
           encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'ignore']
+          stdio: ['ignore', 'pipe', 'ignore'],
+          windowsHide: true
         });
         dirtyFiles = statusRaw.split('\n').filter(l => l.trim().length > 0).length;
       } catch {
@@ -3736,7 +8254,8 @@ class GitService {
         const aheadOut = execSync('git rev-list @{u}..HEAD', {
           cwd: repoPath,
           encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'ignore']
+          stdio: ['ignore', 'pipe', 'ignore'],
+          windowsHide: true
         }).trim();
         if (aheadOut) {
           aheadOut.split(/\s+/).filter(Boolean).forEach(h => aheadHashes.add(h));
@@ -3747,7 +8266,8 @@ class GitService {
         const behindOut = execSync('git rev-list HEAD..@{u}', {
           cwd: repoPath,
           encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'ignore']
+          stdio: ['ignore', 'pipe', 'ignore'],
+          windowsHide: true
         }).trim();
         if (behindOut) {
           behindOut.split(/\s+/).filter(Boolean).forEach(h => behindHashes.add(h));
@@ -3758,7 +8278,8 @@ class GitService {
       const rawLog = execSync(`git log --all --topo-order --format="${format}" --name-status -n ${limit}`, {
         cwd: repoPath,
         encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true
       });
 
       const rawCommits = [];
@@ -3821,7 +8342,7 @@ class GitService {
         }
       }
 
-      return this.computeTopology(rawCommits);
+      return this.computeTopology(rawCommits, { repoPath });
     } catch (err) {
       return [];
     }
@@ -3840,7 +8361,8 @@ class GitService {
       const porcelain = execSync('git status --porcelain=v1 -b', {
         cwd: repoPath,
         encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true
       });
 
       const lines = porcelain.split('\n');
@@ -3971,7 +8493,8 @@ class GitService {
       execSync('git fetch --all --prune', {
         cwd: repoPath,
         encoding: 'utf-8',
-        stdio: ['ignore', 'ignore', 'ignore']
+        stdio: ['ignore', 'ignore', 'ignore'],
+        windowsHide: true
       });
       return true;
     } catch {
@@ -4011,7 +8534,8 @@ class GitHubCliService {
     this.execFn = options.execFn || ((cmd, opts) => execSync(cmd, {
       cwd: opts?.cwd || this.repoPath,
       encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore']
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true
     }));
     this.repoPath = options.repoPath || process.cwd();
   }
@@ -4237,6 +8761,9 @@ class VcsOrchestrator {
 }
 
 
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 
 
 
@@ -4254,6 +8781,8 @@ class AgentSyncServer {
    * @param {number} [options.port] Port to listen on (default 53912)
    * @param {string} [options.host] Host address (default 127.0.0.1)
    * @param {string} [options.configPath] Path to active_agents.json
+   * @param {string} [options.modelSlotsPath] Path to model_slots.json
+   * @param {string} [options.modelCatalogPath] Path to model_catalog.json
    * @param {VcsOrchestrator} [options.vcsOrchestrator] Custom VCS orchestrator
    * @param {string} [options.repoPath] Path to git repository
    */
@@ -4261,9 +8790,139 @@ class AgentSyncServer {
     this.port = options.port ?? 53912;
     this.host = options.host || '127.0.0.1';
     this.configPath = options.configPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'active_agents.json');
+    this.brainDir = options.brainDir || path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
+    this.sessionRepos = new Map();
+    this.modelSlotsPath = options.modelSlotsPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'model_slots.json');
+    this.modelCatalogPath = options.modelCatalogPath || path.join(os.homedir(), '.gemini', 'config', 'mods', 'model_catalog.json');
+    this.telemetryService = options.telemetryService || null;
     this.repoPath = options.repoPath || process.cwd();
     this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ repoPath: this.repoPath });
     this.server = null;
+  }
+
+  /**
+   * Normalizes a candidate file/directory path or file:// URI into a valid Git repository root.
+   * @param {string} [candidate='']
+   * @param {boolean} [requireGit=false]
+   * @returns {string|null}
+   */
+  normalizeRepoCandidate(candidate = '', requireGit = false) {
+    if (!candidate || typeof candidate !== 'string') return null;
+    let clean = candidate.trim();
+    if (!clean) return null;
+
+    try {
+      if (clean.startsWith('file://')) {
+        clean = decodeURIComponent(clean.replace(/^file:\/\/\/?/, ''));
+      } else if (clean.includes('%')) {
+        clean = decodeURIComponent(clean);
+      }
+      if (/^\/([a-zA-Z]:)/.test(clean)) {
+        clean = clean.slice(1);
+      }
+    } catch {}
+
+    clean = path.normalize(clean);
+    if (!fs.existsSync(clean)) return null;
+
+    let startDir = clean;
+    try {
+      const stat = fs.statSync(clean);
+      startDir = stat.isDirectory() ? clean : path.dirname(clean);
+    } catch {
+      return null;
+    }
+
+    let curr = startDir;
+    while (curr && curr !== path.dirname(curr)) {
+      if (fs.existsSync(path.join(curr, '.git'))) {
+        return curr;
+      }
+      curr = path.dirname(curr);
+    }
+    if (curr && fs.existsSync(path.join(curr, '.git'))) {
+      return curr;
+    }
+
+    return requireGit ? null : startDir;
+  }
+
+  /**
+   * Resolves the Git repository root for a specific conversation cascadeId or explicit path.
+   * @param {string} [cascadeId]
+   * @param {string} [explicitRepoPath]
+   * @returns {string}
+   */
+  resolveRepoForCascade(cascadeId, explicitRepoPath) {
+    if (explicitRepoPath) {
+      const normalized = this.normalizeRepoCandidate(explicitRepoPath, false);
+      if (normalized) {
+        this.repoPath = normalized;
+        if (cascadeId) {
+          this.sessionRepos.set(cascadeId, normalized);
+        }
+        return normalized;
+      }
+    }
+
+    if (cascadeId && this.sessionRepos.has(cascadeId)) {
+      const cached = this.sessionRepos.get(cascadeId);
+      if (cached && fs.existsSync(cached)) {
+        this.repoPath = cached;
+        return cached;
+      }
+      this.sessionRepos.delete(cascadeId);
+    }
+
+    if (cascadeId && /^[0-9a-fA-F-]{36}$/.test(cascadeId)) {
+      const logsDir = path.join(this.brainDir, cascadeId, '.system_generated', 'logs');
+      const candidates = [
+        path.join(logsDir, 'transcript.jsonl'),
+        path.join(logsDir, 'transcript_full.jsonl')
+      ];
+      for (const transcriptPath of candidates) {
+        if (!fs.existsSync(transcriptPath)) continue;
+        try {
+          const fd = fs.openSync(transcriptPath, 'r');
+          const buf = Buffer.alloc(65536);
+          const bytesRead = fs.readSync(fd, buf, 0, 65536, 0);
+          fs.closeSync(fd);
+          const sample = buf.toString('utf-8', 0, bytesRead);
+          const isJsonl = sample.trimStart().startsWith('{');
+          const cleanSample = isJsonl
+            ? sample.replace(/\\\\/g, '/').replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\"/g, '"')
+            : sample.replace(/\\\\/g, '/').replace(/\\/g, '/');
+
+          const cwdMatch = cleanSample.match(/Command Working Directory:\s*([^\r\n\\"]+)/i) ||
+                           cleanSample.match(/Active Workspaces:\s*(?:\\n|\r?\n)-\s*([^\r\n\\"]+)/i);
+          if (cwdMatch && cwdMatch[1]) {
+            const resolved = this.normalizeRepoCandidate(cwdMatch[1].trim(), false);
+            if (resolved) {
+              this.sessionRepos.set(cascadeId, resolved);
+              this.repoPath = resolved;
+              return resolved;
+            }
+          }
+
+          const pathRegex = /"Path"\s*:\s*"([^"]+)"/gi;
+          let m;
+          while ((m = pathRegex.exec(cleanSample)) !== null) {
+            const p = m[1];
+            if (!p || p.includes('.gemini/antigravity/builtin') || p.includes('.gemini/antigravity/brain')) {
+              continue;
+            }
+            const resolved = this.normalizeRepoCandidate(p, true);
+            if (resolved) {
+              this.sessionRepos.set(cascadeId, resolved);
+              this.repoPath = resolved;
+              return resolved;
+            }
+          }
+        } catch {}
+      }
+    }
+
+    return this.repoPath;
   }
 
   /**
@@ -4278,6 +8937,32 @@ class AgentSyncServer {
       }
     } catch {}
     return {};
+  }
+
+  /**
+   * Reads model slots from disk or returns default configuration.
+   * @returns {Object}
+   */
+  readModelSlots() {
+    const defaults = {
+      planner: 'gemini-4-argon-high',
+      builder: 'gemini-4-hydrogen-high',
+      enabled: true,
+      sessions: {}
+    };
+    try {
+      if (fs.existsSync(this.modelSlotsPath)) {
+        const raw = fs.readFileSync(this.modelSlotsPath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const sessions = (parsed.sessions && typeof parsed.sessions === 'object' && !Array.isArray(parsed.sessions))
+            ? parsed.sessions
+            : {};
+          return { ...defaults, ...parsed, sessions };
+        }
+      }
+    } catch {}
+    return defaults;
   }
 
   /**
@@ -4302,8 +8987,180 @@ class AgentSyncServer {
   }
 
   /**
+   * Saves model slots configuration to disk atomically.
+   * @param {Object} data
+   */
+  writeModelSlots(data) {
+    try {
+      const dir = path.dirname(this.modelSlotsPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const tmpPath = `${this.modelSlotsPath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+      fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+      fs.renameSync(tmpPath, this.modelSlotsPath);
+    } catch (err) {
+      // Fallback direct write
+      try {
+        fs.writeFileSync(this.modelSlotsPath, JSON.stringify(data, null, 2), 'utf-8');
+      } catch {}
+    }
+  }
+
+  /**
+   * Updates model slots config with partial patch.
+   * @param {Object} [patch]
+   * @returns {Object}
+   */
+  updateModelSlots(patch = {}) {
+    const current = this.readModelSlots();
+    const nextSessions = (patch.sessions && typeof patch.sessions === 'object' && !Array.isArray(patch.sessions))
+      ? { ...(current.sessions || {}), ...patch.sessions }
+      : (current.sessions || {});
+    const updated = {
+      ...current,
+      ...patch,
+      sessions: nextSessions,
+      updatedAt: Date.now()
+    };
+    this.writeModelSlots(updated);
+    return updated;
+  }
+
+  /**
+   * Reads discovered live model catalog from disk or returns an empty snapshot.
+   * @returns {Object}
+   */
+  readModelCatalog() {
+    const empty = {
+      source: 'fallback',
+      baseModels: [],
+      modelCatalog: [],
+      disabledModels: [],
+      totalBaseModels: 0,
+      totalModels: 0,
+      updatedAt: 0
+    };
+    try {
+      if (fs.existsSync(this.modelCatalogPath)) {
+        const raw = fs.readFileSync(this.modelCatalogPath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return {
+            ...empty,
+            ...parsed,
+            baseModels: Array.isArray(parsed.baseModels) ? parsed.baseModels : [],
+            modelCatalog: Array.isArray(parsed.modelCatalog) ? parsed.modelCatalog : [],
+            disabledModels: Array.isArray(parsed.disabledModels) ? parsed.disabledModels : []
+          };
+        }
+      }
+    } catch {}
+    return empty;
+  }
+
+  /**
+   * Saves discovered model catalog to disk atomically.
+   * @param {Object} data
+   */
+  writeModelCatalog(data) {
+    try {
+      const dir = path.dirname(this.modelCatalogPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const tmpPath = `${this.modelCatalogPath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+      fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+      fs.renameSync(tmpPath, this.modelCatalogPath);
+    } catch {
+      try {
+        fs.writeFileSync(this.modelCatalogPath, JSON.stringify(data, null, 2), 'utf-8');
+      } catch {}
+    }
+  }
+
+  /**
+   * Updates and persists the live discovered model catalog.
+   * @param {Object} payload
+   * @returns {Object|null}
+   */
+  updateModelCatalog(payload = {}) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+    const baseModels = Array.isArray(payload.baseModels) ? payload.baseModels : [];
+    const modelCatalog = Array.isArray(payload.modelCatalog) ? payload.modelCatalog : [];
+    const disabledModels = Array.isArray(payload.disabledModels) ? payload.disabledModels : [];
+    if (baseModels.length === 0 && modelCatalog.length === 0) return null;
+
+    const updated = {
+      source: typeof payload.source === 'string' && payload.source ? payload.source : 'native-react-context',
+      baseModels,
+      modelCatalog,
+      disabledModels,
+      totalBaseModels: baseModels.length,
+      totalModels: modelCatalog.length,
+      updatedAt: Date.now()
+    };
+    this.writeModelCatalog(updated);
+    return updated;
+  }
+
+  /**
+   * Reads saved model slots for a specific subagent sessionId, or all sessions map if omitted.
+   * @param {string} [sessionId]
+   * @returns {Object|null}
+   */
+  readSubagentSessionSlots(sessionId) {
+    const current = this.readModelSlots();
+    const sessions = (current.sessions && typeof current.sessions === 'object' && !Array.isArray(current.sessions))
+      ? current.sessions
+      : {};
+    if (!sessionId) {
+      return { ...sessions };
+    }
+    const entry = sessions[sessionId];
+    return (entry && typeof entry === 'object' && !Array.isArray(entry)) ? { ...entry } : null;
+  }
+
+  /**
+   * Updates and persists model slots for a specific subagent sessionId atomically.
+   * @param {string} sessionId
+   * @param {Object} [slots]
+   * @returns {Object|null}
+   */
+  updateSubagentSessionSlots(sessionId, slots = {}) {
+    if (!sessionId || typeof sessionId !== 'string') return null;
+    const cleanId = sessionId.trim();
+    if (!cleanId || !slots || typeof slots !== 'object' || Array.isArray(slots)) return null;
+
+    const current = this.readModelSlots();
+    const sessions = (current.sessions && typeof current.sessions === 'object' && !Array.isArray(current.sessions))
+      ? { ...current.sessions }
+      : {};
+    const existing = (sessions[cleanId] && typeof sessions[cleanId] === 'object' && !Array.isArray(sessions[cleanId]))
+      ? sessions[cleanId]
+      : {};
+
+    const nextSession = {
+      ...existing,
+      ...slots,
+      planner: slots.planner || existing.planner || current.planner,
+      builder: slots.builder || existing.builder || current.builder,
+      updatedAt: Date.now()
+    };
+
+    sessions[cleanId] = nextSession;
+    const updated = {
+      ...current,
+      sessions,
+      updatedAt: Date.now()
+    };
+    this.writeModelSlots(updated);
+    return nextSession;
+  }
+
+  /**
    * Updates an agent entry for a specific conversation cascadeId.
-   * Preserves existing modifiers (like caveman) unless explicitly specified.
+   * Preserves existing modifiers (like caveman and adhd) unless explicitly specified.
    * @param {string} cascadeId
    * @param {Object} agent
    */
@@ -4316,17 +9173,21 @@ class AgentSyncServer {
     const caveman = (agent.caveman !== undefined)
       ? !!agent.caveman
       : ((modifiers.caveman !== undefined) ? !!modifiers.caveman : (existing.caveman ?? false));
+    const adhd = (agent.adhd !== undefined)
+      ? !!agent.adhd
+      : ((modifiers.adhd !== undefined) ? !!modifiers.adhd : (existing.adhd ?? caveman));
 
     current[cascadeId] = {
       ...agent,
-      modifiers: { ...existingModifiers, ...modifiers, caveman },
-      caveman
+      modifiers: { ...existingModifiers, ...modifiers, caveman, adhd },
+      caveman,
+      adhd
     };
     this.writeActiveAgents(current);
   }
 
   /**
-   * Updates modifier flags (such as caveman mode) for a specific cascadeId.
+   * Updates modifier flags (such as caveman and adhd focus modes) for a specific cascadeId.
    * @param {string} cascadeId
    * @param {Object} modifiers
    */
@@ -4339,11 +9200,15 @@ class AgentSyncServer {
     const caveman = (modifiers.caveman !== undefined)
       ? !!modifiers.caveman
       : (existing.caveman ?? false);
+    const adhd = (modifiers.adhd !== undefined)
+      ? !!modifiers.adhd
+      : (modifiers.caveman !== undefined ? !!modifiers.caveman : (existing.adhd ?? caveman));
 
     current[cascadeId] = {
       ...existing,
-      modifiers: nextModifiers,
-      caveman
+      modifiers: { ...nextModifiers, caveman, adhd },
+      caveman,
+      adhd
     };
     this.writeActiveAgents(current);
   }
@@ -4433,18 +9298,159 @@ class AgentSyncServer {
           return;
         }
 
-        if (req.method === 'GET' && (req.url === '/vcs/overview' || req.url.startsWith('/vcs/overview?'))) {
-          try {
-            let targetRepo = this.repoPath;
+        if (req.method === 'GET' && req.url === '/model-catalog') {
+          const data = this.readModelCatalog();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(data));
+          return;
+        }
+
+        if (req.method === 'GET' && (req.url === '/pit-wall' || req.url.startsWith('/pit-wall?'))) {
+          const metrics = (this.telemetryService && typeof this.telemetryService.getPitWallMetrics === 'function')
+            ? this.telemetryService.getPitWallMetrics()
+            : null;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', pitWall: metrics }));
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/model-catalog') {
+          let body = '';
+          let exceeded = false;
+          req.on('data', chunk => {
+            body += chunk;
+            if (body.length > 131072) {
+              exceeded = true;
+              res.writeHead(413, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Payload too large' }));
+              req.destroy();
+            }
+          });
+          req.on('end', () => {
+            if (exceeded || res.writableEnded) return;
             try {
-              const urlObj = new URL(req.url, 'http://127.0.0.1');
-              const qRepo = urlObj.searchParams.get('repoPath');
-              if (qRepo && fs.existsSync(qRepo)) {
-                targetRepo = qRepo;
-                this.repoPath = qRepo;
+              const payload = JSON.parse(body || '{}');
+              const catalog = this.updateModelCatalog(payload);
+              if (catalog) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, catalog }));
+                return;
               }
             } catch {}
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid model catalog payload' }));
+          });
+          return;
+        }
 
+        if (req.method === 'GET' && req.url === '/model-slots') {
+          const data = this.readModelSlots();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(data));
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/model-slots') {
+          let body = '';
+          let exceeded = false;
+          req.on('data', chunk => {
+            body += chunk;
+            if (body.length > 65536) {
+              exceeded = true;
+              res.writeHead(413, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Payload too large' }));
+              req.destroy();
+            }
+          });
+          req.on('end', () => {
+            if (exceeded || res.writableEnded) return;
+            try {
+              const payload = JSON.parse(body || '{}');
+              const slots = this.updateModelSlots(payload);
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: true, slots }));
+              return;
+            } catch {}
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid payload' }));
+          });
+          return;
+        }
+
+        if (req.method === 'GET' && (req.url === '/subagent-model-slots' || req.url.startsWith('/subagent-model-slots?'))) {
+          let sessionId = null;
+          try {
+            const urlObj = new URL(req.url, 'http://127.0.0.1');
+            sessionId = urlObj.searchParams.get('sessionId');
+          } catch {}
+
+          if (sessionId) {
+            const sessionSlots = this.readSubagentSessionSlots(sessionId);
+            const globalSlots = this.readModelSlots();
+            const payload = sessionSlots || {
+              planner: globalSlots.planner,
+              builder: globalSlots.builder,
+              isDefault: true
+            };
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(payload));
+            return;
+          }
+
+          const allSessions = this.readSubagentSessionSlots();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(allSessions));
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/subagent-model-slots') {
+          let body = '';
+          let exceeded = false;
+          req.on('data', chunk => {
+            body += chunk;
+            if (body.length > 65536) {
+              exceeded = true;
+              res.writeHead(413, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Payload too large' }));
+              req.destroy();
+            }
+          });
+          req.on('end', () => {
+            if (exceeded || res.writableEnded) return;
+            try {
+              const payload = JSON.parse(body || '{}');
+              if (
+                payload &&
+                typeof payload.sessionId === 'string' &&
+                payload.sessionId.trim() &&
+                payload.slots &&
+                typeof payload.slots === 'object' &&
+                !Array.isArray(payload.slots)
+              ) {
+                const cleanId = payload.sessionId.trim();
+                const slots = this.updateSubagentSessionSlots(cleanId, payload.slots);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, sessionId: cleanId, slots }));
+                return;
+              }
+            } catch {}
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid payload' }));
+          });
+          return;
+        }
+
+        if (req.method === 'GET' && (req.url === '/vcs/overview' || req.url.startsWith('/vcs/overview?'))) {
+          try {
+            let qRepo = null;
+            let qCascade = null;
+            try {
+              const urlObj = new URL(req.url, 'http://127.0.0.1');
+              qRepo = urlObj.searchParams.get('repoPath');
+              qCascade = urlObj.searchParams.get('cascadeId');
+            } catch {}
+
+            const targetRepo = this.resolveRepoForCascade(qCascade, qRepo) || this.repoPath;
             const data = this.vcsOrchestrator.getRepositoryOverview({ repoPath: targetRepo });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(data));
@@ -4455,17 +9461,36 @@ class AgentSyncServer {
           return;
         }
 
-        if (req.method === 'POST' && req.url === '/vcs/fetch') {
-          try {
-            if (this.vcsOrchestrator?.gitService && typeof this.vcsOrchestrator.gitService.fetch === 'function') {
-              this.vcsOrchestrator.gitService.fetch({ repoPath: this.repoPath });
+        if (req.method === 'POST' && (req.url === '/vcs/fetch' || req.url.startsWith('/vcs/fetch?'))) {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            try {
+              let qRepo = null;
+              let qCascade = null;
+              try {
+                const urlObj = new URL(req.url, 'http://127.0.0.1');
+                qRepo = urlObj.searchParams.get('repoPath');
+                qCascade = urlObj.searchParams.get('cascadeId');
+              } catch {}
+              if (body) {
+                try {
+                  const parsed = JSON.parse(body);
+                  if (parsed.repoPath) qRepo = parsed.repoPath;
+                  if (parsed.cascadeId) qCascade = parsed.cascadeId;
+                } catch {}
+              }
+              const targetRepo = this.resolveRepoForCascade(qCascade, qRepo) || this.repoPath;
+              if (this.vcsOrchestrator?.gitService && typeof this.vcsOrchestrator.gitService.fetch === 'function') {
+                this.vcsOrchestrator.gitService.fetch({ repoPath: targetRepo });
+              }
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ success: true, repoPath: targetRepo }));
+            } catch (err) {
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: err.message }));
             }
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true }));
-          } catch (err) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: err.message }));
-          }
+          });
           return;
         }
 
@@ -4475,13 +9500,14 @@ class AgentSyncServer {
           req.on('end', () => {
             try {
               const payload = JSON.parse(body || '{}');
-              const { action, branch, targetSha } = payload;
+              const { action, branch, targetSha, cascadeId, repoPath } = payload;
               if (!action) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Missing action parameter' }));
                 return;
               }
 
+              const targetRepo = this.resolveRepoForCascade(cascadeId, repoPath) || this.repoPath;
               let result = {};
               if (action === 'checkout') {
                 if (!branch) {
@@ -4489,24 +9515,24 @@ class AgentSyncServer {
                   res.end(JSON.stringify({ error: 'Missing branch for checkout' }));
                   return;
                 }
-                execSync(`git checkout ${branch}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-                result = { success: true, action: 'checkout', branch };
+                execSync(`git checkout ${branch}`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+                result = { success: true, action: 'checkout', branch, repoPath: targetRepo };
               } else if (action === 'pull') {
                 const targetBranch = branch || 'main';
-                execSync(`git pull origin ${targetBranch}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-                result = { success: true, action: 'pull', branch: targetBranch };
+                execSync(`git pull origin ${targetBranch}`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+                result = { success: true, action: 'pull', branch: targetBranch, repoPath: targetRepo };
               } else if (action === 'push') {
                 const targetBranch = branch || 'main';
                 const refspec = targetSha ? `${targetSha}:refs/heads/${targetBranch}` : targetBranch;
-                execSync(`git push origin ${refspec}`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-                result = { success: true, action: 'push', branch: targetBranch, refspec };
+                execSync(`git push origin ${refspec}`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+                result = { success: true, action: 'push', branch: targetBranch, refspec, repoPath: targetRepo };
               } else if (action === 'create-pr') {
                 try {
-                  const prOut = execSync(`gh pr create --fill`, { cwd: this.repoPath, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-                  result = { success: true, action: 'create-pr', output: prOut.trim() };
+                  const prOut = execSync(`gh pr create --fill`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+                  result = { success: true, action: 'create-pr', output: prOut.trim(), repoPath: targetRepo };
                 } catch (e) {
                   try {
-                    const remoteUrl = execSync('git remote get-url origin', { cwd: this.repoPath, encoding: 'utf-8' }).trim();
+                    const remoteUrl = execSync('git remote get-url origin', { cwd: targetRepo, encoding: 'utf-8', windowsHide: true }).trim();
                     const cleanRemote = remoteUrl.replace(/\.git$/, '').replace(/^git@github\.com:/, 'https://github.com/');
                     result = { success: false, fallbackUrl: `${cleanRemote}/compare`, error: e.message };
                   } catch {
@@ -4568,6 +9594,9 @@ class AgentSyncServer {
 }
 
 
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 
 
 
@@ -4588,13 +9617,34 @@ class AgentDiscoveryService {
       path.join(homedir, '.gemini', 'config', 'skills'),
       path.join(homedir, '.gemini', 'antigravity', 'agents')
     ];
+    this.cacheTtlMs = options.cacheTtlMs ?? 30_000;
+    this.excludedDirs = new Set([
+      'node_modules',
+      '.git',
+      'dist',
+      'scratch',
+      'tests',
+      'apps',
+      '__pycache__',
+      '.playwright-mcp'
+    ]);
+    this._cache = null;
   }
 
   /**
    * Scans configured paths and returns all discovered agents.
+   * Uses a short-lived TTL cache to avoid repeated filesystem walks.
+   * @param {Object} [options]
+   * @param {boolean} [options.bypassCache=false]
+   * @param {number} [options.now]
    * @returns {Array<Object>} List of structured agent descriptor objects.
    */
-  discoverAgents() {
+  discoverAgents(options = {}) {
+    const now = options.now ?? Date.now();
+    if (!options.bypassCache && this._cache && (now - this._cache.ts) < this.cacheTtlMs) {
+      return this._cache.agents;
+    }
+
     const discovered = new Map();
 
     for (const root of this.searchRoots) {
@@ -4602,7 +9652,9 @@ class AgentDiscoveryService {
       this._scanDirectory(root, discovered, 0, 4);
     }
 
-    return Array.from(discovered.values());
+    const agents = Array.from(discovered.values());
+    this._cache = { ts: now, agents };
+    return agents;
   }
 
   /**
@@ -4619,8 +9671,7 @@ class AgentDiscoveryService {
         const fullPath = path.join(dir, entry.name);
 
         if (entry.isDirectory()) {
-          // Skip node_modules and .git
-          if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue;
+          if (this.excludedDirs.has(entry.name)) continue;
           this._scanDirectory(fullPath, map, depth + 1, maxDepth);
         } else if (entry.isFile() && entry.name.endsWith('.md')) {
           if (this._isAgentFile(entry.name, fullPath)) {
@@ -4749,6 +9800,9 @@ class AgentDiscoveryService {
 }
 
 
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
 
 
 
@@ -4779,7 +9833,7 @@ class ModHost {
     this.slotManager = options.slotManager || new SlotManager();
     this.modLoader = options.modLoader || new ModLoader({ slotManager: this.slotManager });
     this.telemetryService = options.telemetryService || new TelemetryService();
-    this.syncServer = options.syncServer || new AgentSyncServer();
+    this.syncServer = options.syncServer || new AgentSyncServer({ telemetryService: this.telemetryService });
     this.gitService = options.gitService || new GitService();
     this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ gitService: this.gitService });
     this.portResolver = options.portResolver || new CdpPortResolver();
@@ -4791,6 +9845,22 @@ class ModHost {
    */
   registerMod(mod) {
     this.modLoader.register(mod);
+  }
+
+  /**
+   * Returns registered mods from the mod loader.
+   * @returns {Array<import('../sdk/AntigravityMod.js').AntigravityMod>}
+   */
+  getMods() {
+    return this.modLoader.getRegisteredMods();
+  }
+
+  /**
+   * Returns registered mods from the mod loader.
+   * @returns {Array<import('../sdk/AntigravityMod.js').AntigravityMod>}
+   */
+  getRegisteredMods() {
+    return this.modLoader.getRegisteredMods();
   }
 
   /**
@@ -4810,24 +9880,52 @@ class ModHost {
    * @returns {Promise<string>}
    */
   async resolveRepoPath(cdpClient, explicitTranscriptPath) {
-    // 1. Try resolving via live CDP renderer active tab, editor resource, or query parameter
+    // 1. Try resolving via live CDP renderer active conversation trajectory or editor tab
     if (cdpClient) {
       try {
         const res = await cdpClient.evaluate(`
-          (() => {
+          (async () => {
+            try {
+              const cascadeId = window.location.pathname.split('/c/')[1]?.split('/')[0]?.split('?')[0] ||
+                                document.querySelector('[data-cascade-id]')?.getAttribute('data-cascade-id');
+              if (cascadeId && window.__APP_CONFIG__?.csrfToken) {
+                const resp = await fetch('/exa.language_server_pb.LanguageServerService/GetAllCascadeTrajectories', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Connect-Protocol-Version': '1',
+                    'x-codeium-csrf-token': window.__APP_CONFIG__.csrfToken
+                  },
+                  body: '{}'
+                });
+                if (resp.ok) {
+                  const data = await resp.json();
+                  const summary = data?.trajectorySummaries?.[cascadeId];
+                  const ws = summary?.workspaces?.[0] || summary?.trajectoryMetadata?.workspaces?.[0];
+                  const uri = ws?.gitRootAbsoluteUri || ws?.workspaceFolderAbsoluteUri || summary?.trajectoryMetadata?.workspaceUris?.[0];
+                  if (uri) return uri;
+                }
+              }
+            } catch (e) {}
+
             // 1. Check active editor tab or resource in VS Code / Antigravity DOM
             const activeTab = document.querySelector('.tab.active, [aria-selected="true"].tab, .tab-label[aria-selected="true"]');
             if (activeTab) {
               const resource = activeTab.getAttribute('data-resource-name') ||
                                activeTab.getAttribute('title') ||
                                activeTab.getAttribute('aria-label');
-              if (resource) return resource;
+              if (resource && !resource.includes('.gemini/antigravity/builtin') && !resource.includes('.gemini\\\\antigravity\\\\builtin')) {
+                return resource;
+              }
             }
             // 2. Query editor tab query parameter
             const search = window.location.search || '';
             const match = search.match(/tab=file__file%3A%2F%2F%2F([^&]+)/i);
             if (match && match[1]) {
-              return decodeURIComponent(match[1]);
+              const decoded = decodeURIComponent(match[1]);
+              if (!decoded.includes('.gemini/antigravity/builtin') && !decoded.includes('.gemini\\\\antigravity\\\\builtin')) {
+                return decoded;
+              }
             }
             // 3. Document title fallback
             if (document.title) {
@@ -4839,8 +9937,13 @@ class ModHost {
         if (res && res.value && typeof res.value === 'string') {
           // Normalize clean path candidate
           let candidate = res.value.trim();
-          if (candidate.startsWith('file:///')) {
-            candidate = decodeURIComponent(candidate.replace('file:///', ''));
+          if (candidate.startsWith('file://')) {
+            candidate = decodeURIComponent(candidate.replace(/^file:\/\/\/?/, ''));
+          } else if (candidate.includes('%')) {
+            try { candidate = decodeURIComponent(candidate); } catch {}
+          }
+          if (/^\/([a-zA-Z]:)/.test(candidate)) {
+            candidate = candidate.slice(1);
           }
           if (candidate.includes(' — ')) {
             const parts = candidate.split(' — ');
@@ -4850,6 +9953,7 @@ class ModHost {
             candidate = parts[0].trim();
           }
 
+          candidate = path.normalize(candidate);
           let currentDir = fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()
             ? candidate
             : path.dirname(candidate);
@@ -4968,11 +10072,19 @@ class ModHost {
     };
 
     const activeAgents = this.syncServer.readActiveAgents();
+    const modelSlots = this.syncServer.readModelSlots();
+    const modelCatalog = this.syncServer.readModelCatalog();
+    const pitWall = (this.telemetryService && typeof this.telemetryService.getPitWallMetrics === 'function')
+      ? this.telemetryService.getPitWallMetrics()
+      : null;
 
     const hostContext = {
       telemetry: primaryMetric,
       allMetrics,
       activeAgents,
+      modelSlots,
+      modelCatalog,
+      pitWall,
       ...vcsOverview,
       timestamp: Date.now()
     };
@@ -5009,12 +10121,60 @@ class ModHost {
       }
     } catch {}
 
+    // Sync model slots from renderer localStorage to disk
+    try {
+      let rawSlots = evalRes?.value?.modelSlots;
+      if (!rawSlots) {
+        const slotsRes = await cdpClient.evaluate("localStorage.getItem('__antigravity_model_slots')");
+        rawSlots = slotsRes?.value;
+      }
+      if (rawSlots) {
+        const parsedSlots = typeof rawSlots === 'string' ? JSON.parse(rawSlots) : rawSlots;
+        if (parsedSlots && typeof parsedSlots === 'object') {
+          this.syncServer.updateModelSlots(parsedSlots);
+        }
+      }
+    } catch {}
+
+    // Sync discovered live model catalog from renderer React context to disk
+    try {
+      const discovered = evalRes?.value?.discoveredModelCatalog;
+      if (discovered && typeof discovered === 'object' && Array.isArray(discovered.baseModels) && discovered.baseModels.length > 0) {
+        this.syncServer.updateModelCatalog(discovered);
+      }
+    } catch {}
+
     return evalRes;
   }
 }
 
 
 // ==================== Context Tachometer Mod ====================
+/**
+ * Computes normalized gauge geometry and status palette for a percentage value.
+ * Self-contained so it can be serialized into browser runtime scripts.
+ * @param {number|string} [pct=0]
+ * @returns {{ numericPct: number, clampedPct: number, angle: number, needleColor: string, statusColor: string }}
+ */
+function getGaugeMetrics(pct = 0) {
+  const numericPct = typeof pct === 'string' ? parseFloat(pct) || 0 : (Number(pct) || 0);
+  const clampedPct = Math.min(Math.max(numericPct, 0), 100);
+  const angle = -120 + (clampedPct / 100) * 240;
+
+  let needleColor = '#22c55e';
+  if (clampedPct >= 85) needleColor = '#ef4444';
+  else if (clampedPct >= 60) needleColor = '#f97316';
+  else if (clampedPct >= 25) needleColor = '#eab308';
+
+  return {
+    numericPct,
+    clampedPct,
+    angle,
+    needleColor,
+    statusColor: needleColor
+  };
+}
+
 /**
  * Generates an analog speedometer/tachometer SVG based on the reference design.
  * Features an unrotated 240° arc path with a linear gradient:
@@ -5024,14 +10184,7 @@ class ModHost {
  * - Red (100% - Full / Lleno) on the right
  */
 function renderGaugeSvg(pct = 0, size = 18) {
-  const numericPct = typeof pct === 'string' ? parseFloat(pct) || 0 : (pct || 0);
-  const clampedPct = Math.min(Math.max(numericPct, 0), 100);
-  const angle = -120 + (clampedPct / 100) * 240;
-
-  let needleColor = '#22c55e'; // Green when low
-  if (clampedPct >= 85) needleColor = '#ef4444';      // Red when critical
-  else if (clampedPct >= 60) needleColor = '#f97316'; // Orange when high
-  else if (clampedPct >= 25) needleColor = '#eab308'; // Yellow when moderate
+  const { angle, needleColor } = getGaugeMetrics(pct);
 
   return `
     <svg viewBox="0 0 100 100" width="${size}" height="${size}" style="vertical-align: middle; flex-shrink: 0; overflow: visible;">
@@ -5081,15 +10234,17 @@ function renderGaugeSvg(pct = 0, size = 18) {
 function renderSvgIcon(name, size = 12, color = 'currentColor') {
   switch (name) {
     case 'zap':
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="${color}" fill-opacity="0.2"/></svg>`;
+      return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="${color}" fill-opacity="0.2"/></svg>`;
     case 'clock':
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
+      return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
     case 'calendar':
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`;
+      return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`;
     case 'bot':
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16" stroke-linecap="round"/><line x1="16" y1="16" x2="16" y2="16" stroke-linecap="round"/></svg>`;
+      return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><line x1="8" y1="16" x2="8" y2="16" stroke-linecap="round"/><line x1="16" y1="16" x2="16" y2="16" stroke-linecap="round"/></svg>`;
     case 'scissors':
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>`;
+      return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>`;
+    case 'chevron-right':
+      return `<svg class="tach-details-chevron" aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; flex-shrink:0;"><polyline points="9 18 15 12 9 6"/></svg>`;
     default:
       return '';
   }
@@ -5202,34 +10357,271 @@ function renderPopoverHtml(metric) {
     return '#22c55e';
   };
 
+  const escapeHtml = (val) => String(val ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+  const getSubagentStatusColor = (status) => {
+    if (status === 'running') return '#38bdf8';
+    if (status === 'killed') return '#71717a';
+    return '#22c55e';
+  };
+
+  const totalSubagentsCount = Array.isArray(m.subagents) && m.subagents.length > 0
+    ? m.subagents.length
+    : chatModels.reduce((sum, cm) => sum + (Array.isArray(cm.subagents) ? cm.subagents.length : 0), 0);
+
+  const resolveLocalVisualMeta = (rawName) => {
+    const cleaned = cleanModelName(rawName) || 'Gemini 3.8 Flash';
+    const lower = cleaned.toLowerCase();
+    let color = '#94a3b8';
+    let poolId = 'gemini_unified';
+    let poolLabel = 'Gemini Unificado';
+
+    if (/argon|g1-pro/i.test(lower)) {
+      color = '#38bdf8';
+      poolId = 'argon_weekly';
+      poolLabel = 'Argon Semanal';
+    } else if (/opus/i.test(lower)) {
+      color = '#c084fc';
+      poolId = 'third_party';
+      poolLabel = 'Claude / GPT-OSS';
+    } else if (/sonnet|claude/i.test(lower)) {
+      color = '#a78bfa';
+      poolId = 'third_party';
+      poolLabel = 'Claude / GPT-OSS';
+    } else if (/gpt-oss|gpt|120b/i.test(lower)) {
+      color = '#f472b6';
+      poolId = 'third_party';
+      poolLabel = 'Claude / GPT-OSS';
+    } else if (/neon/i.test(lower)) {
+      color = '#a3e635';
+    } else if (/hydrogen/i.test(lower)) {
+      color = '#34d399';
+    } else if (/flash|gemini/i.test(lower)) {
+      color = '#fbbf24';
+    }
+
+    let shortName = cleaned;
+    if (/orchestrator/i.test(lower)) {
+      shortName = lower.includes('neon') ? 'Orch. Neon' : 'Orchestrator';
+    } else {
+      shortName = cleaned
+        .replace(/^Gemini\s+4\s+/i, '')
+        .replace(/^Gemini\s+([\d.]+)\s+Flash/i, 'Flash $1')
+        .replace(/^Claude\s+/i, '')
+        .replace(/\(([^)]+)\)/g, (_, eff) => {
+          const e = eff.trim();
+          return /^medium$/i.test(e) ? 'Med' : e;
+        })
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (/^GPT-OSS/i.test(shortName)) {
+        shortName = 'GPT-OSS 120B';
+      }
+    }
+
+    return { color, shortName, poolId, poolLabel };
+  };
+
   let chatModelsLedgerHtml = '';
   if (chatModels.length > 0) {
     const modelRowsHtml = chatModels.map((cm) => {
-      const safeName = cleanModelName(cm.modelName) || 'Gemini';
+      const meta = resolveLocalVisualMeta(cm.modelName);
+      const dotColor = cm.color || meta.color;
+      const displayName = escapeHtml(cm.shortName || cleanModelName(cm.modelName) || 'Gemini');
+      const fullName = escapeHtml(cleanModelName(cm.modelName) || displayName);
+      const safeName = escapeHtml(cleanModelName(cm.modelName) || 'Gemini');
+      const safePool = escapeHtml(cm.poolLabel || meta.poolLabel);
       const quotaShareText = cm.hasDualLimit
         ? `5h:${cm.chatRollingPct}% · 7d:${cm.chatWeeklyPct}%`
         : `7d:${cm.chatWeeklyPct}%`;
+      const modelSubs = Array.isArray(cm.subagents) ? cm.subagents : [];
+
+      if (modelSubs.length === 0) {
+        return `
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 10px; padding: 3px 0; border-top: 1px dashed rgba(255, 255, 255, 0.06); color: #d4d4d8; white-space: nowrap;">
+            <span style="display: flex; align-items: center; gap: 5px; font-weight: 500; color: #e4e4e7; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${fullName} · ${safePool}">
+              <span style="width: 6px; height: 6px; border-radius: 9999px; background: ${dotColor}; box-shadow: 0 0 5px ${dotColor}88; flex-shrink: 0;"></span>
+              <span style="overflow: hidden; text-overflow: ellipsis;">${displayName}</span>
+            </span>
+            <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
+              ${cm.displayTokens} <span style="color: ${dotColor}; font-weight: 600;">(${quotaShareText})</span>
+            </span>
+          </div>
+        `;
+      }
+
+      const subagentItemsHtml = modelSubs.map((sub) => {
+        const subRole = escapeHtml(sub.role || sub.typeName || 'Subagent');
+        const modeLabel = sub.isInherited ? 'inherit' : escapeHtml(sub.requestedModel || 'explicit');
+        const subDotColor = getSubagentStatusColor(sub.status);
+        const subTokensText = escapeHtml(sub.displayTokens || formatCompactTokens(sub.tokens));
+        const indentPrefix = (Number(sub.depth) || 0) > 0 ? '↳ ' : '';
+
+        return `
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 5px; font-size: 9.5px; padding: 1.5px 2px; color: #d4d4d8; white-space: nowrap;">
+            <span style="display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden;">
+              <span style="width: 5px; height: 5px; border-radius: 9999px; background: ${subDotColor}; flex-shrink: 0;"></span>
+              <span style="overflow: hidden; text-overflow: ellipsis; color: #e4e4e7;">${indentPrefix}${subRole}</span>
+            </span>
+            <span style="display: flex; align-items: center; gap: 4px; flex-shrink: 0; font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; font-size: 9px; color: #a1a1aa;">
+              <span style="padding: 0 4px; border-radius: 4px; background: rgba(255, 255, 255, 0.06); color: #94a3b8; font-size: 8.5px;">${modeLabel}</span>
+              <span>${subTokensText}</span>
+            </span>
+          </div>
+        `;
+      }).join('');
+
       return `
-        <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 10px; padding: 3px 0; border-top: 1px dashed rgba(255, 255, 255, 0.06); color: #d4d4d8; white-space: nowrap;">
-          <span style="display: flex; align-items: center; gap: 4px; font-weight: 500; color: #e4e4e7; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${safeName}">
-            ${icon('bot', 12, '#38bdf8')} ${safeName}
-          </span>
-          <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
-            ${cm.displayTokens} <span style="color: #38bdf8; font-weight: 600;">(${quotaShareText})</span>
-          </span>
-        </div>
+        <details class="tach-model-details" data-model-key="${safeName}">
+          <summary class="tach-model-summary">
+            <span style="display: flex; align-items: center; gap: 4px; font-weight: 500; color: #e4e4e7; min-width: 0; overflow: hidden;" title="${fullName} · ${safePool}">
+              ${icon('chevron-right', 11, 'currentColor')}
+              <span style="width: 6px; height: 6px; border-radius: 9999px; background: ${dotColor}; box-shadow: 0 0 5px ${dotColor}88; flex-shrink: 0;"></span>
+              <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 112px;">${displayName}</span>
+              <span style="padding: 0 5px; border-radius: 9999px; background: rgba(56, 189, 248, 0.14); color: #38bdf8; font-size: 8.5px; font-weight: 600; flex-shrink: 0;">${modelSubs.length} sub</span>
+            </span>
+            <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9.5px; flex-shrink: 0;">
+              ${cm.displayTokens} <span style="color: ${dotColor}; font-weight: 600;">(${quotaShareText})</span>
+            </span>
+          </summary>
+          <div class="tach-subagent-list">
+            ${subagentItemsHtml}
+          </div>
+        </details>
       `;
     }).join('');
 
+    const totalSubBadgeHtml = totalSubagentsCount > 0
+      ? `<span class="tach-subagent-total-pill" style="font-size: 8.5px; text-transform: none; letter-spacing: 0; padding: 1px 6px; border-radius: 9999px; background: rgba(56, 189, 248, 0.14); color: #38bdf8; font-weight: 600;">${totalSubagentsCount} subagente${totalSubagentsCount === 1 ? '' : 's'}</span>`
+      : '';
+
     chatModelsLedgerHtml = `
       <div style="margin-top: 7px; padding-top: 5px; border-top: 1px solid rgba(255, 255, 255, 0.08);">
-        <div style="font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 3px;">
-          Consumo por Modelo en este Chat
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600; margin-bottom: 3px;">
+          <span>Consumo por Modelo en este Chat</span>
+          ${totalSubBadgeHtml}
         </div>
         ${modelRowsHtml}
       </div>
     `;
   }
+
+  // Claude-style 10x10 Waffle Grid + 3 Quota Pools
+  const buildLocalWaffleCells = () => {
+    if (Array.isArray(m.waffleCells) && m.waffleCells.length === 100) {
+      return m.waffleCells;
+    }
+    const limit = 1_000_000;
+    const est = Number(m.estTokens) || ((user.tokens || 0) + (model.tokens || 0) + (thinking.tokens || 0) + (tools.tokens || 0) + (mcp.tokens || 0));
+    const cats = [
+      { key: 'user', label: 'Prompts', color: '#38bdf8', tokens: user.tokens || 0 },
+      { key: 'model', label: 'Replies', color: '#a855f7', tokens: model.tokens || 0 },
+      { key: 'thinking', label: 'Thinking', color: '#ec4899', tokens: thinking.tokens || 0 },
+      { key: 'tools', label: 'Tools', color: '#f59e0b', tokens: tools.tokens || 0 },
+      { key: 'mcp', label: 'MCP', color: '#10b981', tokens: mcp.tokens || 0 }
+    ];
+    const known = cats.reduce((s, c) => s + c.tokens, 0);
+    if (est > known) {
+      cats.push({ key: 'other', label: 'Context', color: '#64748b', tokens: est - known });
+    }
+    let used = est > 0 ? Math.min(100, Math.round(est / 10_000)) : 0;
+    if (est > 0 && used === 0) used = 1;
+    const counts = cats.map(c => {
+      const exact = est > 0 ? (c.tokens / est) * used : 0;
+      return { ...c, exact, cells: Math.floor(exact) };
+    });
+    let alloc = counts.reduce((s, c) => s + c.cells, 0);
+    const rem = counts.filter(c => c.tokens > 0).sort((a, b) => (b.exact - Math.floor(b.exact)) - (a.exact - Math.floor(a.exact)));
+    let idx = 0;
+    while (alloc < used && rem.length > 0) {
+      rem[idx % rem.length].cells++;
+      alloc++;
+      idx++;
+    }
+    const cells = [];
+    for (const c of counts) {
+      const pct = est > 0 ? Number(((c.tokens / limit) * 100).toFixed(1)) : 0;
+      for (let i = 0; i < c.cells && cells.length < 100; i++) {
+        cells.push({ key: c.key, label: c.label, color: c.color, tokens: c.tokens, pct });
+      }
+    }
+    const freeTokens = Math.max(0, limit - est);
+    const freePct = Number(((freeTokens / limit) * 100).toFixed(1));
+    while (cells.length < 100) {
+      cells.push({ key: 'free', label: 'Libre', color: 'rgba(255, 255, 255, 0.08)', tokens: freeTokens, pct: freePct });
+    }
+    return cells;
+  };
+
+  const buildLocalPoolsSummary = () => {
+    if (Array.isArray(m.poolsSummary) && m.poolsSummary.length === 3) {
+      return m.poolsSummary;
+    }
+    const poolMap = {
+      gemini_unified: { id: 'gemini_unified', label: 'Gemini Unificado', accent: '#a3e635', tokens: 0, pct: 0 },
+      argon_weekly: { id: 'argon_weekly', label: 'Argon Semanal', accent: '#38bdf8', tokens: 0, pct: 0 },
+      third_party: { id: 'third_party', label: 'Claude / GPT-OSS', accent: '#c084fc', tokens: 0, pct: 0 }
+    };
+    const total = chatModels.reduce((s, cm) => s + (cm.tokens || 0), 0);
+    for (const cm of chatModels) {
+      const meta = resolveLocalVisualMeta(cm.modelName);
+      const pid = cm.poolId || meta.poolId;
+      const target = poolMap[pid] || poolMap.gemini_unified;
+      target.tokens += (cm.tokens || 0);
+    }
+    return Object.values(poolMap).map(p => ({
+      ...p,
+      displayTokens: formatCompactTokens(p.tokens),
+      pct: total > 0 ? Math.round((p.tokens / total) * 100) : 0
+    }));
+  };
+
+  const waffleCells = buildLocalWaffleCells();
+  const poolsSummary = buildLocalPoolsSummary();
+
+  const waffleCellsHtml = waffleCells.map((cell) => {
+    const cColor = cell.color || 'rgba(255, 255, 255, 0.08)';
+    const cTitle = `${cell.label || 'Block'} · ${formatCompactTokens(cell.tokens || 0)} (${cell.pct ?? 0}%)`;
+    return `<div class="antigravity-waffle-cell" style="width: 7px; height: 7px; border-radius: 1.5px; background: ${cColor};" title="${cTitle}"></div>`;
+  }).join('');
+
+  const poolsRowsHtml = poolsSummary.map((pool) => `
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px; font-size: 9.5px; padding: 2px 5px; background: rgba(255, 255, 255, 0.025); border-radius: 5px; white-space: nowrap;">
+      <span style="display: flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; color: #d4d4d8;">
+        <span style="width: 5px; height: 5px; border-radius: 9999px; background: ${pool.accent}; flex-shrink: 0;"></span>
+        <span style="overflow: hidden; text-overflow: ellipsis;">${pool.label}</span>
+      </span>
+      <span style="font-family: ${FONT_MONO}; font-variant-numeric: tabular-nums; color: #a1a1aa; font-size: 9px; flex-shrink: 0;">
+        <strong style="color: #e4e4e7;">${pool.displayTokens}</strong> <span style="color: ${pool.accent};">(${pool.pct}%)</span>
+      </span>
+    </div>
+  `).join('');
+
+  const waffleSectionHtml = `
+    <div class="antigravity-waffle-card" style="margin-bottom: 10px; padding: 8px 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.06); border-radius: 8px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+        <span style="font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; font-weight: 600;">
+          Claude Context Grid (100 Bloques)
+        </span>
+        <span style="font-size: 9px; font-family: ${FONT_MONO}; color: #a1a1aa;">
+          ${m.pct}% / 1M
+        </span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 9px;">
+        <div class="antigravity-waffle-grid" style="display: grid; grid-template-columns: repeat(10, 7px); gap: 1.5px; flex-shrink: 0;">
+          ${waffleCellsHtml}
+        </div>
+        <div class="antigravity-pools-summary" style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px;">
+          ${poolsRowsHtml}
+        </div>
+      </div>
+    </div>
+  `;
 
   let modelQuotaHtml = '';
   if (quota) {
@@ -5370,6 +10762,8 @@ function renderPopoverHtml(metric) {
 
       ${modelQuotaHtml}
 
+      ${waffleSectionHtml}
+
       ${compactionsHtml}
 
       <!-- Compact Category Breakdown -->
@@ -5420,7 +10814,7 @@ class ContextTachometerMod extends AntigravityMod {
       priority: 50
     });
 
-    this.cachedCss = ".antigravity-tachometer-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 8px 0 6px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #e4e4e7;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.antigravity-tachometer-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-tachometer-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n/* Responsive compact mode (Speedometer SVG only, hides labels, exact 28x28 circle) */\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) {\r\n  width: 28px !important;\r\n  height: 28px !important;\r\n  min-width: 28px !important;\r\n  padding: 0 !important;\r\n  gap: 0 !important;\r\n  justify-content: center !important;\r\n  border-radius: 9999px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n/* Responsive shrinking for narrow screen resolutions */\r\n@media (max-width: 960px) {\r\n  .antigravity-tachometer-badge:not(.open):not(.pinned) {\r\n    width: 28px !important;\r\n    height: 28px !important;\r\n    min-width: 28px !important;\r\n    padding: 0 !important;\r\n    gap: 0 !important;\r\n    justify-content: center !important;\r\n    border-radius: 9999px !important;\r\n    box-sizing: border-box !important;\r\n  }\r\n  .antigravity-tachometer-badge:not(.open):not(.pinned) .tachometer-tokens,\r\n  .antigravity-tachometer-badge:not(.open):not(.pinned) .tachometer-pct {\r\n    display: none !important;\r\n  }\r\n}\r\n\r\n/* Interactive Tachometer Popover Portal (Fixed to Viewport) */\r\n.antigravity-tachometer-popover-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\r\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\r\n}\r\n\r\n.antigravity-tachometer-popover-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-popover-container {\r\n  display: none !important;\r\n}\r\n\r\n@keyframes popoverFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-4px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n";
+    this.cachedCss = ".antigravity-tachometer-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 8px 0 6px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #e4e4e7;\r\n  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.antigravity-tachometer-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-tachometer-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n/* Responsive compact mode (Speedometer SVG only, hides labels, exact 28x28 circle) */\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) {\r\n  width: 28px !important;\r\n  height: 28px !important;\r\n  min-width: 28px !important;\r\n  padding: 0 !important;\r\n  gap: 0 !important;\r\n  justify-content: center !important;\r\n  border-radius: 9999px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,\r\n.antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-tachometer-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n/* Responsive shrinking for narrow screen resolutions */\r\n@media (max-width: 960px) {\r\n  .antigravity-tachometer-badge.compact:not(.open):not(.pinned) {\r\n    width: 28px !important;\r\n    height: 28px !important;\r\n    min-width: 28px !important;\r\n    padding: 0 !important;\r\n    gap: 0 !important;\r\n    justify-content: center !important;\r\n    border-radius: 9999px !important;\r\n    box-sizing: border-box !important;\r\n  }\r\n  .antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-tokens,\r\n  .antigravity-tachometer-badge.compact:not(.open):not(.pinned) .tachometer-pct {\r\n    display: none !important;\r\n  }\r\n}\r\n\r\n/* Interactive Tachometer Popover Portal (Fixed to Viewport) */\r\n.antigravity-tachometer-popover-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  animation: popoverFadeIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);\r\n  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.75));\r\n}\r\n\r\n.antigravity-tachometer-popover-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-tachometer-popover-portal .tach-model-details {\r\n  border-top: 1px dashed rgba(255, 255, 255, 0.06);\r\n}\r\n\r\n.antigravity-tachometer-popover-portal .tach-model-summary {\r\n  list-style: none;\r\n  cursor: pointer;\r\n  display: flex;\r\n  justify-content: space-between;\r\n  align-items: center;\r\n  gap: 6px;\r\n  font-size: 10px;\r\n  padding: 3px 2px;\r\n  border-radius: 4px;\r\n  color: #d4d4d8;\r\n  white-space: nowrap;\r\n  user-select: none;\r\n  transition: background-color 0.15s ease;\r\n}\r\n\r\n.antigravity-tachometer-popover-portal .tach-model-summary::-webkit-details-marker {\r\n  display: none;\r\n}\r\n\r\n.antigravity-tachometer-popover-portal .tach-model-summary:hover {\r\n  background: rgba(255, 255, 255, 0.04);\r\n}\r\n\r\n.antigravity-tachometer-popover-portal .tach-model-summary:focus-visible {\r\n  outline: 2px solid #38bdf8;\r\n  outline-offset: 2px;\r\n}\r\n\r\n.antigravity-tachometer-popover-portal .tach-details-chevron {\r\n  color: #71717a;\r\n  transition: transform 0.16s ease, color 0.16s ease;\r\n}\r\n\r\n.antigravity-tachometer-popover-portal .tach-model-details[open] .tach-details-chevron {\r\n  transform: rotate(90deg);\r\n  color: #38bdf8;\r\n}\r\n\r\n.antigravity-tachometer-popover-portal .tach-subagent-list {\r\n  margin: 2px 0 5px 10px;\r\n  padding: 3px 0 3px 7px;\r\n  border-left: 1px solid rgba(56, 189, 248, 0.28);\r\n  max-height: 116px;\r\n  overflow-y: auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n}\r\n\r\n.antigravity-popover-container {\r\n  display: none !important;\r\n}\r\n\r\n@keyframes popoverFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-4px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n";
   }
 
   /**
@@ -6074,7 +11468,7 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
         <button class="agent-close-btn" id="antigravity-agent-close" title="Cerrar">✕</button>
       </div>
 
-      <!-- 1.1 CAVEMAN MODIFIER CARD (FOCUS / EXPLICATIVO) -->
+      <!-- 1.1 CAVEMAN & ADHD MODIFIER CARD (FOCUS / EXPLICATIVO) -->
       <div class="agent-card agent-modifier-card" id="antigravity-caveman-card">
         <div class="agent-modifier-info">
           <div class="agent-modifier-icon">
@@ -6086,10 +11480,10 @@ function renderAgentDropdownHtml(activeAgentId = 'default', dynamicAgents = []) 
           </div>
           <div class="agent-modifier-text">
             <div class="agent-modifier-title-row">
-              <span class="agent-modifier-title">Modo Focus (Caveman)</span>
+              <span class="agent-modifier-title">Modo Focus (Caveman + ADHD)</span>
               <span class="agent-modifier-pill" id="antigravity-caveman-pill">EXPLICATIVO</span>
             </div>
-            <div class="agent-modifier-subtitle">Alternar entre Focus y Explicativo</div>
+            <div class="agent-modifier-subtitle">Alternar entre Focus (Caveman + ADHD) y Explicativo</div>
           </div>
         </div>
         <label class="agent-modifier-switch">
@@ -6224,7 +11618,7 @@ class AgentSelectorMod extends AntigravityMod {
     });
 
     this.discoveryService = options.discoveryService || new AgentDiscoveryService();
-    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY AGENT SELECTOR MOD - STYLES\r\n   Card Architecture: Every text section enclosed in card components\r\n   ========================================================================= */\r\n\r\n.antigravity-agent-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 10px 0 7px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #f4f4f5;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.agent-badge-dot {\r\n  width: 6px;\r\n  height: 6px;\r\n  border-radius: 9999px;\r\n  flex-shrink: 0;\r\n  transition: all 0.3s ease;\r\n}\r\n\r\n.antigravity-agent-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-agent-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n.antigravity-agent-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n.agent-label {\r\n  font-weight: 500;\r\n  letter-spacing: -0.01em;\r\n  color: #e4e4e7;\r\n  white-space: nowrap;\r\n}\r\n\r\n.agent-caret {\r\n  font-size: 8px;\r\n  color: #a1a1aa;\r\n  margin-left: 1px;\r\n  transition: transform 0.2s ease;\r\n}\r\n\r\n.antigravity-agent-badge.open .agent-caret {\r\n  transform: rotate(180deg);\r\n}\r\n\r\n/* Responsive compact mode */\r\n.antigravity-agent-badge.compact {\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 7px !important;\r\n  gap: 5px !important;\r\n  border-radius: 9999px !important;\r\n  justify-content: center !important;\r\n}\r\n.antigravity-agent-badge.compact .agent-label,\r\n.antigravity-agent-badge.compact .agent-caret {\r\n  display: none !important;\r\n}\r\n\r\n@media (max-width: 960px) {\r\n  .agent-label,\r\n  .agent-caret {\r\n    display: none !important;\r\n  }\r\n  .antigravity-agent-badge {\r\n    height: 28px !important;\r\n    box-sizing: border-box !important;\r\n    padding: 0 7px !important;\r\n    gap: 5px !important;\r\n    border-radius: 9999px !important;\r\n    justify-content: center !important;\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   OSCILLATING AUTO BADGE (CONTEXT-DRIVEN PLAN / BUILD FLIPPER)\r\n   Transitions automatically only when context changes between PLAN and BUILD\r\n   ========================================================================= */\r\n.antigravity-agent-badge.mode-auto {\r\n  border-color: rgba(168, 85, 247, 0.45);\r\n  box-shadow: 0 0 10px rgba(168, 85, 247, 0.25);\r\n  transition: border-color 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto .agent-badge-dot {\r\n  background: #a855f7 !important;\r\n  box-shadow: 0 0 8px #a855f7 !important;\r\n  transition: background 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build {\r\n  border-color: rgba(245, 158, 11, 0.45);\r\n  box-shadow: 0 0 10px rgba(245, 158, 11, 0.25);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .agent-badge-dot {\r\n  background: #f59e0b !important;\r\n  box-shadow: 0 0 8px #f59e0b !important;\r\n}\r\n\r\n.auto-oscillate-track {\r\n  display: inline-flex;\r\n  flex-direction: column;\r\n  height: 28px;\r\n  line-height: 28px;\r\n  overflow: hidden;\r\n  vertical-align: top;\r\n}\r\n\r\n.auto-oscillate-step {\r\n  height: 28px;\r\n  line-height: 28px;\r\n  display: block;\r\n  font-weight: 600;\r\n  letter-spacing: -0.01em;\r\n  white-space: nowrap;\r\n  transform: translateY(0);\r\n  transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .auto-oscillate-step {\r\n  transform: translateY(-28px);\r\n}\r\n\r\n.auto-oscillate-step.plan {\r\n  color: #c084fc;\r\n}\r\n\r\n.auto-oscillate-step.build {\r\n  color: #fbbf24;\r\n}\r\n\r\n/* =========================================================================\r\n   DROPDOWN PORTAL (FIXED TO VIEWPORT)\r\n   Card Architecture: Harmonized with Mods Manager design language\r\n   ========================================================================= */\r\n.antigravity-agent-dropdown-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  width: 380px !important;\r\n  animation: agentFadeIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n  filter: drop-shadow(0 24px 60px rgba(0, 0, 0, 0.85));\r\n}\r\n\r\n.antigravity-agent-dropdown-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-agent-dropdown-wrapper {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-agent-dropdown {\r\n  width: 380px !important;\r\n  background: #161822 !important;\r\n  background: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 14px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 14px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  pointer-events: auto !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* =========================================================================\r\n   CARD COMPONENT SYSTEM\r\n   ========================================================================= */\r\n.agent-card {\r\n  box-sizing: border-box !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n}\r\n\r\n/* 1. HEADER CARD */\r\n.agent-header-card {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 10px 12px !important;\r\n  margin-bottom: 2px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.agent-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.agent-header-icon {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(122, 162, 247, 0.15) !important;\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.25) !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-title-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.agent-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-main-title {\r\n  font-size: 13.5px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n  margin: 0 !important;\r\n}\r\n\r\n.agent-header-badge {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(122, 162, 247, 0.18) !important;\r\n  color: #7aa2f7 !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\r\n  letter-spacing: 0.3px !important;\r\n}\r\n\r\n.agent-subtitle {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n}\r\n\r\n.agent-close-btn {\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  cursor: pointer !important;\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 6px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  font-size: 12px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.agent-close-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.16) !important;\r\n}\r\n\r\n/* 2. PRIMARY SECTION: CARDS DIRECTAS CON PIN */\r\n.agent-primary-section,\r\n.agent-cards-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-card.primary-hero-card {\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 11px 13px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 12px !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-sizing: border-box !important;\r\n  cursor: pointer !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-card.primary-hero-card:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(122, 162, 247, 0.35) !important;\r\n  transform: translateY(-1px) !important;\r\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;\r\n}\r\n\r\n.agent-card.primary-hero-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 16px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 30%, transparent) !important;\r\n}\r\n\r\n.agent-card-info {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-icon-box {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n.agent-text-wrap {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-title {\r\n  font-size: 13px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.agent-tag {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  letter-spacing: 0.04em !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n/* =========================================================================\r\n   PIN TOGGLE BUTTON COMPONENT\r\n   ========================================================================= */\r\n.agent-pin-btn {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  color: rgba(255, 255, 255, 0.35) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  flex-shrink: 0 !important;\r\n  padding: 0 !important;\r\n}\r\n\r\n.agent-pin-btn:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #ffffff !important;\r\n  transform: scale(1.06) !important;\r\n}\r\n\r\n.agent-pin-btn.active {\r\n  background: rgba(122, 162, 247, 0.2) !important;\r\n  border-color: rgba(122, 162, 247, 0.6) !important;\r\n  color: #7aa2f7 !important;\r\n  box-shadow: 0 0 12px rgba(122, 162, 247, 0.35) !important;\r\n  transform: scale(1.02) !important;\r\n}\r\n\r\n.agent-pin-btn.active svg {\r\n  fill: currentColor !important;\r\n}\r\n\r\n.antigravity-agent-item.selected .agent-pin-btn.active {\r\n  background: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 22%, transparent) !important;\r\n  border-color: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 70%, transparent) !important;\r\n  color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 14px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 45%, transparent) !important;\r\n}\r\n\r\n/* 3. TOGGLE ACORDEÓN CARD */\r\n.agent-toggle-card {\r\n  padding: 0 !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 9px 12px !important;\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 9px !important;\r\n  color: rgba(255, 255, 255, 0.7) !important;\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn:hover {\r\n  background: rgba(255, 255, 255, 0.07) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.catalog-toggle-count {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #a1a1aa !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n/* 4. DRAWER CONTAINER CARD */\r\n.agent-catalog-drawer {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n.agent-catalog-drawer.collapsed {\r\n  display: none !important;\r\n}\r\n\r\n.agent-drawer-card {\r\n  padding: 10px !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  background: rgba(0, 0, 0, 0.35) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n}\r\n\r\n/* LEVEL TABS DENTRO DEL DRAWER */\r\n.agent-level-tabs {\r\n  display: flex !important;\r\n  gap: 4px !important;\r\n  padding: 3px !important;\r\n  background: rgba(0, 0, 0, 0.4) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 7px !important;\r\n}\r\n\r\n.agent-tab-btn {\r\n  flex: 1 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  gap: 6px !important;\r\n  height: 26px !important;\r\n  border: none !important;\r\n  background: transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  border-radius: 5px !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-tab-btn:hover {\r\n  color: #e4e4e7 !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.agent-tab-btn.active {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #ffffff !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.tab-icon {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n/* TAB PANELS */\r\n.agent-tab-content {\r\n  display: none !important;\r\n  max-height: 220px !important;\r\n  overflow-y: auto !important;\r\n  padding-right: 2px !important;\r\n}\r\n\r\n.agent-tab-content.active {\r\n  display: block !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar {\r\n  width: 4px !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar-thumb {\r\n  background: rgba(255, 255, 255, 0.15) !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n/* COMPACT GRID */\r\n.compact-grid {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.compact-agent-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n  padding: 8px 10px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.025) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.compact-agent-card:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  transform: translateY(-0.5px) !important;\r\n}\r\n\r\n.compact-agent-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 10px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 25%, transparent) !important;\r\n}\r\n\r\n.compact-icon-box {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n  border: 1px solid transparent !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.compact-details {\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 1px !important;\r\n}\r\n\r\n.compact-name-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n.compact-name {\r\n  font-size: 11.5px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-sub {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-pin-btn {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n}\r\n\r\n/* 5. FOOTER CARD */\r\n.agent-footer-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  padding: 8px 12px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 8px !important;\r\n}\r\n\r\n.agent-footer-icon {\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-footer-text {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.55) !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n@keyframes agentFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-6px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   EXTERIOR FOCUS / EXPLICATIVO RETICLE TRIGGER\r\n   ========================================================================= */\r\n.antigravity-agent-selector-group {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  width: 28px !important;\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  color: #94a3b8 !important;\r\n  cursor: pointer !important;\r\n  outline: none !important;\r\n  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;\r\n  position: relative !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger:hover {\r\n  background: rgba(255, 255, 255, 0.09) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger.is-focus {\r\n  background: rgba(245, 158, 11, 0.15) !important;\r\n  border-color: rgba(245, 158, 11, 0.4) !important;\r\n  color: #f59e0b !important;\r\n  box-shadow: 0 0 8px rgba(245, 158, 11, 0.25) !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger.is-focus:hover {\r\n  background: rgba(245, 158, 11, 0.22) !important;\r\n  border-color: rgba(245, 158, 11, 0.6) !important;\r\n  box-shadow: 0 0 12px rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.caveman-reticle-box {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.reticle-icon {\r\n  transition: transform 0.2s ease, stroke 0.2s ease !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger:hover .reticle-icon {\r\n  transform: scale(1.08) !important;\r\n}\r\n";
+    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY AGENT SELECTOR MOD - STYLES\r\n   Card Architecture: Every text section enclosed in card components\r\n   ========================================================================= */\r\n\r\n.antigravity-agent-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  height: 28px;\r\n  box-sizing: border-box;\r\n  padding: 0 10px 0 7px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid rgba(255, 255, 255, 0.12);\r\n  border-radius: 9999px;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  font-family: system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\r\n  font-size: 11px;\r\n  line-height: 28px;\r\n  color: #f4f4f5;\r\n  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\r\n  position: relative;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.agent-badge-dot {\r\n  width: 6px;\r\n  height: 6px;\r\n  border-radius: 9999px;\r\n  flex-shrink: 0;\r\n  transition: background 0.25s ease, box-shadow 0.25s ease;\r\n}\r\n\r\n.antigravity-agent-badge:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  border-color: rgba(255, 255, 255, 0.25);\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);\r\n}\r\n\r\n.antigravity-agent-badge:active {\r\n  background: rgba(255, 255, 255, 0.14);\r\n}\r\n\r\n.antigravity-agent-badge.open {\r\n  background: rgba(255, 255, 255, 0.12) !important;\r\n  border-color: rgba(255, 255, 255, 0.3) !important;\r\n}\r\n\r\n.agent-label {\r\n  font-weight: 500;\r\n  letter-spacing: -0.01em;\r\n  color: #e4e4e7;\r\n  white-space: nowrap;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n}\r\n\r\n.agent-caret {\r\n  font-size: 8px;\r\n  color: #a1a1aa;\r\n  margin-left: 1px;\r\n  transition: transform 0.2s ease;\r\n}\r\n\r\n.antigravity-agent-badge.open .agent-caret {\r\n  transform: rotate(180deg);\r\n}\r\n\r\n/* Responsive compact mode */\r\n.antigravity-agent-badge.compact {\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 7px !important;\r\n  gap: 5px !important;\r\n  border-radius: 9999px !important;\r\n  justify-content: center !important;\r\n}\r\n.antigravity-agent-badge.compact .agent-label,\r\n.antigravity-agent-badge.compact .agent-caret {\r\n  display: none !important;\r\n}\r\n\r\n@media (max-width: 960px) {\r\n  .antigravity-agent-badge.compact .agent-label,\r\n  .antigravity-agent-badge.compact .agent-caret {\r\n    display: none !important;\r\n  }\r\n  .antigravity-agent-badge.compact {\r\n    height: 28px !important;\r\n    box-sizing: border-box !important;\r\n    padding: 0 7px !important;\r\n    gap: 5px !important;\r\n    border-radius: 9999px !important;\r\n    justify-content: center !important;\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   OSCILLATING AUTO BADGE (CONTEXT-DRIVEN PLAN / BUILD FLIPPER)\r\n   Transitions automatically only when context changes between PLAN and BUILD\r\n   ========================================================================= */\r\n.antigravity-agent-badge.mode-auto {\r\n  border-color: rgba(168, 85, 247, 0.45);\r\n  box-shadow: 0 0 10px rgba(168, 85, 247, 0.25);\r\n  transition: border-color 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto .agent-badge-dot {\r\n  background: #a855f7 !important;\r\n  box-shadow: 0 0 8px #a855f7 !important;\r\n  transition: background 0.45s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build {\r\n  border-color: rgba(245, 158, 11, 0.45);\r\n  box-shadow: 0 0 10px rgba(245, 158, 11, 0.25);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .agent-badge-dot {\r\n  background: #f59e0b !important;\r\n  box-shadow: 0 0 8px #f59e0b !important;\r\n}\r\n\r\n.auto-oscillate-track {\r\n  display: inline-flex;\r\n  flex-direction: column;\r\n  height: 28px;\r\n  line-height: 28px;\r\n  overflow: hidden;\r\n  vertical-align: top;\r\n}\r\n\r\n.auto-oscillate-step {\r\n  height: 28px;\r\n  line-height: 28px;\r\n  display: block;\r\n  font-weight: 600;\r\n  letter-spacing: -0.01em;\r\n  white-space: nowrap;\r\n  transform: translateY(0);\r\n  transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);\r\n}\r\n\r\n.antigravity-agent-badge.mode-auto.auto-state-build .auto-oscillate-step {\r\n  transform: translateY(-28px);\r\n}\r\n\r\n.auto-oscillate-step.plan {\r\n  color: #c084fc;\r\n}\r\n\r\n.auto-oscillate-step.build {\r\n  color: #fbbf24;\r\n}\r\n\r\n/* =========================================================================\r\n   DROPDOWN PORTAL (FIXED TO VIEWPORT)\r\n   Card Architecture: Harmonized with Mods Manager design language\r\n   ========================================================================= */\r\n.antigravity-agent-dropdown-portal {\r\n  position: fixed !important;\r\n  z-index: 999999 !important;\r\n  display: none;\r\n  width: 380px !important;\r\n  animation: agentFadeIn 0.16s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n  filter: drop-shadow(0 24px 60px rgba(0, 0, 0, 0.85));\r\n}\r\n\r\n.antigravity-agent-dropdown-portal.open {\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-agent-dropdown-wrapper {\r\n  display: none !important;\r\n}\r\n\r\n.antigravity-agent-dropdown {\r\n  width: 380px !important;\r\n  background: #161822 !important;\r\n  background: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 14px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 14px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  pointer-events: auto !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* =========================================================================\r\n   CARD COMPONENT SYSTEM\r\n   ========================================================================= */\r\n.agent-card {\r\n  box-sizing: border-box !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n}\r\n\r\n/* 1. HEADER CARD */\r\n.agent-header-card {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 10px 12px !important;\r\n  margin-bottom: 2px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.agent-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.agent-header-icon {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(122, 162, 247, 0.15) !important;\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.25) !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-title-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.agent-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-main-title {\r\n  font-size: 13.5px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n  margin: 0 !important;\r\n}\r\n\r\n.agent-header-badge {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(122, 162, 247, 0.18) !important;\r\n  color: #7aa2f7 !important;\r\n  border: 1px solid rgba(122, 162, 247, 0.3) !important;\r\n  letter-spacing: 0.3px !important;\r\n}\r\n\r\n.agent-subtitle {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n}\r\n\r\n.agent-close-btn {\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  cursor: pointer !important;\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 6px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  font-size: 12px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.agent-close-btn:hover {\r\n  color: #ffffff !important;\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.16) !important;\r\n}\r\n\r\n/* 2. PRIMARY SECTION: CARDS DIRECTAS CON PIN */\r\n.agent-primary-section,\r\n.agent-cards-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.agent-card.primary-hero-card {\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n  padding: 11px 13px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 12px !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  box-sizing: border-box !important;\r\n  cursor: pointer !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-card.primary-hero-card:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(122, 162, 247, 0.35) !important;\r\n  transform: translateY(-1px) !important;\r\n  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;\r\n}\r\n\r\n.agent-card.primary-hero-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 16px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 30%, transparent) !important;\r\n}\r\n\r\n.agent-card-info {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 10px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-icon-box {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n.agent-text-wrap {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  min-width: 0 !important;\r\n}\r\n\r\n.agent-title {\r\n  font-size: 13px !important;\r\n  font-weight: 600 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.agent-tag {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  letter-spacing: 0.04em !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n/* =========================================================================\r\n   PIN TOGGLE BUTTON COMPONENT\r\n   ========================================================================= */\r\n.agent-pin-btn {\r\n  width: 32px !important;\r\n  height: 32px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  color: rgba(255, 255, 255, 0.35) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;\r\n  flex-shrink: 0 !important;\r\n  padding: 0 !important;\r\n}\r\n\r\n.agent-pin-btn:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #ffffff !important;\r\n  transform: scale(1.06) !important;\r\n}\r\n\r\n.agent-pin-btn.active {\r\n  background: rgba(122, 162, 247, 0.2) !important;\r\n  border-color: rgba(122, 162, 247, 0.6) !important;\r\n  color: #7aa2f7 !important;\r\n  box-shadow: 0 0 12px rgba(122, 162, 247, 0.35) !important;\r\n  transform: scale(1.02) !important;\r\n}\r\n\r\n.agent-pin-btn.active svg {\r\n  fill: currentColor !important;\r\n}\r\n\r\n.antigravity-agent-item.selected .agent-pin-btn.active {\r\n  background: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 22%, transparent) !important;\r\n  border-color: color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 70%, transparent) !important;\r\n  color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 14px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 45%, transparent) !important;\r\n}\r\n\r\n/* 3. TOGGLE ACORDEÓN CARD */\r\n.agent-toggle-card {\r\n  padding: 0 !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 9px 12px !important;\r\n  background: rgba(255, 255, 255, 0.035) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 9px !important;\r\n  color: rgba(255, 255, 255, 0.7) !important;\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.agent-catalog-toggle-btn:hover {\r\n  background: rgba(255, 255, 255, 0.07) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.catalog-toggle-count {\r\n  font-size: 9.5px !important;\r\n  font-weight: 700 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #a1a1aa !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n/* 4. DRAWER CONTAINER CARD */\r\n.agent-catalog-drawer {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n.agent-catalog-drawer.collapsed {\r\n  display: none !important;\r\n}\r\n\r\n.agent-drawer-card {\r\n  padding: 10px !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 8px !important;\r\n  background: rgba(0, 0, 0, 0.35) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  border-radius: 10px !important;\r\n}\r\n\r\n/* LEVEL TABS DENTRO DEL DRAWER */\r\n.agent-level-tabs {\r\n  display: flex !important;\r\n  gap: 4px !important;\r\n  padding: 3px !important;\r\n  background: rgba(0, 0, 0, 0.4) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 7px !important;\r\n}\r\n\r\n.agent-tab-btn {\r\n  flex: 1 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  gap: 6px !important;\r\n  height: 26px !important;\r\n  border: none !important;\r\n  background: transparent !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  border-radius: 5px !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.agent-tab-btn:hover {\r\n  color: #e4e4e7 !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.agent-tab-btn.active {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #ffffff !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.tab-icon {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n/* TAB PANELS */\r\n.agent-tab-content {\r\n  display: none !important;\r\n  max-height: 220px !important;\r\n  overflow-y: auto !important;\r\n  padding-right: 2px !important;\r\n}\r\n\r\n.agent-tab-content.active {\r\n  display: block !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar {\r\n  width: 4px !important;\r\n}\r\n\r\n.agent-tab-content::-webkit-scrollbar-thumb {\r\n  background: rgba(255, 255, 255, 0.15) !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n/* COMPACT GRID */\r\n.compact-grid {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.compact-agent-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n  padding: 8px 10px !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.025) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.15s ease !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.compact-agent-card:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  border-color: rgba(122, 162, 247, 0.3) !important;\r\n  transform: translateY(-0.5px) !important;\r\n}\r\n\r\n.compact-agent-card.selected {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: var(--agent-theme-color, #7aa2f7) !important;\r\n  box-shadow: 0 0 10px color-mix(in srgb, var(--agent-theme-color, #7aa2f7) 25%, transparent) !important;\r\n}\r\n\r\n.compact-icon-box {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n  border: 1px solid transparent !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.compact-details {\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 1px !important;\r\n}\r\n\r\n.compact-name-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n}\r\n\r\n.compact-name {\r\n  font-size: 11.5px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-sub {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.compact-pin-btn {\r\n  width: 26px !important;\r\n  height: 26px !important;\r\n  border-radius: 6px !important;\r\n}\r\n\r\n/* 5. FOOTER CARD */\r\n.agent-footer-card {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  padding: 8px 12px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 8px !important;\r\n}\r\n\r\n.agent-footer-icon {\r\n  color: #7aa2f7 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.agent-footer-text {\r\n  font-size: 11px !important;\r\n  color: rgba(255, 255, 255, 0.55) !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n@keyframes agentFadeIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-6px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* =========================================================================\r\n   EXTERIOR FOCUS / EXPLICATIVO RETICLE TRIGGER\r\n   ========================================================================= */\r\n.antigravity-agent-selector-group {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  min-width: 0 !important;\r\n  max-width: 100% !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  width: 28px !important;\r\n  height: 28px !important;\r\n  box-sizing: border-box !important;\r\n  padding: 0 !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  color: #94a3b8 !important;\r\n  cursor: pointer !important;\r\n  outline: none !important;\r\n  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease !important;\r\n  position: relative !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger:hover {\r\n  background: rgba(255, 255, 255, 0.09) !important;\r\n  border-color: rgba(255, 255, 255, 0.2) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger.is-focus {\r\n  background: rgba(245, 158, 11, 0.15) !important;\r\n  border-color: rgba(245, 158, 11, 0.4) !important;\r\n  color: #f59e0b !important;\r\n  box-shadow: 0 0 8px rgba(245, 158, 11, 0.25) !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger.is-focus:hover {\r\n  background: rgba(245, 158, 11, 0.22) !important;\r\n  border-color: rgba(245, 158, 11, 0.6) !important;\r\n  box-shadow: 0 0 12px rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.caveman-reticle-box {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.reticle-icon {\r\n  transition: transform 0.2s ease, stroke 0.2s ease !important;\r\n}\r\n\r\n.antigravity-caveman-reticle-trigger:hover .reticle-icon {\r\n  transform: scale(1.08) !important;\r\n}\r\n";
   }
 
   /**
@@ -6267,7 +11661,7 @@ class AgentSelectorMod extends AntigravityMod {
           id="antigravity-caveman-reticle-trigger"
           class="antigravity-caveman-reticle-trigger"
           type="button"
-          title="Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus"
+          title="Modo Explicativo: Dispersion estandar (detallado y pedagogico) - Clic para alternar a Focus (Caveman + ADHD)"
           tabindex="0"
         >
           <span id="antigravity-caveman-reticle-box" class="caveman-reticle-box">
@@ -6420,6 +11814,49 @@ function renderModsManagerPanelHtml() {
         </div>
         <label class="mod-switch">
           <input type="checkbox" id="mod-toggle-git-graph" data-mod="git-graph" checked>
+          <span class="mod-slider"></span>
+        </label>
+      </div>
+
+      <!-- Mod Card: Slots Planner & Builder -->
+      <div class="mod-card">
+        <div class="mod-info">
+          <div class="mod-icon-box slots-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+              <line x1="8" y1="21" x2="16" y2="21"></line>
+              <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+          </div>
+          <div class="mod-text">
+            <div class="mod-title">Slots Planner & Builder</div>
+            <div class="mod-desc">Selectores duales en menubar para asignar modelos a roles Plan y Build.</div>
+          </div>
+        </div>
+        <label class="mod-switch">
+          <input type="checkbox" id="mod-toggle-model-slots" data-mod="model-slots" checked>
+          <span class="mod-slider"></span>
+        </label>
+      </div>
+
+      <!-- Mod Card: Pit Wall Analytics -->
+      <div class="mod-card">
+        <div class="mod-info">
+          <div class="mod-icon-box slots-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 3v18h18"></path>
+              <rect x="7" y="10" width="3" height="7" rx="1"></rect>
+              <rect x="12" y="6" width="3" height="11" rx="1"></rect>
+              <rect x="17" y="13" width="3" height="4" rx="1"></rect>
+            </svg>
+          </div>
+          <div class="mod-text">
+            <div class="mod-title">Pit Wall Analytics</div>
+            <div class="mod-desc">Dashboard de rachas, horas trabajadas, consistencia y costos API en el menubar.</div>
+          </div>
+        </div>
+        <label class="mod-switch">
+          <input type="checkbox" id="mod-toggle-pit-wall" data-mod="pit-wall" checked>
           <span class="mod-slider"></span>
         </label>
       </div>
@@ -6658,6 +12095,9 @@ const LANE_COLORS = [
   '#06b6d4'  // Cyan
 ];
 
+const COLOR_GIT_LOCAL = '#f59e0b';     // Amber (Git Local / Unpushed)
+const COLOR_GITHUB_REMOTE = '#38bdf8'; // Sky Blue (GitHub Remote)
+
 /**
  * Returns color associated with a lane index.
  * Self-contained palette so getLaneColor.toString() works cleanly in browser runtime.
@@ -6691,6 +12131,10 @@ function renderGitGraphSvg(commits = [], options = {}) {
   if (!Array.isArray(commits) || commits.length === 0) {
     return '';
   }
+
+  // Self-contained helpers so renderGitGraphSvg.toString() works in ModLoader browser payload
+  const COLOR_GIT_LOCAL = '#f59e0b';
+  const escapeSvgAttr = (str = '') => String(str).replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   const rowHeight = options.rowHeight ?? 26;
   const fileRowHeight = options.fileRowHeight ?? 22;
@@ -6760,12 +12204,30 @@ function renderGitGraphSvg(commits = [], options = {}) {
         const fromY = cy;
         const toX = startX + route.toLane * laneWidth;
         const toY = nextCoord.cy;
-        const routeColor = getLaneColor(typeof route.colorLane === 'number' ? route.colorLane : Math.min(route.fromLane, route.toLane));
+        const isCurrentLocal = commit.pushed === false || commit.syncStatus === 'ahead' || !!commit.isUnpushed;
+        const nextCommit = commits[nextIdx];
+        const isNextLocal = nextCommit ? (nextCommit.pushed === false || nextCommit.syncStatus === 'ahead' || !!nextCommit.isUnpushed) : false;
+
+        const isSyncBridge = isCurrentLocal !== isNextLocal;
+        const isLocalRoute = isCurrentLocal && isNextLocal;
+
+        let strokeColor = getLaneColor(typeof route.colorLane === 'number' ? route.colorLane : Math.min(route.fromLane, route.toLane));
+        let routeCls = 'git-route-remote';
+        let dashAttr = '';
+
+        if (isSyncBridge) {
+          strokeColor = COLOR_GIT_LOCAL;
+          routeCls = 'git-route-sync-bridge';
+          dashAttr = 'stroke-dasharray="3,2"';
+        } else if (isLocalRoute || isCurrentLocal) {
+          strokeColor = (typeof route.colorLane === 'number' && route.colorLane > 0) ? strokeColor : COLOR_GIT_LOCAL;
+          routeCls = 'git-route-local';
+        }
 
         if (route.fromLane === route.toLane) {
           // Straight vertical trunk line
           pathsMarkup += `
-            <line x1="${fromX}" y1="${fromY}" x2="${toX}" y2="${toY}" stroke="${routeColor}" stroke-width="2" stroke-linecap="round"/>
+            <line x1="${fromX}" y1="${fromY}" x2="${toX}" y2="${toY}" stroke="${strokeColor}" stroke-width="2" stroke-linecap="round" class="${routeCls}" ${dashAttr}/>
           `;
         } else {
           // Curved Bezier branch or merge
@@ -6773,7 +12235,7 @@ function renderGitGraphSvg(commits = [], options = {}) {
           const cpY1 = fromY + deltaY * 0.45;
           const cpY2 = toY - deltaY * 0.45;
           pathsMarkup += `
-            <path d="M ${fromX} ${fromY} C ${fromX} ${cpY1}, ${toX} ${cpY2}, ${toX} ${toY}" fill="none" stroke="${routeColor}" stroke-width="2" stroke-linecap="round"/>
+            <path d="M ${fromX} ${fromY} C ${fromX} ${cpY1}, ${toX} ${cpY2}, ${toX} ${toY}" fill="none" stroke="${strokeColor}" stroke-width="2" stroke-linecap="round" class="${routeCls}" ${dashAttr}/>
           `;
         }
       }
@@ -6827,23 +12289,27 @@ function renderGitGraphSvg(commits = [], options = {}) {
 
     // Node Circle
     const isHead = (Array.isArray(commit.refs) && commit.refs.some(r => r.includes('HEAD'))) || i === 0;
-    const isPushed = commit.pushed !== false;
+    const isPushed = commit.pushed !== false && commit.syncStatus !== 'ahead' && !commit.isUnpushed;
+    const nodeColor = !isPushed ? COLOR_GIT_LOCAL : color;
+    const safeHash = escapeSvgAttr(commit.hash);
 
     if (isHead) {
       // Glowing halo ring around current/HEAD commit
+      const haloClass = isPushed ? 'git-node-halo is-remote' : 'git-node-halo is-local';
       nodesMarkup += `
-        <circle cx="${cx}" cy="${cy}" r="6.5" fill="none" stroke="${color}" stroke-width="1.8" class="git-node-halo"/>
-        <circle cx="${cx}" cy="${cy}" r="3" fill="${color}" class="git-node-head" data-hash="${commit.hash}"/>
+        <circle cx="${cx}" cy="${cy}" r="6.5" fill="none" stroke="${nodeColor}" stroke-width="1.8" class="${haloClass}"/>
+        <circle cx="${cx}" cy="${cy}" r="3" fill="${nodeColor}" class="git-node-head" data-hash="${safeHash}"/>
       `;
     } else if (!isPushed) {
-      // Local unpushed commit: concentric target ring
+      // Local unpushed commit: concentric target ring with Git Local identity
       nodesMarkup += `
-        <circle cx="${cx}" cy="${cy}" r="5.5" fill="none" stroke="${color}" stroke-width="1.5" stroke-dasharray="2,2" class="git-node-unpushed-ring"/>
-        <circle cx="${cx}" cy="${cy}" r="3" fill="${color}" stroke="#181a1f" stroke-width="1" class="git-node git-node-unpushed" data-hash="${commit.hash}"/>
+        <circle cx="${cx}" cy="${cy}" r="5.5" fill="none" stroke="${COLOR_GIT_LOCAL}" stroke-width="1.5" stroke-dasharray="2,2" class="git-node-unpushed-ring"/>
+        <circle cx="${cx}" cy="${cy}" r="3" fill="${COLOR_GIT_LOCAL}" stroke="#181a1f" stroke-width="1" class="git-node git-node-local git-node-unpushed" data-hash="${safeHash}"/>
       `;
     } else {
+      // GitHub consolidated remote commit
       nodesMarkup += `
-        <circle cx="${cx}" cy="${cy}" r="3.5" fill="${color}" stroke="#181a1f" stroke-width="1.5" class="git-node" data-hash="${commit.hash}"/>
+        <circle cx="${cx}" cy="${cy}" r="3.5" fill="${color}" stroke="#181a1f" stroke-width="1.5" class="git-node git-node-remote git-node-pushed" data-hash="${safeHash}"/>
       `;
     }
   }
@@ -6999,11 +12465,10 @@ function renderGitGraphPanelHtml(context = {}) {
     const isExpanded = !!c.expanded;
     const files = Array.isArray(c.files) ? c.files : [];
     const hasOrigin = (c.refs || []).some(r => r.includes('origin/'));
-    const commitType = (c.pushed !== undefined)
-      ? (c.pushed === false ? 'local' : 'remote')
-      : (hasOrigin ? 'remote' : 'local');
     const isUnpushed = c.pushed === false || c.syncStatus === 'ahead' || !!c.isUnpushed;
     const isUnpulled = c.syncStatus === 'behind' || !!c.isUnpulled;
+    const commitType = isUnpushed ? 'local' : (hasOrigin ? 'remote' : 'local');
+    const rowTypeCls = isUnpushed ? 'is-local-commit' : 'is-remote-commit';
     let syncPillHtml = '';
     if (isUnpushed) {
       syncPillHtml = `<span class="git-pill-sync git-pill-unpushed" title="Commit local pendiente de push">⇡ Unpushed</span>`;
@@ -7046,9 +12511,13 @@ function renderGitGraphPanelHtml(context = {}) {
       : (github.isGitHub && github.webUrl ? `${github.webUrl}/commit/${c.hash}` : '');
     const author = c.author || { name: 'Unknown', email: '', avatarUrl: '' };
 
+    const overflowNoteHtml = files.length > 10
+      ? `<div class="git-files-overflow-note">+${files.length - 10} más (scroll para ver todos)</div>`
+      : '';
+
     return `
       <div class="git-commit-item ${isExpanded ? 'is-expanded' : ''}" data-hash="${escapeGitHtml(c.hash)}" data-index="${idx}" data-commit-type="${commitType}">
-        <div class="git-commit-row ${isSelected ? 'selected' : ''}"
+        <div class="git-commit-row ${isSelected ? 'selected' : ''} ${rowTypeCls}"
              data-hash="${escapeGitHtml(c.hash)}"
              data-index="${idx}"
              data-short-hash="${escapeGitHtml(c.shortHash || '')}"
@@ -7072,10 +12541,19 @@ function renderGitGraphPanelHtml(context = {}) {
         </div>
         <div class="git-commit-files-container" style="display: ${isExpanded ? 'flex' : 'none'};">
           ${filesListHtml}
+          ${overflowNoteHtml}
         </div>
       </div>
     `;
   }).join('');
+
+  const dirtyList = Array.isArray(status.changedFiles) ? status.changedFiles : [];
+  const uncommittedRowHtml = !status.isClean
+    ? `<div class="git-uncommitted-row" id="antigravity-git-uncommitted-node" title="Cambios sin confirmar en el working tree">
+         <span>● Uncommitted Changes</span>
+         <span>${dirtyList.length > 0 ? `${dirtyList.length} archivo${dirtyList.length === 1 ? '' : 's'}` : 'Working tree dirty'}</span>
+       </div>`
+    : '';
 
   const serializedState = JSON.stringify({
     activeRepo: repoName,
@@ -7152,6 +12630,7 @@ function renderGitGraphPanelHtml(context = {}) {
           ${svgGraph}
         </div>
         <div class="git-commits-column" id="antigravity-git-commits-column">
+          ${uncommittedRowHtml}
           ${commitRowsHtml}
         </div>
       </div>
@@ -7270,7 +12749,7 @@ class GitGraphMod extends AntigravityMod {
     });
 
     this.initialContext = options.initialContext || {};
-    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY GIT & GITHUB GRAPH MOD - VS CODE STYLE\r\n   Ultra-compact, lightweight DAG commit tree & inline file diff visualizer\r\n   ========================================================================= */\r\n\r\n/* Tab Button in Auxiliary Pane Header */\r\n.antigravity-git-tab-wrapper {\r\n  display: inline-flex;\r\n  align-items: center;\r\n}\r\n\r\n.antigravity-git-tab-btn {\r\n  height: 28px !important;\r\n  padding: 0 8px !important;\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #94a3b8 !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.antigravity-git-tab-btn:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  color: #f8fafc !important;\r\n}\r\n\r\n.antigravity-git-tab-btn.active {\r\n  background: #1e2438 !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n/* Full Auxiliary Panel Body */\r\n.antigravity-git-panel {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  background: #181a1f !important;\r\n  color: #e2e8f0 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, monospace, sans-serif !important;\r\n  overflow: hidden !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* VS Code Minimal Header Bar */\r\n.git-panel-header {\r\n  height: 32px !important;\r\n  min-height: 32px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  padding: 0 10px !important;\r\n  background: #1e222b !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.git-panel-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-header-caret {\r\n  font-size: 12px !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n.git-header-title {\r\n  font-size: 12px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-header-repo {\r\n  font-size: 11px !important;\r\n  color: #64748b !important;\r\n  max-width: 140px !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-branch-pill {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-header-actions {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pill-auto {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 3px !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-tool-btn {\r\n  background: transparent !important;\r\n  border: none !important;\r\n  color: #94a3b8 !important;\r\n  font-size: 12px !important;\r\n  cursor: pointer !important;\r\n  padding: 2px 4px !important;\r\n  border-radius: 4px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n}\r\n\r\n.git-tool-btn:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-tool-close:hover {\r\n  background: rgba(239, 68, 68, 0.2) !important;\r\n  color: #ef4444 !important;\r\n}\r\n\r\n/* Status Toast Banner */\r\n.git-vcs-toast {\r\n  padding: 4px 10px !important;\r\n  font-size: 10px !important;\r\n  font-family: monospace !important;\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #7dd3fc !important;\r\n  border-bottom: 1px solid rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-vcs-toast.is-error {\r\n  background: rgba(239, 68, 68, 0.16) !important;\r\n  color: #fca5a5 !important;\r\n  border-bottom-color: rgba(239, 68, 68, 0.35) !important;\r\n}\r\n\r\n/* Graph & Commits Viewport */\r\n.git-graph-container {\r\n  display: flex !important;\r\n  flex: 1 1 0% !important;\r\n  overflow-y: auto !important;\r\n  overflow-x: hidden !important;\r\n  position: relative !important;\r\n  scrollbar-width: thin !important;\r\n  scrollbar-color: rgba(255, 255, 255, 0.15) transparent !important;\r\n}\r\n\r\n.git-graph-container::-webkit-scrollbar {\r\n  width: 6px !important;\r\n}\r\n\r\n.git-graph-container::-webkit-scrollbar-thumb {\r\n  background: rgba(255, 255, 255, 0.15) !important;\r\n  border-radius: 3px !important;\r\n}\r\n\r\n.git-svg-column {\r\n  flex-shrink: 0 !important;\r\n  position: relative !important;\r\n}\r\n\r\n.git-graph-svg {\r\n  display: block !important;\r\n}\r\n\r\n.git-commits-column {\r\n  flex: 1 1 0% !important;\r\n  min-width: 0 !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n/* Individual Commit Item */\r\n.git-commit-item {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  width: 100% !important;\r\n}\r\n\r\n.git-commit-row {\r\n  height: 26px !important;\r\n  min-height: 26px !important;\r\n  box-sizing: border-box !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  padding: 0 8px 0 4px !important;\r\n  cursor: pointer !important;\r\n  border-radius: 0 !important;\r\n  transition: background 0.1s ease !important;\r\n  user-select: none !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-commit-row:hover {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.git-commit-row.selected {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n}\r\n\r\n.git-commit-main {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  min-width: 0 !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-commit-subject {\r\n  font-size: 12px !important;\r\n  color: #e2e8f0 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-commit-badges {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n/* Branch & Ref Badges (VS Code Pill Style) */\r\n.git-pill-branch {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 10px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  white-space: nowrap !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-pill-local {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.git-pill-head {\r\n  background: rgba(56, 189, 248, 0.22) !important;\r\n  color: #7dd3fc !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.5) !important;\r\n  box-shadow: 0 0 6px rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-pill-origin {\r\n  background: rgba(249, 115, 22, 0.15) !important;\r\n  color: #fb923c !important;\r\n  border: 1px solid rgba(249, 115, 22, 0.35) !important;\r\n}\r\n\r\n/* Selective Commit Push Button */\r\n.git-commit-push-btn {\r\n  font-size: 9px !important;\r\n  font-weight: 600 !important;\r\n  font-family: monospace !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(34, 197, 94, 0.14) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(34, 197, 94, 0.35) !important;\r\n  cursor: pointer !important;\r\n  white-space: nowrap !important;\r\n  transition: all 0.12s ease !important;\r\n}\r\n\r\n.git-commit-push-btn:hover {\r\n  background: rgba(34, 197, 94, 0.28) !important;\r\n  color: #dcfce7 !important;\r\n}\r\n\r\n.git-icon-cloud {\r\n  font-size: 10px !important;\r\n}\r\n\r\n.git-icon-dot {\r\n  font-size: 9px !important;\r\n}\r\n\r\n.git-commit-chevron {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n  width: 12px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-commit-chevron.has-files {\r\n  color: #94a3b8 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n/* Expandable Inline File Diff List (strictly 22px * fileCount, 0 vertical padding for 1:1 SVG alignment) */\r\n.git-commit-files-container {\r\n  display: none !important;\r\n  flex-direction: column !important;\r\n  background: rgba(0, 0, 0, 0.3) !important;\r\n  border-left: 2px solid rgba(56, 189, 248, 0.35) !important;\r\n  margin-left: 14px !important;\r\n  padding: 0 !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.git-commit-item.is-expanded > .git-commit-files-container {\r\n  display: flex !important;\r\n}\r\n\r\n.git-file-row {\r\n  height: 22px !important;\r\n  min-height: 22px !important;\r\n  box-sizing: border-box !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  padding: 0 10px 0 8px !important;\r\n  font-size: 11px !important;\r\n  gap: 8px !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-file-row:hover {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.git-file-ext {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 4px !important;\r\n  border-radius: 3px !important;\r\n  font-family: monospace !important;\r\n  letter-spacing: -0.02em !important;\r\n}\r\n\r\n.ext-js {\r\n  background: rgba(234, 179, 8, 0.18) !important;\r\n  color: #facc15 !important;\r\n  border: 1px solid rgba(234, 179, 8, 0.35) !important;\r\n}\r\n\r\n.ext-ts {\r\n  background: rgba(59, 130, 246, 0.18) !important;\r\n  color: #60a5fa !important;\r\n  border: 1px solid rgba(59, 130, 246, 0.35) !important;\r\n}\r\n\r\n.ext-json {\r\n  background: rgba(34, 197, 94, 0.18) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(34, 197, 94, 0.35) !important;\r\n}\r\n\r\n.ext-css {\r\n  background: rgba(6, 182, 212, 0.18) !important;\r\n  color: #22d3ee !important;\r\n  border: 1px solid rgba(6, 182, 212, 0.35) !important;\r\n}\r\n\r\n.ext-md {\r\n  background: rgba(168, 85, 247, 0.18) !important;\r\n  color: #c084fc !important;\r\n  border: 1px solid rgba(168, 85, 247, 0.35) !important;\r\n}\r\n\r\n.ext-html {\r\n  background: rgba(249, 115, 22, 0.18) !important;\r\n  color: #fb923c !important;\r\n  border: 1px solid rgba(249, 115, 22, 0.35) !important;\r\n}\r\n\r\n.ext-default {\r\n  background: rgba(148, 163, 184, 0.18) !important;\r\n  color: #cbd5e1 !important;\r\n  border: 1px solid rgba(148, 163, 184, 0.3) !important;\r\n}\r\n\r\n.git-file-name {\r\n  color: #e2e8f0 !important;\r\n  font-weight: 500 !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-file-dir {\r\n  color: #64748b !important;\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-file-status {\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.status-modified {\r\n  color: #eab308 !important;\r\n}\r\n\r\n.status-added {\r\n  color: #22c55e !important;\r\n}\r\n\r\n.status-deleted {\r\n  color: #ef4444 !important;\r\n}\r\n\r\n\r\n/* =========================================================================\r\n   PULL REQUEST & CI/CD STATUS CARD STYLES\r\n   ========================================================================= */\r\n\r\n.git-pr-card {\r\n  padding: 8px 12px !important;\r\n  background: #13161f !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n  font-size: 11px !important;\r\n}\r\n\r\n.git-pr-none {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  align-items: stretch !important;\r\n  color: #64748b !important;\r\n  background: #11141c !important;\r\n  padding: 6px 12px !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pr-none-main {\r\n  display: flex !important;\r\n  flex-direction: row !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 8px !important;\r\n  width: 100% !important;\r\n}\r\n\r\n.git-pr-none-left {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  min-width: 0 !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-pr-none-text {\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-pr-icon {\r\n  font-size: 13px !important;\r\n  color: #38bdf8 !important;\r\n}\r\n\r\n.git-pr-none-right {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-pr-sync-badge {\r\n  font-size: 10px !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n.git-pr-action-btn {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  font-family: monospace !important;\r\n  padding: 2px 5px !important;\r\n  border-radius: 4px !important;\r\n  cursor: pointer !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n.git-pr-action-btn.btn-push {\r\n  background: rgba(34, 197, 94, 0.16) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.35) !important;\r\n}\r\n\r\n.git-pr-action-btn.btn-pull {\r\n  background: rgba(249, 115, 22, 0.16) !important;\r\n  color: #fb923c !important;\r\n  border-color: rgba(249, 115, 22, 0.35) !important;\r\n}\r\n\r\n.git-pr-create-btn {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\r\n  cursor: pointer !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-pr-create-btn:hover {\r\n  background: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-pr-create-link {\r\n  font-size: 10px !important;\r\n  color: #38bdf8 !important;\r\n  text-decoration: none !important;\r\n  font-weight: 500 !important;\r\n}\r\n\r\n.git-pr-create-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-pr-commits-drawer {\r\n  padding: 6px 8px !important;\r\n  border-radius: 6px !important;\r\n  background: #0d1017 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n}\r\n\r\n.git-pr-commits-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 3px !important;\r\n  max-height: 120px !important;\r\n  overflow-y: auto !important;\r\n  margin-bottom: 6px !important;\r\n}\r\n\r\n.git-pr-commit-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  padding: 2px 4px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n}\r\n\r\n.git-pr-commit-sha {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  color: #93c5fd !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-pr-commit-msg {\r\n  font-size: 10px !important;\r\n  color: #cbd5e1 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-pr-drawer-footer {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 8px !important;\r\n  padding-top: 4px !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n}\r\n\r\n.git-pr-submit-btn {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 3px 8px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.2) !important;\r\n  color: #7dd3fc !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.45) !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-pr-submit-btn:hover {\r\n  background: rgba(56, 189, 248, 0.32) !important;\r\n}\r\n\r\n.git-pr-card-main {\r\n  display: flex !important;\r\n  align-items: flex-start !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.git-pr-header-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 3px !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-pr-badge-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pr-state-badge {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  letter-spacing: 0.5px !important;\r\n}\r\n\r\n.state-open {\r\n  background: rgba(34, 197, 94, 0.2) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(34, 197, 94, 0.4) !important;\r\n}\r\n\r\n.state-merged {\r\n  background: rgba(168, 85, 247, 0.2) !important;\r\n  color: #c084fc !important;\r\n  border: 1px solid rgba(168, 85, 247, 0.4) !important;\r\n}\r\n\r\n.state-closed {\r\n  background: rgba(239, 68, 68, 0.2) !important;\r\n  color: #f87171 !important;\r\n  border: 1px solid rgba(239, 68, 68, 0.4) !important;\r\n}\r\n\r\n.git-pr-num-link {\r\n  font-weight: 700 !important;\r\n  color: #60a5fa !important;\r\n  text-decoration: none !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-pr-num-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-pr-branch-flow {\r\n  color: #94a3b8 !important;\r\n  font-size: 10px !important;\r\n  font-family: monospace !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-pr-title {\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n/* CI/CD Rollup Button */\r\n.git-pr-ci-badge-wrap {\r\n  flex-shrink: 0 !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.git-ci-rollup-btn {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  padding: 3px 8px !important;\r\n  border-radius: 5px !important;\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  cursor: pointer !important;\r\n  border: 1px solid transparent !important;\r\n  transition: all 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.ci-status-success {\r\n  background: rgba(34, 197, 94, 0.15) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.3) !important;\r\n}\r\n\r\n.ci-status-success:hover {\r\n  background: rgba(34, 197, 94, 0.25) !important;\r\n}\r\n\r\n.ci-status-pending {\r\n  background: rgba(234, 179, 8, 0.15) !important;\r\n  color: #facc15 !important;\r\n  border-color: rgba(234, 179, 8, 0.3) !important;\r\n}\r\n\r\n.ci-status-pending:hover {\r\n  background: rgba(234, 179, 8, 0.25) !important;\r\n}\r\n\r\n.ci-status-failure {\r\n  background: rgba(239, 68, 68, 0.15) !important;\r\n  color: #f87171 !important;\r\n  border-color: rgba(239, 68, 68, 0.3) !important;\r\n}\r\n\r\n.ci-status-failure:hover {\r\n  background: rgba(239, 68, 68, 0.25) !important;\r\n}\r\n\r\n.git-ci-caret {\r\n  font-size: 10px !important;\r\n  opacity: 0.7 !important;\r\n}\r\n\r\n/* CI Checks Accordion */\r\n.git-ci-checks-accordion {\r\n  margin-top: 4px !important;\r\n  padding: 6px 8px !important;\r\n  border-radius: 6px !important;\r\n  background: #0d1017 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.05) !important;\r\n}\r\n\r\n.git-ci-checks-header {\r\n  display: flex !important;\r\n  justify-content: space-between !important;\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  color: #94a3b8 !important;\r\n  margin-bottom: 6px !important;\r\n  text-transform: uppercase !important;\r\n  letter-spacing: 0.5px !important;\r\n}\r\n\r\n.git-ci-checks-count {\r\n  font-family: monospace !important;\r\n  color: #4ade80 !important;\r\n}\r\n\r\n.git-ci-checks-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.git-ci-check-item {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  padding: 3px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  font-size: 11px !important;\r\n}\r\n\r\n.git-ci-check-icon {\r\n  font-size: 11px !important;\r\n  width: 14px !important;\r\n  text-align: center !important;\r\n}\r\n\r\n.check-success .git-ci-check-icon {\r\n  color: #22c55e !important;\r\n}\r\n\r\n.check-fail .git-ci-check-icon {\r\n  color: #ef4444 !important;\r\n}\r\n\r\n.check-pending .git-ci-check-icon {\r\n  color: #eab308 !important;\r\n}\r\n\r\n.git-ci-check-info {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-ci-check-name {\r\n  color: #e2e8f0 !important;\r\n  font-weight: 500 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-ci-check-wf {\r\n  color: #64748b !important;\r\n  font-size: 9px !important;\r\n}\r\n\r\n.git-ci-check-link {\r\n  font-size: 10px !important;\r\n  color: #38bdf8 !important;\r\n  text-decoration: none !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-ci-check-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-ci-empty {\r\n  color: #64748b !important;\r\n  font-size: 10px !important;\r\n  padding: 4px !important;\r\n}\r\n\r\n/* Branches Filter Toolbar */\r\n.git-branches-filter-bar {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  padding: 4px 10px !important;\r\n  background: #11141c !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  font-size: 11px !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.git-branches-pills {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.git-filter-pill {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  color: #94a3b8 !important;\r\n  border: 1px solid transparent !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.git-filter-pill:hover {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-filter-pill.active {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.git-branches-drawer-btn {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: transparent !important;\r\n  color: #64748b !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n}\r\n\r\n.git-branches-drawer-btn:hover {\r\n  color: #f1f5f9 !important;\r\n  border-color: rgba(255, 255, 255, 0.15) !important;\r\n}\r\n\r\n/* Branches Drawer Dropdown */\r\n.git-branches-drawer {\r\n  background: #0d1017 !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  max-height: 220px !important;\r\n  overflow-y: auto !important;\r\n  padding: 6px 10px !important;\r\n}\r\n\r\n.git-branches-section-title {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  letter-spacing: 0.5px !important;\r\n  color: #64748b !important;\r\n  margin: 4px 0 2px !important;\r\n}\r\n\r\n.git-branch-cluster-header {\r\n  font-size: 9px !important;\r\n  font-weight: 600 !important;\r\n  color: #94a3b8 !important;\r\n  padding: 4px 4px 1px !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.04) !important;\r\n  margin-top: 2px !important;\r\n}\r\n\r\n.git-branches-list-wrap {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  margin-bottom: 6px !important;\r\n}\r\n\r\n.git-branch-drawer-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  padding: 3px 6px !important;\r\n  border-radius: 4px !important;\r\n  font-size: 11px !important;\r\n  color: #cbd5e1 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-branch-drawer-row:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n}\r\n\r\n.git-branch-drawer-row.is-active-branch {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #38bdf8 !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.git-branch-drawer-name {\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-branch-sync-badges {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-branch-sync-badge {\r\n  font-family: monospace !important;\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 4px !important;\r\n  border-radius: 3px !important;\r\n  border: 1px solid transparent !important;\r\n  line-height: 1.2 !important;\r\n}\r\n\r\n.git-branch-sync-badge.badge-ahead {\r\n  background: rgba(34, 197, 94, 0.15) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.35) !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-branch-sync-badge.badge-behind {\r\n  background: rgba(249, 115, 22, 0.15) !important;\r\n  color: #fb923c !important;\r\n  border-color: rgba(249, 115, 22, 0.35) !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-branch-sync-badge.badge-dirty {\r\n  background: rgba(234, 179, 8, 0.15) !important;\r\n  color: #facc15 !important;\r\n  border-color: rgba(234, 179, 8, 0.35) !important;\r\n}\r\n\r\n.git-branch-sync-badge.badge-merged {\r\n  background: rgba(168, 85, 247, 0.15) !important;\r\n  color: #c084fc !important;\r\n  border-color: rgba(168, 85, 247, 0.3) !important;\r\n}\r\n\r\n.git-branch-drawer-hash {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n}\r\n\r\n.git-branch-current-badge {\r\n  font-size: 8px !important;\r\n  font-weight: 700 !important;\r\n  padding: 0 4px !important;\r\n  border-radius: 3px !important;\r\n  background: #38bdf8 !important;\r\n  color: #0f172a !important;\r\n}\r\n\r\n.git-branch-empty {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n  padding: 2px 4px !important;\r\n}\r\n\r\n/* Redesigned High-Quality Commit Inspector */\r\n.git-inspector-mount {\r\n  position: sticky !important;\r\n  bottom: 0 !important;\r\n  z-index: 40 !important;\r\n  background: #11141c !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4) !important;\r\n  padding: 8px 12px !important;\r\n}\r\n\r\n.git-inspector-card {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-inspector-top {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.git-inspector-author-group {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-avatar-frame {\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 50% !important;\r\n  overflow: hidden !important;\r\n  flex-shrink: 0 !important;\r\n  position: relative !important;\r\n}\r\n\r\n.git-inspector-avatar {\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  object-fit: cover !important;\r\n  border-radius: 50% !important;\r\n}\r\n\r\n.git-inspector-avatar-fallback {\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  border-radius: 50% !important;\r\n  background: linear-gradient(135deg, #0284c7, #6366f1) !important;\r\n  color: #ffffff !important;\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  text-transform: uppercase !important;\r\n}\r\n\r\n.git-inspector-author-text {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  min-width: 0 !important;\r\n  line-height: 1.2 !important;\r\n}\r\n\r\n.git-inspector-name-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-inspector-author-name {\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-inspector-date {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n}\r\n\r\n.git-inspector-author-email {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n  font-family: monospace !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-inspector-meta-group {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-inspector-hash-pill {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #93c5fd !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n}\r\n\r\n.git-inspector-btn-gh {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n  text-decoration: none !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.git-inspector-btn-gh:hover {\r\n  background: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-inspector-btn-close {\r\n  font-size: 12px !important;\r\n  padding: 2px 5px !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n  color: #64748b !important;\r\n  cursor: pointer !important;\r\n  border-radius: 4px !important;\r\n  line-height: 1 !important;\r\n}\r\n\r\n.git-inspector-btn-close:hover {\r\n  color: #f1f5f9 !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-inspector-subject-line {\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  color: #e2e8f0 !important;\r\n  padding: 4px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(0, 0, 0, 0.25) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.04) !important;\r\n  line-height: 1.35 !important;\r\n  word-break: break-word !important;\r\n}\r\n\r\n.git-inspector-footer-stats {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-inspector-files-badge {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n/* --- Sync & Ahead/Behind Indicators --- */\r\n.git-sync-badge {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 10px !important;\r\n  background: rgba(234, 179, 8, 0.15) !important;\r\n  color: #eab308 !important;\r\n  border: 1px solid rgba(234, 179, 8, 0.35) !important;\r\n  margin-left: 4px !important;\r\n  line-height: 1.2 !important;\r\n}\r\n\r\n.git-sync-badge.is-behind {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.git-sync-badge.is-synced {\r\n  background: rgba(34, 197, 94, 0.12) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.3) !important;\r\n}\r\n\r\n.git-pill-sync {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  letter-spacing: 0.3px !important;\r\n  margin-left: 4px !important;\r\n}\r\n\r\n.git-pill-unpushed {\r\n  background: rgba(245, 158, 11, 0.2) !important;\r\n  color: #fbbf24 !important;\r\n  border: 1px solid rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.git-pill-unpulled {\r\n  background: rgba(14, 165, 233, 0.2) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(14, 165, 233, 0.4) !important;\r\n}\r\n\r\n.git-inspector-sync-badge {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n.git-inspector-sync-badge.is-unpushed {\r\n  background: rgba(245, 158, 11, 0.2) !important;\r\n  color: #fbbf24 !important;\r\n  border: 1px solid rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.git-inspector-sync-badge.is-unpulled {\r\n  background: rgba(14, 165, 233, 0.2) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(14, 165, 233, 0.4) !important;\r\n}\r\n";
+    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY GIT & GITHUB GRAPH MOD - VS CODE STYLE\r\n   Ultra-compact, lightweight DAG commit tree & inline file diff visualizer\r\n   ========================================================================= */\r\n\r\n/* Tab Button in Auxiliary Pane Header */\r\n.antigravity-git-tab-wrapper {\r\n  display: inline-flex;\r\n  align-items: center;\r\n}\r\n\r\n.antigravity-git-tab-btn {\r\n  height: 28px !important;\r\n  padding: 0 8px !important;\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #94a3b8 !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.antigravity-git-tab-btn:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  color: #f8fafc !important;\r\n}\r\n\r\n.antigravity-git-tab-btn.active {\r\n  background: #1e2438 !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n#antigravity-git-panel-host[data-open=\"false\"] {\r\n  display: none !important;\r\n}\r\n\r\n/* Full Auxiliary Panel Body */\r\n.antigravity-git-panel {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  background: #181a1f !important;\r\n  color: #e2e8f0 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, monospace, sans-serif !important;\r\n  overflow: hidden !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n/* VS Code Minimal Header Bar */\r\n.git-panel-header {\r\n  height: 32px !important;\r\n  min-height: 32px !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  padding: 0 10px !important;\r\n  background: #1e222b !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.git-panel-title-wrap {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-header-caret {\r\n  font-size: 12px !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n.git-header-title {\r\n  font-size: 12px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-header-repo {\r\n  font-size: 11px !important;\r\n  color: #64748b !important;\r\n  max-width: 140px !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-branch-pill {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n  font-family: monospace !important;\r\n  max-width: 110px !important;\r\n  min-width: 0 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-header-actions {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-pill-auto {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 3px !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-tool-btn {\r\n  background: transparent !important;\r\n  border: none !important;\r\n  color: #94a3b8 !important;\r\n  font-size: 12px !important;\r\n  cursor: pointer !important;\r\n  min-width: 24px !important;\r\n  min-height: 24px !important;\r\n  padding: 2px 5px !important;\r\n  border-radius: 4px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-tool-btn:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-tool-close:hover {\r\n  background: rgba(239, 68, 68, 0.2) !important;\r\n  color: #ef4444 !important;\r\n}\r\n\r\n@media (max-width: 320px) {\r\n  .git-header-repo,\r\n  .git-pill-auto {\r\n    display: none !important;\r\n  }\r\n  .git-branch-pill {\r\n    max-width: 82px !important;\r\n  }\r\n}\r\n\r\n.git-commit-files-container {\r\n  max-height: 240px !important;\r\n  overflow-y: auto !important;\r\n}\r\n\r\n.git-files-overflow-note {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n  padding: 4px 8px !important;\r\n  background: rgba(255, 255, 255, 0.03) !important;\r\n  border-top: 1px dashed rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-uncommitted-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 6px !important;\r\n  padding: 4px 8px !important;\r\n  margin-bottom: 4px !important;\r\n  border-radius: 5px !important;\r\n  background: rgba(245, 158, 11, 0.09) !important;\r\n  border: 1px dashed rgba(245, 158, 11, 0.4) !important;\r\n  font-size: 11px !important;\r\n  color: #fbbf24 !important;\r\n}\r\n\r\n/* Status Toast Banner */\r\n.git-vcs-toast {\r\n  padding: 4px 10px !important;\r\n  font-size: 10px !important;\r\n  font-family: monospace !important;\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #7dd3fc !important;\r\n  border-bottom: 1px solid rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-vcs-toast.is-error {\r\n  background: rgba(239, 68, 68, 0.16) !important;\r\n  color: #fca5a5 !important;\r\n  border-bottom-color: rgba(239, 68, 68, 0.35) !important;\r\n}\r\n\r\n/* Graph & Commits Viewport */\r\n.git-graph-container {\r\n  display: flex !important;\r\n  flex: 1 1 0% !important;\r\n  overflow-y: auto !important;\r\n  overflow-x: hidden !important;\r\n  position: relative !important;\r\n  scrollbar-width: thin !important;\r\n  scrollbar-color: rgba(255, 255, 255, 0.15) transparent !important;\r\n}\r\n\r\n.git-graph-container::-webkit-scrollbar {\r\n  width: 6px !important;\r\n}\r\n\r\n.git-graph-container::-webkit-scrollbar-thumb {\r\n  background: rgba(255, 255, 255, 0.15) !important;\r\n  border-radius: 3px !important;\r\n}\r\n\r\n.git-svg-column {\r\n  flex-shrink: 0 !important;\r\n  position: relative !important;\r\n}\r\n\r\n.git-graph-svg {\r\n  display: block !important;\r\n}\r\n\r\n.git-commits-column {\r\n  flex: 1 1 0% !important;\r\n  min-width: 0 !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n}\r\n\r\n/* Individual Commit Item */\r\n.git-commit-item {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  width: 100% !important;\r\n}\r\n\r\n.git-commit-row {\r\n  height: 26px !important;\r\n  min-height: 26px !important;\r\n  box-sizing: border-box !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  padding: 0 8px 0 4px !important;\r\n  cursor: pointer !important;\r\n  border-radius: 0 !important;\r\n  transition: background 0.1s ease !important;\r\n  user-select: none !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-commit-row:hover {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.git-commit-row.selected {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n}\r\n\r\n.git-commit-main {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  min-width: 0 !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-commit-subject {\r\n  font-size: 12px !important;\r\n  color: #e2e8f0 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-commit-badges {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n/* Branch & Ref Badges (VS Code Pill Style) */\r\n.git-pill-branch {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 10px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  white-space: nowrap !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-pill-local {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.git-pill-head {\r\n  background: rgba(56, 189, 248, 0.22) !important;\r\n  color: #7dd3fc !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.5) !important;\r\n  box-shadow: 0 0 6px rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-pill-origin {\r\n  background: rgba(249, 115, 22, 0.15) !important;\r\n  color: #fb923c !important;\r\n  border: 1px solid rgba(249, 115, 22, 0.35) !important;\r\n}\r\n\r\n/* Selective Commit Push Button */\r\n.git-commit-push-btn {\r\n  font-size: 9px !important;\r\n  font-weight: 600 !important;\r\n  font-family: monospace !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(34, 197, 94, 0.14) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(34, 197, 94, 0.35) !important;\r\n  cursor: pointer !important;\r\n  white-space: nowrap !important;\r\n  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease !important;\r\n}\r\n\r\n.git-commit-push-btn:hover {\r\n  background: rgba(34, 197, 94, 0.28) !important;\r\n  color: #dcfce7 !important;\r\n}\r\n\r\n.git-icon-cloud {\r\n  font-size: 10px !important;\r\n}\r\n\r\n.git-icon-dot {\r\n  font-size: 9px !important;\r\n}\r\n\r\n.git-commit-chevron {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n  width: 12px !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-commit-chevron.has-files {\r\n  color: #94a3b8 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n/* Expandable Inline File Diff List (strictly 22px * fileCount, 0 vertical padding for 1:1 SVG alignment) */\r\n.git-commit-files-container {\r\n  display: none !important;\r\n  flex-direction: column !important;\r\n  background: rgba(0, 0, 0, 0.3) !important;\r\n  border-left: 2px solid rgba(56, 189, 248, 0.35) !important;\r\n  margin-left: 14px !important;\r\n  padding: 0 !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.git-commit-item.is-expanded > .git-commit-files-container {\r\n  display: flex !important;\r\n}\r\n\r\n.git-file-row {\r\n  height: 22px !important;\r\n  min-height: 22px !important;\r\n  box-sizing: border-box !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  padding: 0 10px 0 8px !important;\r\n  font-size: 11px !important;\r\n  gap: 8px !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-file-row:hover {\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n}\r\n\r\n.git-file-ext {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 4px !important;\r\n  border-radius: 3px !important;\r\n  font-family: monospace !important;\r\n  letter-spacing: -0.02em !important;\r\n}\r\n\r\n.ext-js {\r\n  background: rgba(234, 179, 8, 0.18) !important;\r\n  color: #facc15 !important;\r\n  border: 1px solid rgba(234, 179, 8, 0.35) !important;\r\n}\r\n\r\n.ext-ts {\r\n  background: rgba(59, 130, 246, 0.18) !important;\r\n  color: #60a5fa !important;\r\n  border: 1px solid rgba(59, 130, 246, 0.35) !important;\r\n}\r\n\r\n.ext-json {\r\n  background: rgba(34, 197, 94, 0.18) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(34, 197, 94, 0.35) !important;\r\n}\r\n\r\n.ext-css {\r\n  background: rgba(6, 182, 212, 0.18) !important;\r\n  color: #22d3ee !important;\r\n  border: 1px solid rgba(6, 182, 212, 0.35) !important;\r\n}\r\n\r\n.ext-md {\r\n  background: rgba(168, 85, 247, 0.18) !important;\r\n  color: #c084fc !important;\r\n  border: 1px solid rgba(168, 85, 247, 0.35) !important;\r\n}\r\n\r\n.ext-html {\r\n  background: rgba(249, 115, 22, 0.18) !important;\r\n  color: #fb923c !important;\r\n  border: 1px solid rgba(249, 115, 22, 0.35) !important;\r\n}\r\n\r\n.ext-default {\r\n  background: rgba(148, 163, 184, 0.18) !important;\r\n  color: #cbd5e1 !important;\r\n  border: 1px solid rgba(148, 163, 184, 0.3) !important;\r\n}\r\n\r\n.git-file-name {\r\n  color: #e2e8f0 !important;\r\n  font-weight: 500 !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-file-dir {\r\n  color: #64748b !important;\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-file-status {\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.status-modified {\r\n  color: #eab308 !important;\r\n}\r\n\r\n.status-added {\r\n  color: #22c55e !important;\r\n}\r\n\r\n.status-deleted {\r\n  color: #ef4444 !important;\r\n}\r\n\r\n\r\n/* =========================================================================\r\n   PULL REQUEST & CI/CD STATUS CARD STYLES\r\n   ========================================================================= */\r\n\r\n.git-pr-card {\r\n  padding: 8px 12px !important;\r\n  background: #13161f !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n  font-size: 11px !important;\r\n}\r\n\r\n.git-pr-none {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  align-items: stretch !important;\r\n  color: #64748b !important;\r\n  background: #11141c !important;\r\n  padding: 6px 12px !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pr-none-main {\r\n  display: flex !important;\r\n  flex-direction: row !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 8px !important;\r\n  width: 100% !important;\r\n}\r\n\r\n.git-pr-none-left {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  min-width: 0 !important;\r\n  overflow: hidden !important;\r\n}\r\n\r\n.git-pr-none-text {\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-pr-icon {\r\n  font-size: 13px !important;\r\n  color: #38bdf8 !important;\r\n}\r\n\r\n.git-pr-none-right {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-pr-sync-badge {\r\n  font-size: 10px !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n.git-pr-action-btn {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  font-family: monospace !important;\r\n  padding: 2px 5px !important;\r\n  border-radius: 4px !important;\r\n  cursor: pointer !important;\r\n  border: 1px solid transparent !important;\r\n}\r\n\r\n.git-pr-action-btn.btn-push {\r\n  background: rgba(34, 197, 94, 0.16) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.35) !important;\r\n}\r\n\r\n.git-pr-action-btn.btn-pull {\r\n  background: rgba(249, 115, 22, 0.16) !important;\r\n  color: #fb923c !important;\r\n  border-color: rgba(249, 115, 22, 0.35) !important;\r\n}\r\n\r\n.git-pr-create-btn {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\r\n  cursor: pointer !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-pr-create-btn:hover {\r\n  background: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-pr-create-link {\r\n  font-size: 10px !important;\r\n  color: #38bdf8 !important;\r\n  text-decoration: none !important;\r\n  font-weight: 500 !important;\r\n}\r\n\r\n.git-pr-create-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-pr-commits-drawer {\r\n  padding: 6px 8px !important;\r\n  border-radius: 6px !important;\r\n  background: #0d1017 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n}\r\n\r\n.git-pr-commits-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 3px !important;\r\n  max-height: 120px !important;\r\n  overflow-y: auto !important;\r\n  margin-bottom: 6px !important;\r\n}\r\n\r\n.git-pr-commit-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  padding: 2px 4px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n}\r\n\r\n.git-pr-commit-sha {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  color: #93c5fd !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-pr-commit-msg {\r\n  font-size: 10px !important;\r\n  color: #cbd5e1 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-pr-drawer-footer {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 8px !important;\r\n  padding-top: 4px !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n}\r\n\r\n.git-pr-submit-btn {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 3px 8px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.2) !important;\r\n  color: #7dd3fc !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.45) !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-pr-submit-btn:hover {\r\n  background: rgba(56, 189, 248, 0.32) !important;\r\n}\r\n\r\n.git-pr-card-main {\r\n  display: flex !important;\r\n  align-items: flex-start !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.git-pr-header-col {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 3px !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-pr-badge-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-pr-state-badge {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  letter-spacing: 0.5px !important;\r\n}\r\n\r\n.state-open {\r\n  background: rgba(34, 197, 94, 0.2) !important;\r\n  color: #4ade80 !important;\r\n  border: 1px solid rgba(34, 197, 94, 0.4) !important;\r\n}\r\n\r\n.state-merged {\r\n  background: rgba(168, 85, 247, 0.2) !important;\r\n  color: #c084fc !important;\r\n  border: 1px solid rgba(168, 85, 247, 0.4) !important;\r\n}\r\n\r\n.state-closed {\r\n  background: rgba(239, 68, 68, 0.2) !important;\r\n  color: #f87171 !important;\r\n  border: 1px solid rgba(239, 68, 68, 0.4) !important;\r\n}\r\n\r\n.git-pr-num-link {\r\n  font-weight: 700 !important;\r\n  color: #60a5fa !important;\r\n  text-decoration: none !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-pr-num-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-pr-branch-flow {\r\n  color: #94a3b8 !important;\r\n  font-size: 10px !important;\r\n  font-family: monospace !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-pr-title {\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n/* CI/CD Rollup Button */\r\n.git-pr-ci-badge-wrap {\r\n  flex-shrink: 0 !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.git-ci-rollup-btn {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  padding: 3px 8px !important;\r\n  border-radius: 5px !important;\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  cursor: pointer !important;\r\n  border: 1px solid transparent !important;\r\n  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.ci-status-success {\r\n  background: rgba(34, 197, 94, 0.15) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.3) !important;\r\n}\r\n\r\n.ci-status-success:hover {\r\n  background: rgba(34, 197, 94, 0.25) !important;\r\n}\r\n\r\n.ci-status-pending {\r\n  background: rgba(234, 179, 8, 0.15) !important;\r\n  color: #facc15 !important;\r\n  border-color: rgba(234, 179, 8, 0.3) !important;\r\n}\r\n\r\n.ci-status-pending:hover {\r\n  background: rgba(234, 179, 8, 0.25) !important;\r\n}\r\n\r\n.ci-status-failure {\r\n  background: rgba(239, 68, 68, 0.15) !important;\r\n  color: #f87171 !important;\r\n  border-color: rgba(239, 68, 68, 0.3) !important;\r\n}\r\n\r\n.ci-status-failure:hover {\r\n  background: rgba(239, 68, 68, 0.25) !important;\r\n}\r\n\r\n.git-ci-caret {\r\n  font-size: 10px !important;\r\n  opacity: 0.7 !important;\r\n}\r\n\r\n/* CI Checks Accordion */\r\n.git-ci-checks-accordion {\r\n  margin-top: 4px !important;\r\n  padding: 6px 8px !important;\r\n  border-radius: 6px !important;\r\n  background: #0d1017 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.05) !important;\r\n}\r\n\r\n.git-ci-checks-header {\r\n  display: flex !important;\r\n  justify-content: space-between !important;\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  color: #94a3b8 !important;\r\n  margin-bottom: 6px !important;\r\n  text-transform: uppercase !important;\r\n  letter-spacing: 0.5px !important;\r\n}\r\n\r\n.git-ci-checks-count {\r\n  font-family: monospace !important;\r\n  color: #4ade80 !important;\r\n}\r\n\r\n.git-ci-checks-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.git-ci-check-item {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  padding: 3px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  font-size: 11px !important;\r\n}\r\n\r\n.git-ci-check-icon {\r\n  font-size: 11px !important;\r\n  width: 14px !important;\r\n  text-align: center !important;\r\n}\r\n\r\n.check-success .git-ci-check-icon {\r\n  color: #22c55e !important;\r\n}\r\n\r\n.check-fail .git-ci-check-icon {\r\n  color: #ef4444 !important;\r\n}\r\n\r\n.check-pending .git-ci-check-icon {\r\n  color: #eab308 !important;\r\n}\r\n\r\n.git-ci-check-info {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-ci-check-name {\r\n  color: #e2e8f0 !important;\r\n  font-weight: 500 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-ci-check-wf {\r\n  color: #64748b !important;\r\n  font-size: 9px !important;\r\n}\r\n\r\n.git-ci-check-link {\r\n  font-size: 10px !important;\r\n  color: #38bdf8 !important;\r\n  text-decoration: none !important;\r\n  font-family: monospace !important;\r\n}\r\n\r\n.git-ci-check-link:hover {\r\n  text-decoration: underline !important;\r\n}\r\n\r\n.git-ci-empty {\r\n  color: #64748b !important;\r\n  font-size: 10px !important;\r\n  padding: 4px !important;\r\n}\r\n\r\n/* Branches Filter Toolbar */\r\n.git-branches-filter-bar {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  padding: 4px 10px !important;\r\n  background: #11141c !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  font-size: 11px !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.git-branches-pills {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n.git-filter-pill {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  color: #94a3b8 !important;\r\n  border: 1px solid transparent !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;\r\n}\r\n\r\n.git-filter-pill:hover {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #f1f5f9 !important;\r\n}\r\n\r\n.git-filter-pill.active {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.git-branches-drawer-btn {\r\n  font-size: 10px !important;\r\n  font-weight: 500 !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: transparent !important;\r\n  color: #64748b !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n}\r\n\r\n.git-branches-drawer-btn:hover {\r\n  color: #f1f5f9 !important;\r\n  border-color: rgba(255, 255, 255, 0.15) !important;\r\n}\r\n\r\n/* Branches Drawer Dropdown */\r\n.git-branches-drawer {\r\n  background: #0d1017 !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  max-height: 220px !important;\r\n  overflow-y: auto !important;\r\n  padding: 6px 10px !important;\r\n}\r\n\r\n.git-branches-section-title {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  text-transform: uppercase !important;\r\n  letter-spacing: 0.5px !important;\r\n  color: #64748b !important;\r\n  margin: 4px 0 2px !important;\r\n}\r\n\r\n.git-branch-cluster-header {\r\n  font-size: 9px !important;\r\n  font-weight: 600 !important;\r\n  color: #94a3b8 !important;\r\n  padding: 4px 4px 1px !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.04) !important;\r\n  margin-top: 2px !important;\r\n}\r\n\r\n.git-branches-list-wrap {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n  margin-bottom: 6px !important;\r\n}\r\n\r\n.git-branch-drawer-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  padding: 3px 6px !important;\r\n  border-radius: 4px !important;\r\n  font-size: 11px !important;\r\n  color: #cbd5e1 !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-branch-drawer-row:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n}\r\n\r\n.git-branch-drawer-row.is-active-branch {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #38bdf8 !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.git-branch-drawer-name {\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-branch-sync-badges {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-branch-sync-badge {\r\n  font-family: monospace !important;\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 4px !important;\r\n  border-radius: 3px !important;\r\n  border: 1px solid transparent !important;\r\n  line-height: 1.2 !important;\r\n}\r\n\r\n.git-branch-sync-badge.badge-ahead {\r\n  background: rgba(34, 197, 94, 0.15) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.35) !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-branch-sync-badge.badge-behind {\r\n  background: rgba(249, 115, 22, 0.15) !important;\r\n  color: #fb923c !important;\r\n  border-color: rgba(249, 115, 22, 0.35) !important;\r\n  cursor: pointer !important;\r\n}\r\n\r\n.git-branch-sync-badge.badge-dirty {\r\n  background: rgba(234, 179, 8, 0.15) !important;\r\n  color: #facc15 !important;\r\n  border-color: rgba(234, 179, 8, 0.35) !important;\r\n}\r\n\r\n.git-branch-sync-badge.badge-merged {\r\n  background: rgba(168, 85, 247, 0.15) !important;\r\n  color: #c084fc !important;\r\n  border-color: rgba(168, 85, 247, 0.3) !important;\r\n}\r\n\r\n.git-branch-drawer-hash {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n}\r\n\r\n.git-branch-current-badge {\r\n  font-size: 8px !important;\r\n  font-weight: 700 !important;\r\n  padding: 0 4px !important;\r\n  border-radius: 3px !important;\r\n  background: #38bdf8 !important;\r\n  color: #0f172a !important;\r\n}\r\n\r\n.git-branch-empty {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n  padding: 2px 4px !important;\r\n}\r\n\r\n/* Redesigned High-Quality Commit Inspector */\r\n.git-inspector-mount {\r\n  position: sticky !important;\r\n  bottom: 0 !important;\r\n  z-index: 40 !important;\r\n  background: #11141c !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4) !important;\r\n  padding: 8px 12px !important;\r\n}\r\n\r\n.git-inspector-card {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-inspector-top {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 10px !important;\r\n}\r\n\r\n.git-inspector-author-group {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  min-width: 0 !important;\r\n  flex: 1 1 0% !important;\r\n}\r\n\r\n.git-avatar-frame {\r\n  width: 24px !important;\r\n  height: 24px !important;\r\n  border-radius: 50% !important;\r\n  overflow: hidden !important;\r\n  flex-shrink: 0 !important;\r\n  position: relative !important;\r\n}\r\n\r\n.git-inspector-avatar {\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  object-fit: cover !important;\r\n  border-radius: 50% !important;\r\n}\r\n\r\n.git-inspector-avatar-fallback {\r\n  width: 100% !important;\r\n  height: 100% !important;\r\n  border-radius: 50% !important;\r\n  background: linear-gradient(135deg, #0284c7, #6366f1) !important;\r\n  color: #ffffff !important;\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  text-transform: uppercase !important;\r\n}\r\n\r\n.git-inspector-author-text {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  min-width: 0 !important;\r\n  line-height: 1.2 !important;\r\n}\r\n\r\n.git-inspector-name-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n}\r\n\r\n.git-inspector-author-name {\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  color: #f1f5f9 !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-inspector-date {\r\n  font-size: 10px !important;\r\n  color: #64748b !important;\r\n}\r\n\r\n.git-inspector-author-email {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n  font-family: monospace !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.git-inspector-meta-group {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.git-inspector-hash-pill {\r\n  font-family: monospace !important;\r\n  font-size: 10px !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: #93c5fd !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n}\r\n\r\n.git-inspector-btn-gh {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n  text-decoration: none !important;\r\n  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;\r\n}\r\n\r\n.git-inspector-btn-gh:hover {\r\n  background: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.git-inspector-btn-close {\r\n  font-size: 12px !important;\r\n  padding: 2px 5px !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n  color: #64748b !important;\r\n  cursor: pointer !important;\r\n  border-radius: 4px !important;\r\n  line-height: 1 !important;\r\n}\r\n\r\n.git-inspector-btn-close:hover {\r\n  color: #f1f5f9 !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n}\r\n\r\n.git-inspector-subject-line {\r\n  font-size: 11px !important;\r\n  font-weight: 500 !important;\r\n  color: #e2e8f0 !important;\r\n  padding: 4px 6px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(0, 0, 0, 0.25) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.04) !important;\r\n  line-height: 1.35 !important;\r\n  word-break: break-word !important;\r\n}\r\n\r\n.git-inspector-footer-stats {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n}\r\n\r\n.git-inspector-files-badge {\r\n  font-size: 10px !important;\r\n  color: #94a3b8 !important;\r\n}\r\n\r\n/* --- Sync & Ahead/Behind Indicators --- */\r\n.git-sync-badge {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 3px !important;\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 10px !important;\r\n  background: rgba(234, 179, 8, 0.15) !important;\r\n  color: #eab308 !important;\r\n  border: 1px solid rgba(234, 179, 8, 0.35) !important;\r\n  margin-left: 4px !important;\r\n  line-height: 1.2 !important;\r\n}\r\n\r\n.git-sync-badge.is-behind {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.git-sync-badge.is-synced {\r\n  background: rgba(34, 197, 94, 0.12) !important;\r\n  color: #4ade80 !important;\r\n  border-color: rgba(34, 197, 94, 0.3) !important;\r\n}\r\n\r\n.git-pill-sync {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  letter-spacing: 0.3px !important;\r\n  margin-left: 4px !important;\r\n}\r\n\r\n.git-pill-unpushed {\r\n  background: rgba(245, 158, 11, 0.2) !important;\r\n  color: #fbbf24 !important;\r\n  border: 1px solid rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.git-pill-unpulled {\r\n  background: rgba(14, 165, 233, 0.2) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(14, 165, 233, 0.4) !important;\r\n}\r\n\r\n.git-inspector-sync-badge {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  font-size: 10px !important;\r\n  font-weight: 700 !important;\r\n  padding: 2px 7px !important;\r\n  border-radius: 4px !important;\r\n}\r\n\r\n.git-inspector-sync-badge.is-unpushed {\r\n  background: rgba(245, 158, 11, 0.2) !important;\r\n  color: #fbbf24 !important;\r\n  border: 1px solid rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.git-inspector-sync-badge.is-unpulled {\r\n  background: rgba(14, 165, 233, 0.2) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(14, 165, 233, 0.4) !important;\r\n}\r\n\r\n/* =========================================================================\r\n   GIT LOCAL VS GITHUB REMOTE VISUAL DISTINCTION\r\n   ========================================================================= */\r\n\r\n.git-route-local {\r\n  stroke: #f59e0b !important;\r\n}\r\n\r\n.git-route-remote {\r\n  stroke-opacity: 0.95;\r\n}\r\n\r\n.git-route-sync-bridge {\r\n  stroke: #f59e0b !important;\r\n  stroke-dasharray: 3, 2 !important;\r\n  stroke-opacity: 0.9;\r\n}\r\n\r\n.git-commit-row.is-local-commit {\r\n  border-left: 2px solid rgba(245, 158, 11, 0.7) !important;\r\n}\r\n\r\n.git-commit-row.is-remote-commit {\r\n  border-left: 2px solid rgba(56, 189, 248, 0.4) !important;\r\n}\r\n\r\n.git-filter-pill[data-branch-filter=\"local\"].active {\r\n  background: rgba(245, 158, 11, 0.18) !important;\r\n  color: #fbbf24 !important;\r\n  border-color: rgba(245, 158, 11, 0.4) !important;\r\n}\r\n\r\n.git-filter-pill[data-branch-filter=\"remote\"].active {\r\n  background: rgba(56, 189, 248, 0.18) !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.4) !important;\r\n}\r\n";
   }
 
   /**
@@ -7466,45 +12945,1064 @@ class ActionNarratorService {
 
 
 /**
- * Renders the HTML markup for the Chatbox Voice Assistant action button.
- * Follows Antigravity's native chatbox action icon button design tokens.
- *
- * @param {Object} [options]
- * @param {'idle'|'speaking'|'muted'} [options.state='idle']
- * @param {boolean} [options.enabled=true]
- * @returns {string}
+ * Adapter for local XTTS (Coqui TTS / XTTS v2) engine with graceful fallback
+ * to the browser Web Speech API (speechSynthesis).
  */
-function renderVoiceButtonHtml(options = {}) {
-  const state = options.state || 'idle';
-  const isMuted = options.enabled === false;
-  const stateClass = isMuted ? 'state-muted' : (state === 'speaking' ? 'state-speaking' : 'state-idle');
+class XttsLocalAdapter {
+  /**
+   * @param {Object} [options]
+   * @param {string} [options.baseUrl] Local XTTS server URL (defaults to 'http://127.0.0.1:8020')
+   * @param {string} [options.voice] Voice identifier or reference audio file
+   * @param {string} [options.language] Target language code (defaults to 'es')
+   * @param {Function} [options.fetchFn] Custom fetch implementation
+   * @param {Object} [options.speechSynthesis] Custom SpeechSynthesis implementation
+   */
+  constructor(options = {}) {
+    this.baseUrl = (options.baseUrl || 'http://127.0.0.1:8020').replace(/\/+$/, '');
+    this.voice = options.voice || 'default';
+    this.language = options.language || 'es';
+    this.fetchFn = options.fetchFn || (typeof fetch !== 'undefined' ? fetch : null);
+    this.speechSynthesis = options.speechSynthesis || (typeof window !== 'undefined' && window.speechSynthesis ? window.speechSynthesis : null);
+  }
 
-  // Speaker icon with dynamic soundwave paths
-  const iconSvg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 text-secondary-foreground voice-icon ${stateClass}">
-      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-      <path class="wave wave-1" d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-      <path class="wave wave-2" d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
-      ${isMuted ? '<line x1="23" y1="1" x2="1" y2="23" class="mute-slash"></line>' : ''}
-    </svg>
-  `.trim();
+  /**
+   * Probes the XTTS server health endpoint.
+   * @param {number} [timeoutMs=1200]
+   * @returns {Promise<boolean>}
+   */
+  async isAvailable(timeoutMs = 1200) {
+    const fetchImpl = this.fetchFn || (typeof fetch !== 'undefined' ? fetch : null);
+    if (!fetchImpl) return false;
 
-  return `
-    <div id="antigravity-voice-assistant-wrapper" class="antigravity-voice-assistant-wrapper">
-      <button
-        type="button"
-        id="antigravity-voice-assistant-btn"
-        class="antigravity-voice-assistant-btn flex items-center rounded-full transition-colors cursor-pointer w-7 h-7 justify-center p-1.5 bg-transparent hover:bg-secondary ${stateClass}"
-        aria-label="Asistente de Voz (TTS)"
-        title="Asistente de Voz (TTS) - Click para activar o pausar narración"
-        data-mod-action="toggle-voice"
-        data-voice-state="${state}"
-        tabindex="0"
-      >
-        ${iconSvg}
-      </button>
-    </div>
-  `.trim();
+    let timeoutId = null;
+    try {
+      let signal;
+      if (typeof AbortController !== 'undefined') {
+        const controller = new AbortController();
+        signal = controller.signal;
+        timeoutId = setTimeout(() => {
+          controller.abort();
+        }, timeoutMs);
+      }
+
+      const res = await fetchImpl(`${this.baseUrl}/health`, {
+        method: 'GET',
+        signal
+      });
+
+      if (timeoutId) clearTimeout(timeoutId);
+      return !!(res && (res.ok || res.status === 200));
+    } catch {
+      if (timeoutId) clearTimeout(timeoutId);
+      return false;
+    }
+  }
+
+  /**
+   * Synthesizes speech from text. Tries local XTTS first, then falls back to SpeechSynthesis.
+   * @param {string} text
+   * @param {Object} [options]
+   * @param {string} [options.voice]
+   * @param {string} [options.language]
+   * @param {string} [options.response_format]
+   * @param {string} [options.format]
+   * @returns {Promise<Object>}
+   */
+  async synthesize(text, options = {}) {
+    if (!text || typeof text !== 'string' || !text.trim()) {
+      return { success: false, reason: 'empty_text' };
+    }
+
+    const cleanText = text.trim();
+
+    try {
+      const available = await this.isAvailable();
+      if (available) {
+        const fetchImpl = this.fetchFn || (typeof fetch !== 'undefined' ? fetch : null);
+        if (fetchImpl) {
+          const format = options.response_format || options.format || 'wav';
+          const payload = {
+            input: cleanText,
+            voice: options.voice || this.voice,
+            language: options.language || this.language,
+            response_format: format
+          };
+
+          const res = await fetchImpl(`${this.baseUrl}/v1/audio/speech`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          if (res && (res.ok || res.status === 200)) {
+            let audioBuffer = null;
+            if (typeof res.arrayBuffer === 'function') {
+              audioBuffer = await res.arrayBuffer();
+            } else if (typeof res.buffer === 'function') {
+              audioBuffer = await res.buffer();
+            }
+
+            return {
+              success: true,
+              source: 'xtts',
+              audioBuffer,
+              format
+            };
+          }
+        }
+      }
+    } catch {
+      // Local server error, proceed to fallback
+    }
+
+    // Web Speech API fallback
+    const synth = this.speechSynthesis || (typeof window !== 'undefined' ? window.speechSynthesis : null);
+    if (synth && typeof synth.speak === 'function') {
+      try {
+        const UtteranceClass = (typeof SpeechSynthesisUtterance !== 'undefined')
+          ? SpeechSynthesisUtterance
+          : (typeof globalThis !== 'undefined' && globalThis.SpeechSynthesisUtterance ? globalThis.SpeechSynthesisUtterance : null);
+
+        let utterance;
+        if (UtteranceClass) {
+          utterance = new UtteranceClass(cleanText);
+          const lang = options.language || this.language;
+          if (lang) utterance.lang = lang;
+        } else {
+          utterance = { text: cleanText, lang: options.language || this.language };
+        }
+
+        synth.speak(utterance);
+        return { success: true, source: 'web_speech' };
+      } catch {
+        // Fallback failed
+      }
+    }
+
+    return {
+      success: false,
+      source: 'none',
+      reason: 'no_tts_engine_available'
+    };
+  }
+}
+
+
+
+/**
+ * Mode constants for voice-driven agent routing.
+ */
+const VOICE_MODES = Object.freeze({
+  PLAN: 'PLAN',
+  BUILD: 'BUILD',
+  DEBUG: 'DEBUG',
+  RESEARCH: 'RESEARCH'
+});
+
+/**
+ * Default agent mappings for each primary voice mode.
+ */
+const MODE_DEFAULT_AGENT_ID = Object.freeze({
+  PLAN: 'lead-architect',
+  BUILD: 'sdd-orchestrator',
+  DEBUG: 'sdd-verify',
+  RESEARCH: 'sdd-explore'
+});
+
+/**
+ * Explicit agent mention patterns in Spanish and English voice transcripts.
+ */
+const EXPLICIT_AGENT_MATCHERS = [
+  { id: 'auto', pattern: /\b(modo\s+auto(?:m[aá]tico)?|auto\s+mode|smart\s+router|enrutador\s+autom[aá]tico)\b/i, mode: 'PLAN' },
+  { id: 'lead-architect', pattern: /\b(lead\s+architect|arquitecto\s+principal|arquitecto\s+l[ií]der|plano\s+maestro)\b/i, mode: 'PLAN' },
+  { id: 'sdd-orchestrator', pattern: /\b(sdd\s+orchestrator|orquestador\s+sdd|director\s+de\s+obra)\b/i, mode: 'BUILD' },
+  { id: 'product-manager', pattern: /\b(product\s+manager|gerente\s+de\s+producto|\bprd\b|discovery\s+de\s+producto)\b/i, mode: 'PLAN' },
+  { id: 'scrum-master', pattern: /\b(scrum\s+master|historias\s+de\s+usuario|user\s+stories|refinamiento\s+de\s+backlog)\b/i, mode: 'PLAN' },
+  { id: 'code-reviewer', pattern: /\b(code\s+reviewer|revisor\s+de\s+c[oó]digo|revisi[oó]n\s+de\s+pr|pull\s+request\s+review|pr\s+gate|revis(?:a|ar)\s+las\s+invariantes)\b/i, mode: 'DEBUG' },
+  { id: 'security-engineer', pattern: /\b(security\s+engineer|ingeniero\s+de\s+seguridad|auditor[ií]a\s+owasp|vulnerabilidades?\s+owasp|zero\s+trust)\b/i, mode: 'DEBUG' },
+  { id: 'devops-cloud', pattern: /\b(devops|ci\/cd|pipeline\s+de\s+despliegue|gitops|dockerfile|kubernetes)\b/i, mode: 'BUILD' },
+  { id: 'ui-ux-pro', pattern: /\b(ui\/ux|ui\s+ux|design\s+tokens|sistema\s+de\s+dise[nñ]o\s+visual|accesibilidad\s+a11y)\b/i, mode: 'BUILD' },
+  { id: 'rpa-windows', pattern: /\b(windows\s+rpa|rpa\s+windows|automatizaci[oó]n\s+powershell)\b/i, mode: 'BUILD' },
+  { id: 'sdd-explore', pattern: /\b(sdd\s+explore|explorador\s+sdd|modo\s+exploraci[oó]n)\b/i, mode: 'RESEARCH' },
+  { id: 'sdd-spec', pattern: /\b(sdd\s+spec|especificaci[oó]n\s+bdd|escenarios\s+gherkin|dado\s+cuando\s+entonces)\b/i, mode: 'PLAN' },
+  { id: 'sdd-apply', pattern: /\b(sdd\s+apply|red[\s-]+green[\s-]+refactor|aplicar\s+tdd)\b/i, mode: 'BUILD' },
+  { id: 'sdd-verify', pattern: /\b(sdd\s+verify|verificador\s+sdd|gate\s+de\s+pruebas)\b/i, mode: 'DEBUG' },
+  { id: 'gga-review', pattern: /\b(guardian\s+angel|\bgga\b|gateman|guardi[aá]n\s+de\s+c[oó]digo|pre[\s-]?commit\s+guard)\b/i, mode: 'DEBUG' }
+];
+
+/**
+ * Keyword patterns for the 4 core voice modes.
+ */
+const MODE_PATTERNS = {
+  DEBUG: [
+    /\b(debug(?:gear|uear)?|depur(?:a|ar|aci[oó]n)|corrig(?:e|ir)|arregl(?:a|ar|o)|fix(?:ea|ear)?|bug|errores|error|falla(?:ndo|s)?|fallo(?:s)?|rompi[oó]|roto|excepci[oó]n|stack\s*trace|crash|no\s+funciona|problema\s+con|revis(?:a|ar)\s+(?:el\s+error|las\s+invariantes|el\s+c[oó]digo|el\s+pr)|pr\s+gate|audit(?:a|ar|or[ií]a)|vulnerabilidad(?:es)?|diagnostic(?:a|ar)|diagn[oó]stico\s+de\s+error)\b/i
+  ],
+  RESEARCH: [
+    /\b(investig(?:a|ar|aci[oó]n)|explor(?:a|ar|aci[oó]n)|busc(?:a|ar)|encontr(?:a|ar)|localiz(?:a|ar)|d[oó]nde\s+est[aá]|c[oó]mo\s+funciona|explic(?:a|ar|ame)|expl[ií]came|entiend(?:e|o)|entender|analiz(?:a|ar)\s+el\s+contexto|qu[eé]\s+hace|por\s+qu[eé]\s+pasa|list(?:a|ar)\s+los\s+archivos|lee(?:r)?\s+el\s+archivo|research|explore|investigate|search\s+for)\b/i
+  ],
+  PLAN: [
+    /\b(dise[nñ](?:a|ar|o)|plan(?:ifica|ificar|ificaci[oó]n|ear)?|arquitect(?:ura|o)|estructur(?:a|ar)|diagram(?:a|ar)|rfc|adr|estrategia|roadmap|hoja\s+de\s+ruta|criterio(?:s)?|decisi[oó]n|flujo|propuesta|especific(?:a|ar|aci[oó]n)|escenario(?:s)?\s+bdd|antes\s+de\s+programar|c[oó]mo\s+(?:hacer|estructurar|abordar|organizar|dise[nñ]ar)|evalu(?:a|ar|aci[oó]n)|compar(?:a|ar))\b/i
+  ],
+  BUILD: [
+    /\b(implement(?:a|ar|aci[oó]n)|escrib(?:e|ir)|cre(?:a|ar)|agreg(?:a|ar)|a[nñ]ad(?:e|ir)|refactor(?:iza|izar|ing)?|program(?:a|ar)|actualiz(?:a|ar)|instal(?:a|ar)|ejecut(?:a|ar)|corr(?:e|er)\s+los\s+tests|construy(?:e|ir)|build|modific(?:a|ar)|edit(?:a|ar)|desarroll(?:a|ar)|codific(?:a|ar)|tdd|test\s+unitario)\b/i
+  ]
+};
+
+/**
+ * Gateman & architectural guardrail detection rules.
+ */
+const GATEMAN_RULES = [
+  {
+    id: 'explicit-gateman-guard',
+    level: 'strict',
+    recommendedAgent: 'gga-review',
+    pattern: /\b(gateman|guardian\s+angel|\bgga\b|guardi[aá]n|barrera\s+de\s+permisos|control\s+de\s+permisos|pre[\s-]?commit\s+gate|modo\s+estricto|guardrail(?:s)?)\b/i
+  },
+  {
+    id: 'clean-architecture-invariants',
+    level: 'elevated',
+    recommendedAgent: 'code-reviewer',
+    pattern: /\b(clean\s+architecture|arquitectura\s+limpia|arquitectura\s+hexagonal|hexagonal|invariantes?\s+de\s+arquitectura|puertos\s+y\s+adaptadores|ports\s+and\s+adapters|screaming\s+architecture|separaci[oó]n\s+de\s+capas|regla\s+de\s+dependencia|contrato(?:s)?\s+cdd|pr\s+gate)\b/i
+  },
+  {
+    id: 'security-zero-trust',
+    level: 'strict',
+    recommendedAgent: 'security-engineer',
+    pattern: /\b(owasp|zero\s+trust|vulnerabilidad(?:es)?|inyecci[oó]n\s+sql|xss|csrf|hardening|sanitiz(?:a|ar|aci[oó]n)|credenciales|secretos|tokens?\s+expuestos?|auditor[ií]a\s+de\s+seguridad)\b/i
+  },
+  {
+    id: 'destructive-operation-guard',
+    level: 'strict',
+    recommendedAgent: 'gga-review',
+    pattern: /\b(rm\s+-rf|drop\s+table|truncate\s+table|reset\s+--hard|push\s+--force|force\s+push|borr(?:a|ar)\s+la\s+base\s+de\s+datos|elimin(?:a|ar)\s+producci[oó]n|destructiv[oa])\b/i
+  },
+  {
+    id: 'tdd-verification-gate',
+    level: 'elevated',
+    recommendedAgent: 'sdd-verify',
+    pattern: /\b(red[\s-]+green[\s-]+refactor|cobertura\s+al\s+100|100%\s+pass|gate\s+de\s+calidad|verificaci[oó]n\s+estricta)\b/i
+  }
+];
+
+/**
+ * Patterns to extract global voice routing hints (target project, chat, or workspace).
+ */
+const GLOBAL_ROUTING_PATTERNS = [
+  // Prefix patterns: "En el proyecto X, haz Y" or "En el chat X implementa Y"
+  {
+    position: 'prefix',
+    regex: /^(?:oye\s+|hola\s+|por\s+favor\s+)?(?:en\s+el\s+|para\s+el\s+|del\s+|al\s+|dentro\s+del\s+|sobre\s+el\s+|en\s+la\s+|in\s+(?:the\s+)?|on\s+(?:the\s+)?)(proyecto|chat|conversaci[oó]n|workspace|repositorio|repo|hilo|ventana)\s+(?:de\s+|llamad[oa]\s+)?["'“”]?([a-zA-Z0-9_-]+(?:\s+[a-zA-Z0-9_-]+)?)["'“”]?(?:\s*[,.:;-]\s*|\s+(?=(?:dise[nñ]|plan|implement|crea|agreg|corrig|arregl|revis|analiz|investig|explor|busc|ejecut|modific|actualiz|construy|debug|depur|audit|explic|por\s+favor|necesito|quiero|haz|vamos|activa|cambia)\b))/i
+  },
+  // Suffix or mid-sentence patterns: "... en el proyecto X" or "... en el chat Y"
+  {
+    position: 'inline',
+    regex: /\b(?:en\s+el\s+|para\s+el\s+|hacia\s+el\s+|en\s+la\s+|in\s+(?:the\s+)?)(proyecto|chat|conversaci[oó]n|workspace|repositorio|repo|hilo)\s+(?:de\s+|llamad[oa]\s+)?["'“”]?([a-zA-Z0-9_-]+)["'“”]?/i
+  }
+];
+
+/**
+ * Service that conditions agent selection, operational mode (PLAN, BUILD, DEBUG, RESEARCH),
+ * Gateman architectural guardrails, and multi-chat routing from spoken user transcripts
+ * or `<talker_agent_context>` blocks.
+ */
+class VoicePromptConditioner {
+  /**
+   * @param {Object} [options={}]
+   * @param {string} [options.defaultCascadeId='default']
+   * @param {Array<Object>|Object} [options.cascades]
+   */
+  constructor(options = {}) {
+    this.defaultCascadeId = options.defaultCascadeId || 'default';
+    this.cascades = options.cascades || null;
+  }
+
+  /**
+   * Extracts the latest spoken user utterance from either a `<talker_agent_context>` block
+   * or a raw voice transcript string/object.
+   *
+   * @param {string|Object} input
+   * @returns {string} Clean spoken user prompt, or empty string if none found.
+   */
+  static extractSpokenText(input) {
+    if (!input) return '';
+
+    if (typeof input === 'object') {
+      const candidate = input.transcript ?? input.text ?? input.prompt ?? input.content ?? '';
+      return VoicePromptConditioner.extractSpokenText(String(candidate));
+    }
+
+    if (typeof input !== 'string') return '';
+
+    const raw = input.trim();
+    if (!raw) return '';
+
+    // 1. Check for <talker_agent_context>...</talker_agent_context> blocks
+    const contextBlocks = [...raw.matchAll(/<talker_agent_context>([\s\S]*?)<\/talker_agent_context>/gi)];
+    if (contextBlocks.length > 0) {
+      const combinedContext = contextBlocks.map(m => m[1]).join('\n');
+      const userLine = VoicePromptConditioner._extractLatestUserLine(combinedContext);
+      return userLine;
+    }
+
+    // 2. Check if raw string contains structured `user: "..."` lines without enclosing tags
+    if (/^\s*(?:talker_agent|user)\s*:/im.test(raw)) {
+      const userLine = VoicePromptConditioner._extractLatestUserLine(raw);
+      if (userLine) return userLine;
+      // If only talker_agent lines exist without user lines, return empty string
+      if (/^\s*talker_agent\s*:/im.test(raw) && !/^\s*user\s*:/im.test(raw)) {
+        return '';
+      }
+    }
+
+    // 3. Raw transcript string
+    return raw.replace(/^["'“”]+|["'“”]+$/g, '').trim();
+  }
+
+  /**
+   * Alias for `extractSpokenText`.
+   * @param {string|Object} input
+   * @returns {string}
+   */
+  static extractSpokenPrompt(input) {
+    return VoicePromptConditioner.extractSpokenText(input);
+  }
+
+  /**
+   * Extracts the last `user: "..."` utterance from a dialogue block.
+   * @private
+   * @param {string} blockText
+   * @returns {string}
+   */
+  static _extractLatestUserLine(blockText) {
+    const lines = String(blockText || '').split(/\r?\n/);
+    let latestUserText = '';
+
+    for (const line of lines) {
+      const match = line.match(/^\s*user\s*:\s*(.+)$/i);
+      if (match && match[1]) {
+        let extracted = match[1].trim();
+        // Strip outer quotes ("...", '...', “...”)
+        if (
+          (extracted.startsWith('"') && extracted.endsWith('"')) ||
+          (extracted.startsWith("'") && extracted.endsWith("'")) ||
+          (extracted.startsWith('“') && extracted.endsWith('”'))
+        ) {
+          extracted = extracted.slice(1, -1);
+        }
+        extracted = extracted.replace(/\\"/g, '"').replace(/\\'/g, "'").trim();
+        if (extracted) {
+          latestUserText = extracted;
+        }
+      }
+    }
+
+    return latestUserText;
+  }
+
+  /**
+   * Detects if the user named a target project, chat, or workspace in their voice command.
+   *
+   * @param {string} spokenText
+   * @returns {{
+   *   hasGlobalHint: boolean,
+   *   targetType: 'project'|'chat'|'workspace'|null,
+   *   targetName: string|null,
+   *   cleanedPrompt: string
+   * }}
+   */
+  static extractRoutingHint(spokenText) {
+    const text = String(spokenText || '').trim();
+    if (!text) {
+      return {
+        hasGlobalHint: false,
+        targetType: null,
+        targetName: null,
+        cleanedPrompt: ''
+      };
+    }
+
+    for (const rule of GLOBAL_ROUTING_PATTERNS) {
+      const match = text.match(rule.regex);
+      if (match) {
+        const rawKind = (match[1] || '').toLowerCase();
+        const rawTarget = (match[2] || '').trim().replace(/[.,;:!?]+$/, '');
+
+        // Avoid matching generic stop words as project/chat names
+        if (!rawTarget || /^(actual|este|esta|activo|activa|mismo|misma|aqui|aquí|ahora)$/i.test(rawTarget)) {
+          continue;
+        }
+
+        let targetType = 'project';
+        if (/^(chat|conversaci[oó]n|hilo|ventana)$/i.test(rawKind)) {
+          targetType = 'chat';
+        } else if (/^(workspace|repositorio|repo)$/i.test(rawKind)) {
+          targetType = 'workspace';
+        }
+
+        const cleanedPrompt = text.replace(match[0], ' ').replace(/\s{2,}/g, ' ').trim();
+
+        return {
+          hasGlobalHint: true,
+          targetType,
+          targetName: rawTarget,
+          cleanedPrompt: cleanedPrompt || text
+        };
+      }
+    }
+
+    return {
+      hasGlobalHint: false,
+      targetType: null,
+      targetName: null,
+      cleanedPrompt: text
+    };
+  }
+
+  /**
+   * Resolves the target `cascadeId` from voice routing hints, available cascades, or active DOM state.
+   *
+   * @param {string} spokenText
+   * @param {Object} [options={}]
+   * @param {Array<Object>|Object} [options.cascades] Known cascades list or map
+   * @param {string} [options.activeCascadeId] Current active cascade ID fallback
+   * @param {Object} [options.win] Optional browser window object
+   * @returns {{
+   *   cascadeId: string,
+   *   targetHint: string|null,
+   *   targetType: 'project'|'chat'|'workspace'|null,
+   *   matched: boolean,
+   *   isGlobalRoute: boolean,
+   *   source: 'voice-hint'|'active-fallback'|'default'
+   * }}
+   */
+  static resolveTargetCascade(spokenText, options = {}) {
+    const hint = VoicePromptConditioner.extractRoutingHint(spokenText);
+    const win = options.win || (typeof window !== 'undefined' ? window : null);
+
+    // Determine fallback active cascade ID
+    let fallbackCascadeId = options.activeCascadeId || null;
+    if (!fallbackCascadeId && win) {
+      if (typeof win.__resolveCascadeId === 'function') {
+        const activeBadge = win.document?.querySelector?.('.antigravity-agent-badge') || null;
+        fallbackCascadeId = win.__resolveCascadeId(activeBadge);
+      }
+      if (!fallbackCascadeId && win.document?.querySelector) {
+        const cascadeEl = win.document.querySelector('[data-cascade-id]');
+        if (cascadeEl) {
+          fallbackCascadeId = cascadeEl.getAttribute('data-cascade-id');
+        }
+      }
+    }
+    const effectiveFallback = fallbackCascadeId || options.defaultCascadeId || 'default';
+
+    if (!hint.hasGlobalHint || !hint.targetName) {
+      return {
+        cascadeId: effectiveFallback,
+        targetHint: null,
+        targetType: null,
+        matched: false,
+        isGlobalRoute: false,
+        source: fallbackCascadeId ? 'active-fallback' : 'default'
+      };
+    }
+
+    const normalizedTarget = VoicePromptConditioner._normalizeSlug(hint.targetName);
+    const candidates = VoicePromptConditioner._collectCascadeCandidates(options.cascades, win);
+
+    for (const candidate of candidates) {
+      const idSlug = VoicePromptConditioner._normalizeSlug(candidate.id);
+      const nameSlug = VoicePromptConditioner._normalizeSlug(candidate.name);
+      const projectSlug = VoicePromptConditioner._normalizeSlug(candidate.project);
+      const titleSlug = VoicePromptConditioner._normalizeSlug(candidate.title);
+
+      if (
+        (idSlug && (idSlug === normalizedTarget || idSlug.includes(normalizedTarget))) ||
+        (nameSlug && (nameSlug === normalizedTarget || nameSlug.includes(normalizedTarget))) ||
+        (projectSlug && (projectSlug === normalizedTarget || projectSlug.includes(normalizedTarget))) ||
+        (titleSlug && (titleSlug === normalizedTarget || titleSlug.includes(normalizedTarget)))
+      ) {
+        return {
+          cascadeId: candidate.id,
+          targetHint: hint.targetName,
+          targetType: hint.targetType,
+          matched: true,
+          isGlobalRoute: true,
+          source: 'voice-hint'
+        };
+      }
+    }
+
+    return {
+      cascadeId: effectiveFallback,
+      targetHint: hint.targetName,
+      targetType: hint.targetType,
+      matched: false,
+      isGlobalRoute: true,
+      source: 'active-fallback'
+    };
+  }
+
+  /**
+   * Collects candidate cascade descriptors from options, window globals, and DOM nodes.
+   * @private
+   */
+  static _collectCascadeCandidates(cascadesOption, win) {
+    const list = [];
+
+    const pushCandidate = (id, meta = {}) => {
+      if (!id || typeof id !== 'string') return;
+      list.push({
+        id,
+        name: meta.name || meta.label || '',
+        title: meta.title || '',
+        project: meta.project || meta.workspace || ''
+      });
+    };
+
+    if (Array.isArray(cascadesOption)) {
+      for (const item of cascadesOption) {
+        if (typeof item === 'string') {
+          pushCandidate(item, { name: item });
+        } else if (item && typeof item === 'object') {
+          pushCandidate(item.cascadeId || item.id, item);
+        }
+      }
+    } else if (cascadesOption && typeof cascadesOption === 'object') {
+      for (const [id, meta] of Object.entries(cascadesOption)) {
+        pushCandidate(id, typeof meta === 'object' && meta ? meta : { name: String(meta) });
+      }
+    }
+
+    if (win) {
+      if (Array.isArray(win.__antigravityCascades)) {
+        for (const item of win.__antigravityCascades) {
+          if (item && (item.cascadeId || item.id)) {
+            pushCandidate(item.cascadeId || item.id, item);
+          }
+        }
+      } else if (win.__antigravityCascades && typeof win.__antigravityCascades === 'object') {
+        for (const [id, meta] of Object.entries(win.__antigravityCascades)) {
+          pushCandidate(id, typeof meta === 'object' && meta ? meta : { name: String(meta) });
+        }
+      }
+
+      if (win.document && typeof win.document.querySelectorAll === 'function') {
+        const nodes = win.document.querySelectorAll('[data-cascade-id]');
+        if (nodes && typeof nodes.forEach === 'function') {
+          nodes.forEach(node => {
+            const cId = node.getAttribute?.('data-cascade-id');
+            if (cId) {
+              pushCandidate(cId, {
+                name: node.getAttribute?.('data-chat-name') || node.getAttribute?.('data-project-name') || '',
+                title: node.getAttribute?.('data-chat-title') || node.getAttribute?.('title') || '',
+                project: node.getAttribute?.('data-project') || node.getAttribute?.('data-workspace') || ''
+              });
+            }
+          });
+        }
+      }
+    }
+
+    return list;
+  }
+
+  /**
+   * Normalizes a string for fuzzy project/chat identifier matching.
+   * @private
+   */
+  static _normalizeSlug(value = '') {
+    return String(value || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  /**
+   * Classifies a spoken prompt into a target mode (`PLAN`, `BUILD`, `DEBUG`, `RESEARCH`),
+   * resolves the best-fit Agent from `AGENT_REGISTRY`, and evaluates Gateman guardrails.
+   *
+   * @param {string} spokenText
+   * @returns {{
+   *   mode: 'PLAN'|'BUILD'|'DEBUG'|'RESEARCH',
+   *   effectiveMode: 'PLAN'|'BUILD',
+   *   agent: { id: string, name: string, color: string, levelLabel: string, effectiveMode: 'PLAN'|'BUILD', filePath: string },
+   *   gateman: {
+   *     triggered: boolean,
+   *     level: 'normal'|'elevated'|'strict',
+   *     guardrails: string[],
+   *     requiresApproval: boolean,
+   *     recommendedGateAgent: string|null
+   *   },
+   *   cavemanFocus: boolean|null
+   * }}
+   */
+  static classifyIntent(spokenText) {
+    const raw = String(spokenText || '').trim();
+    const routingHint = VoicePromptConditioner.extractRoutingHint(raw);
+    const text = routingHint.cleanedPrompt || raw;
+
+    // 1. Evaluate Gateman / architectural guardrail triggers
+    const gateman = VoicePromptConditioner.evaluateGateman(raw);
+
+    // 2. Detect Caveman / Focus modifier hints if spoken
+    let cavemanFocus = null;
+    if (/\b(modo\s+focus|modo\s+caveman|respuestas?\s+cortas?|sin\s+explicaciones\s+largas)\b/i.test(raw)) {
+      cavemanFocus = true;
+    } else if (/\b(modo\s+explicativo|explicaci[oó]n\s+detallada|paso\s+a\s+paso\s+detallado)\b/i.test(raw)) {
+      cavemanFocus = false;
+    }
+
+    if (!text) {
+      const defaultAgent = VoicePromptConditioner._buildAgentDescriptor('lead-architect', 'PLAN');
+      return {
+        mode: VOICE_MODES.PLAN,
+        effectiveMode: 'PLAN',
+        agent: defaultAgent,
+        gateman,
+        cavemanFocus
+      };
+    }
+
+    // 3. Check if the user explicitly named an agent role
+    let explicitAgentId = null;
+    let explicitMode = null;
+    for (const matcher of EXPLICIT_AGENT_MATCHERS) {
+      if (matcher.pattern.test(raw)) {
+        explicitAgentId = matcher.id;
+        explicitMode = matcher.mode;
+        break;
+      }
+    }
+
+    // 4. Score the 4 primary modes (PLAN, BUILD, DEBUG, RESEARCH)
+    const scores = {
+      PLAN: 0,
+      BUILD: 0,
+      DEBUG: 0,
+      RESEARCH: 0
+    };
+
+    for (const [modeKey, regexList] of Object.entries(MODE_PATTERNS)) {
+      for (const regex of regexList) {
+        const matches = text.match(new RegExp(regex.source, 'gi'));
+        if (matches) {
+          scores[modeKey] += matches.length;
+        }
+      }
+    }
+
+    // Leading imperative verb boost
+    const lower = text.toLowerCase();
+    if (/^(corrige|arregla|depura|fix|debug|audita|revisa\s+el\s+error|soluciona)\b/i.test(lower)) {
+      scores.DEBUG += 2;
+    } else if (/^(investiga|explora|busca|explica|expl[ií]came|analiza\s+el\s+contexto|d[oó]nde|c[oó]mo\s+funciona|por\s+qu[eé])\b/i.test(lower)) {
+      scores.RESEARCH += 2;
+    } else if (/^(dise[nñ]a|planifica|estructura|arquitectura|prop[oó]n|elabora\s+un\s+plan|c[oó]mo\s+estructurar)\b/i.test(lower)) {
+      scores.PLAN += 2;
+    } else if (/^(implementa|crea|escribe|agrega|a[nñ]ade|refactoriza|programa|actualiza|instala|ejecuta|construye|modifica|edita|haz)\b/i.test(lower)) {
+      scores.BUILD += 2;
+    }
+
+    // Determine winning mode
+    let resolvedMode = explicitMode || VOICE_MODES.PLAN;
+    const maxScore = Math.max(scores.DEBUG, scores.BUILD, scores.RESEARCH, scores.PLAN);
+
+    if (maxScore > 0) {
+      // Priority tie-breaking: DEBUG > BUILD > RESEARCH > PLAN when action verbs are specific
+      if (scores.DEBUG === maxScore) {
+        resolvedMode = VOICE_MODES.DEBUG;
+      } else if (scores.BUILD === maxScore && scores.PLAN < scores.BUILD) {
+        resolvedMode = VOICE_MODES.BUILD;
+      } else if (scores.RESEARCH === maxScore && scores.PLAN < scores.RESEARCH) {
+        resolvedMode = VOICE_MODES.RESEARCH;
+      } else {
+        resolvedMode = VOICE_MODES.PLAN;
+      }
+    }
+
+    const effectiveMode = (resolvedMode === VOICE_MODES.BUILD || resolvedMode === VOICE_MODES.DEBUG)
+      ? 'BUILD'
+      : 'PLAN';
+
+    // 5. Select target agent ID
+    let targetAgentId = explicitAgentId;
+    if (!targetAgentId) {
+      if (gateman.triggered && gateman.level === 'strict' && scores.BUILD === 0 && scores.PLAN === 0) {
+        targetAgentId = gateman.recommendedGateAgent || MODE_DEFAULT_AGENT_ID[resolvedMode];
+      } else if (resolvedMode === VOICE_MODES.BUILD && /\b(tdd|red[\s-]+green|test\s+unitario)\b/i.test(text)) {
+        targetAgentId = 'sdd-apply';
+      } else if (resolvedMode === VOICE_MODES.DEBUG && /\b(pr|pull\s+request|invariantes|clean\s+architecture|arquitectura\s+limpia|code\s+review)\b/i.test(text)) {
+        targetAgentId = 'code-reviewer';
+      } else if (resolvedMode === VOICE_MODES.DEBUG && /\b(seguridad|owasp|vulnerabilidad|zero\s+trust)\b/i.test(text)) {
+        targetAgentId = 'security-engineer';
+      } else {
+        targetAgentId = MODE_DEFAULT_AGENT_ID[resolvedMode] || 'lead-architect';
+      }
+    }
+
+    const agent = VoicePromptConditioner._buildAgentDescriptor(targetAgentId, effectiveMode);
+
+    return {
+      mode: resolvedMode,
+      effectiveMode,
+      agent,
+      gateman,
+      cavemanFocus
+    };
+  }
+
+  /**
+   * Alias for `classifyIntent`.
+   * @param {string} spokenText
+   */
+  static classifyVoiceIntent(spokenText) {
+    return VoicePromptConditioner.classifyIntent(spokenText);
+  }
+
+  /**
+   * Evaluates Gateman and architectural guardrail triggers on the spoken prompt.
+   *
+   * @param {string} text
+   * @returns {{
+   *   triggered: boolean,
+   *   level: 'normal'|'elevated'|'strict',
+   *   guardrails: string[],
+   *   requiresApproval: boolean,
+   *   recommendedGateAgent: string|null
+   * }}
+   */
+  static evaluateGateman(text) {
+    const raw = String(text || '').trim();
+    if (!raw) {
+      return {
+        triggered: false,
+        level: 'normal',
+        guardrails: [],
+        requiresApproval: false,
+        recommendedGateAgent: null
+      };
+    }
+
+    const guardrails = [];
+    let highestLevel = 'normal';
+    let recommendedGateAgent = null;
+
+    for (const rule of GATEMAN_RULES) {
+      if (rule.pattern.test(raw)) {
+        guardrails.push(rule.id);
+        if (rule.level === 'strict') {
+          highestLevel = 'strict';
+          recommendedGateAgent = rule.recommendedAgent;
+        } else if (rule.level === 'elevated' && highestLevel !== 'strict') {
+          highestLevel = 'elevated';
+          recommendedGateAgent = recommendedGateAgent || rule.recommendedAgent;
+        }
+      }
+    }
+
+    const triggered = guardrails.length > 0;
+    return {
+      triggered,
+      level: highestLevel,
+      guardrails,
+      requiresApproval: highestLevel === 'strict',
+      recommendedGateAgent
+    };
+  }
+
+  /**
+   * Builds a normalized agent descriptor matching `AgentSelectorMod` expectations.
+   * @private
+   */
+  static _buildAgentDescriptor(agentId, effectiveMode = 'PLAN') {
+    if (agentId === 'auto') {
+      return {
+        id: AUTO_AGENT.id,
+        name: 'Auto (Plan/Build)',
+        color: getAgentColor('auto'),
+        levelLabel: AUTO_AGENT.levelLabel,
+        effectiveMode,
+        filePath: ''
+      };
+    }
+    if (agentId === 'default') {
+      return {
+        id: DEFAULT_AGENT.id,
+        name: 'Sin Agente',
+        color: getAgentColor('default'),
+        levelLabel: DEFAULT_AGENT.levelLabel,
+        effectiveMode,
+        filePath: ''
+      };
+    }
+
+    const found = AGENT_REGISTRY.find(a => a.id === agentId) || AGENT_REGISTRY[0];
+    return {
+      id: found.id,
+      name: found.name,
+      color: getAgentColor(found.id),
+      levelLabel: found.levelLabel,
+      effectiveMode,
+      filePath: found.filePath || ''
+    };
+  }
+
+  /**
+   * Full conditioning pipeline from raw voice transcript or `<talker_agent_context>` block.
+   *
+   * @param {string|Object} transcriptOrContext
+   * @param {Object} [options={}]
+   * @returns {Object} Conditioning result
+   */
+  condition(transcriptOrContext, options = {}) {
+    return VoicePromptConditioner.condition(transcriptOrContext, {
+      defaultCascadeId: this.defaultCascadeId,
+      cascades: options.cascades || this.cascades,
+      ...options
+    });
+  }
+
+  /**
+   * Static full conditioning pipeline.
+   *
+   * @param {string|Object} transcriptOrContext
+   * @param {Object} [options={}]
+   * @returns {Object} Conditioning result
+   */
+  static condition(transcriptOrContext, options = {}) {
+    const spokenText = VoicePromptConditioner.extractSpokenText(transcriptOrContext);
+    if (!spokenText) {
+      return {
+        conditioned: false,
+        reason: 'empty_prompt',
+        spokenText: '',
+        cleanedPrompt: '',
+        mode: VOICE_MODES.PLAN,
+        effectiveMode: 'PLAN',
+        agent: VoicePromptConditioner._buildAgentDescriptor('default', 'PLAN'),
+        gateman: VoicePromptConditioner.evaluateGateman(''),
+        gatemanTriggered: false,
+        routing: {
+          cascadeId: options.activeCascadeId || options.defaultCascadeId || 'default',
+          targetHint: null,
+          targetType: null,
+          matched: false,
+          isGlobalRoute: false,
+          source: 'default'
+        },
+        cascadeId: options.activeCascadeId || options.defaultCascadeId || 'default',
+        cavemanFocus: null
+      };
+    }
+
+    const routingHint = VoicePromptConditioner.extractRoutingHint(spokenText);
+    const routing = VoicePromptConditioner.resolveTargetCascade(spokenText, options);
+    const classification = VoicePromptConditioner.classifyIntent(spokenText);
+
+    return {
+      conditioned: true,
+      spokenText,
+      cleanedPrompt: routingHint.cleanedPrompt,
+      mode: classification.mode,
+      effectiveMode: classification.effectiveMode,
+      agent: classification.agent,
+      gateman: classification.gateman,
+      gatemanTriggered: classification.gateman.triggered,
+      routing,
+      cascadeId: routing.cascadeId,
+      cavemanFocus: classification.cavemanFocus
+    };
+  }
+
+  /**
+   * Instance helper to attach `__conditionAgentFromVoice` to a browser/DOM window.
+   *
+   * @param {Object} win
+   * @param {Object} [options={}]
+   * @returns {Function|null} The attached `__conditionAgentFromVoice` function.
+   */
+  attachToWindow(win, options = {}) {
+    return VoicePromptConditioner.attachToWindow(win, {
+      defaultCascadeId: this.defaultCascadeId,
+      cascades: options.cascades || this.cascades,
+      ...options
+    });
+  }
+
+  /**
+   * Attaches `win.__conditionAgentFromVoice(transcriptOrContext, callOptions)` to the given window.
+   * Automatically updates `__antigravity_selected_agents_map` in `localStorage`, updates the active
+   * cascade's agent badge in the DOM, and dispatches the `'antigravity:voice-conditioned'` CustomEvent.
+   *
+   * @param {Object} win
+   * @param {Object} [options={}]
+   * @returns {Function|null}
+   */
+  static attachToWindow(win, options = {}) {
+    if (!win || typeof win !== 'object') {
+      return null;
+    }
+
+    const conditionFn = function __conditionAgentFromVoice(transcriptOrContext, callOptions = {}) {
+      const mergedOptions = {
+        ...options,
+        ...callOptions,
+        win
+      };
+
+      const result = VoicePromptConditioner.condition(transcriptOrContext, mergedOptions);
+      if (!result.conditioned) {
+        return result;
+      }
+
+      const cascadeId = result.cascadeId || 'default';
+      const agentPayload = {
+        id: result.agent.id,
+        name: result.agent.name,
+        color: result.agent.color,
+        filePath: result.agent.filePath || '',
+        effectiveMode: result.effectiveMode,
+        mode: result.mode,
+        conditionedBy: 'voice',
+        gateman: result.gateman
+      };
+
+      // 1. Update in-memory active agents map on window
+      win.__antigravityActiveAgents = win.__antigravityActiveAgents || {};
+      win.__antigravityActiveAgents[cascadeId] = agentPayload;
+
+      // 2. Persist in localStorage (__antigravity_selected_agents_map & __antigravity_selected_agent)
+      const storage = win.localStorage || (typeof localStorage !== 'undefined' ? localStorage : null);
+      if (storage && typeof storage.getItem === 'function' && typeof storage.setItem === 'function') {
+        try {
+          const rawMap = storage.getItem('__antigravity_selected_agents_map');
+          const map = rawMap ? JSON.parse(rawMap) : {};
+          map[cascadeId] = agentPayload;
+          storage.setItem('__antigravity_selected_agents_map', JSON.stringify(map));
+          storage.setItem('__antigravity_selected_agent', JSON.stringify(agentPayload));
+        } catch {
+          // Ignore storage quota or serialization errors
+        }
+      }
+
+      // 3. Update Caveman / Focus mode if explicitly requested by voice
+      if (typeof result.cavemanFocus === 'boolean' && typeof win.__toggleCavemanMode === 'function') {
+        try {
+          win.__toggleCavemanMode(result.cavemanFocus);
+        } catch {
+          // Ignore DOM errors
+        }
+      }
+
+      // 4. Update matching agent badge(s) in DOM
+      const doc = win.document;
+      if (doc && typeof doc.querySelectorAll === 'function') {
+        const badges = Array.from(doc.querySelectorAll('.antigravity-agent-badge, #antigravity-agent-badge'));
+        let updatedAny = false;
+
+        for (const badge of badges) {
+          const badgeCascadeEl = typeof badge.closest === 'function' ? badge.closest('[data-cascade-id]') : null;
+          const badgeCascadeId = (badgeCascadeEl && typeof badgeCascadeEl.getAttribute === 'function')
+            ? badgeCascadeEl.getAttribute('data-cascade-id')
+            : (typeof win.__resolveCascadeId === 'function' ? win.__resolveCascadeId(badge) : null);
+
+          if (!badgeCascadeId || badgeCascadeId === cascadeId || badges.length === 1) {
+            VoicePromptConditioner._applyBadgeDomUpdate(win, badge, agentPayload, result);
+            updatedAny = true;
+          }
+        }
+
+        if (!updatedAny && badges.length > 0) {
+          VoicePromptConditioner._applyBadgeDomUpdate(win, badges[0], agentPayload, result);
+        }
+      }
+
+      // 5. Dispatch CustomEvent 'antigravity:voice-conditioned'
+      VoicePromptConditioner._dispatchVoiceEvent(win, result);
+
+      return result;
+    };
+
+    win.__conditionAgentFromVoice = conditionFn;
+    return conditionFn;
+  }
+
+  /**
+   * Updates an `.antigravity-agent-badge` element with the conditioned agent and mode state.
+   * @private
+   */
+  static _applyBadgeDomUpdate(win, badge, agentPayload, result) {
+    if (!badge) return;
+
+    if (typeof win.__applyAgentToBadge === 'function') {
+      win.__applyAgentToBadge(badge, agentPayload);
+    } else {
+      if (typeof badge.setAttribute === 'function') {
+        badge.setAttribute('data-agent-id', agentPayload.id);
+        badge.setAttribute('data-effective-mode', result.effectiveMode);
+        badge.setAttribute('title', `Modo Activo: ${agentPayload.name} (${result.mode})`);
+      }
+      if (badge.style) {
+        badge.style.borderColor = `${agentPayload.color}66`;
+        badge.style.boxShadow = `0 0 8px ${agentPayload.color}33`;
+      }
+      if (typeof badge.querySelector === 'function') {
+        const label = badge.querySelector('.antigravity-active-agent-name, #antigravity-active-agent-name');
+        if (label) {
+          label.textContent = agentPayload.name;
+        }
+        const dot = badge.querySelector('.antigravity-active-agent-dot, #antigravity-active-agent-dot');
+        if (dot && dot.style) {
+          dot.style.background = agentPayload.color;
+          dot.style.boxShadow = `0 0 6px ${agentPayload.color}`;
+        }
+      }
+    }
+
+    if (typeof badge.setAttribute === 'function') {
+      badge.setAttribute('data-voice-mode', result.mode);
+      badge.setAttribute('data-gateman-active', result.gatemanTriggered ? 'true' : 'false');
+    }
+  }
+
+  /**
+   * Dispatches `antigravity:voice-conditioned` on the target window/document.
+   * @private
+   */
+  static _dispatchVoiceEvent(win, detail) {
+    const eventName = 'antigravity:voice-conditioned';
+    let evt = null;
+
+    try {
+      const CustomEventCtor = win.CustomEvent || (typeof CustomEvent !== 'undefined' ? CustomEvent : null);
+      if (typeof CustomEventCtor === 'function') {
+        evt = new CustomEventCtor(eventName, {
+          detail,
+          bubbles: true,
+          cancelable: false
+        });
+      }
+    } catch {
+      evt = null;
+    }
+
+    if (!evt) {
+      evt = {
+        type: eventName,
+        detail,
+        bubbles: true,
+        cancelable: false
+      };
+    }
+
+    if (typeof win.dispatchEvent === 'function') {
+      win.dispatchEvent(evt);
+    } else if (win.document && typeof win.document.dispatchEvent === 'function') {
+      win.document.dispatchEvent(evt);
+    }
+  }
 }
 
 
@@ -7518,22 +14016,38 @@ function renderVoiceButtonHtml(options = {}) {
 
 
 
-{ TextSanitizer, ActionNarratorService };
+
+const ALLOWED_GLOBAL_SLOTS = new Set(['menubar-actions', 'floating-dock']);
+
 
 class VoiceAssistantMod extends AntigravityMod {
   constructor(options = {}) {
+    const isGlobalMode = options.globalMode === true;
+    const requestedGlobalSlot = options.globalSlot && ALLOWED_GLOBAL_SLOTS.has(options.globalSlot)
+      ? options.globalSlot
+      : 'menubar-actions';
+    const resolvedSlot = isGlobalMode
+      ? requestedGlobalSlot
+      : (options.globalMode === undefined && options.globalSlot && ALLOWED_GLOBAL_SLOTS.has(options.globalSlot)
+        ? options.globalSlot
+        : 'chat-input-actions');
+
     super({
       id: 'voice-assistant',
       name: 'Voice Assistant',
       version: '1.0.0',
-      slot: 'chat-input-actions',
+      slot: resolvedSlot,
       priority: 40
     });
 
+    this.globalMode = isGlobalMode || resolvedSlot !== 'chat-input-actions';
+    this.globalSlot = resolvedSlot;
     this.narratorService = options.narratorService || ActionNarratorService;
     this.sanitizer = options.sanitizer || TextSanitizer;
+    this.ttsAdapter = options.ttsAdapter || new XttsLocalAdapter(options.ttsOptions || {});
+    this.promptConditioner = options.promptConditioner || new VoicePromptConditioner(options.conditionerOptions || {});
 
-    this.cachedCss = "/* Voice Assistant Mod Styles */\n.antigravity-slot-chat-input-actions {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  margin-right: 2px;\n}\n\n.antigravity-voice-assistant-wrapper {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  position: relative;\n}\n\n.antigravity-voice-assistant-btn {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  width: 1.75rem;\n  height: 1.75rem;\n  padding: 0.375rem;\n  border-radius: 9999px;\n  background: transparent;\n  color: var(--secondary-foreground, #ececec);\n  border: none;\n  cursor: pointer;\n  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;\n  user-select: none;\n  outline: none;\n}\n\n.antigravity-voice-assistant-btn:hover {\n  background-color: var(--secondary, rgba(255, 255, 255, 0.08));\n}\n\n.antigravity-voice-assistant-btn:focus-visible {\n  outline: 2px solid var(--ring, #3b82f6);\n  outline-offset: 1px;\n}\n\n.antigravity-voice-assistant-btn.state-muted {\n  opacity: 0.45;\n}\n\n.antigravity-voice-assistant-btn.state-speaking {\n  color: #38bdf8;\n  background-color: rgba(56, 189, 248, 0.12);\n}\n\n.antigravity-voice-assistant-btn.state-speaking .wave-1 {\n  animation: voiceWavePulse 1.2s infinite ease-in-out;\n}\n\n.antigravity-voice-assistant-btn.state-speaking .wave-2 {\n  animation: voiceWavePulse 1.2s infinite ease-in-out 0.3s;\n}\n\n@keyframes voiceWavePulse {\n  0%, 100% {\n    opacity: 0.3;\n    transform: scale(0.95);\n    transform-origin: center;\n  }\n  50% {\n    opacity: 1;\n    transform: scale(1.1);\n    transform-origin: center;\n  }\n}\n";
+    this.cachedCss = "/* Voice Assistant Mod Styles (Top HUD) */\r\n\r\n/* ==========================================================================\r\n   Generalized HTML5 Box-in-Box Voice Mode HUD (Top-Centered Across Views)\r\n   Box 0: viewport-anchor (.antigravity-voice-toast-docked / .agy-voice-hud)\r\n   Box 1: frame           ([data-voice-hud-box=\"frame\"])\r\n   Box 2: surface         ([data-voice-hud-box=\"surface\"] / [data-testid=\"live-docked\"])\r\n   Box 3: header/toolbar  ([data-voice-hud-box=\"header\"] / [role=\"toolbar\"])\r\n            -> identity | controls-well | actions | drawer\r\n   Box 4: tray/alerts     ([data-voice-hud-box=\"tray\"] / mic warning / composer)\r\n   ========================================================================== */\r\n\r\n/* Box 0: Top-Centered Viewport Anchor (Chats, History, and Customizations HUD) */\r\n.antigravity-voice-toast-docked,\r\nbody .antigravity-voice-toast-docked,\r\n:root .antigravity-voice-toast-docked,\r\n.agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"],\r\nbody .agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"] {\r\n  --agy-voice-hud-top: 4px;\r\n  --agy-voice-outer-radius: var(--nux-radius-lg, 16px);\r\n  --agy-voice-inner-pad: 4px;\r\n  --agy-voice-inner-radius: calc(var(--agy-voice-outer-radius) - var(--agy-voice-inner-pad));\r\n  position: fixed !important;\r\n  inset-block-start: var(--agy-voice-hud-top) !important;\r\n  inset-inline: 0 !important;\r\n  top: var(--agy-voice-hud-top) !important;\r\n  left: 0 !important;\r\n  right: 0 !important;\r\n  bottom: auto !important;\r\n  margin-inline: auto !important;\r\n  margin-bottom: 0 !important;\r\n  width: fit-content !important;\r\n  min-width: min(260px, calc(100vw - 32px)) !important;\r\n  max-width: min(440px, max(260px, calc(100vw - 320px)), calc(100vw - 48px)) !important;\r\n  height: auto !important;\r\n  padding: 0 !important;\r\n  transform: none !important;\r\n  z-index: 9998 !important;\r\n  box-sizing: border-box !important;\r\n  overflow: visible !important;\r\n  pointer-events: auto !important;\r\n  transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease;\r\n}\r\n\r\n/* Offset cleanly below the 35px menubar when present (Chats & Customizations) */\r\nbody:has([data-testid=\"title-menu-bar\"]) .antigravity-voice-toast-docked,\r\n:root:has([data-testid=\"title-menu-bar\"]) .antigravity-voice-toast-docked,\r\nbody:has([data-testid=\"title-menu-bar\"]) .agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"] {\r\n  --agy-voice-hud-top: 39px;\r\n}\r\n\r\n/* Multi-layer variant wrappers stack vertically (Header surface above Alert tray) */\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"],\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"dock\"],\r\nbody .antigravity-voice-toast-docked.agy-voice-hud,\r\n.agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"] {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n/* Direct compact/minimized bar keeps pill ergonomics centered at the Top HUD */\r\n.antigravity-voice-toast-docked.is-minimized,\r\nbody .antigravity-voice-toast-docked.is-minimized,\r\n.antigravity-voice-toast-docked[data-minimized=\"true\"],\r\nbody .antigravity-voice-toast-docked[data-minimized=\"true\"],\r\n.antigravity-voice-toast-docked.minimized,\r\nbody .antigravity-voice-toast-docked.minimized {\r\n  position: fixed !important;\r\n  inset-block-start: var(--agy-voice-hud-top, 4px) !important;\r\n  inset-inline: 0 !important;\r\n  top: var(--agy-voice-hud-top, 4px) !important;\r\n  left: 0 !important;\r\n  right: 0 !important;\r\n  bottom: auto !important;\r\n  margin-inline: auto !important;\r\n  transform: none !important;\r\n  border-radius: var(--nux-radius-pill, 9999px) !important;\r\n  transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease;\r\n}\r\n\r\n/* Box 1: Frame (normalizes native teleprompter inner wrapper & standalone frame) */\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] > div,\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"frame\"],\r\n.agy-voice-hud [data-voice-hud-box=\"frame\"] {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  width: 100% !important;\r\n  box-sizing: border-box !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n/* Order Box 2 (Surface) above native <c6> inline mic warning inside teleprompter slot */\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] > div > [data-testid=\"live-docked\"],\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"surface\"] {\r\n  order: 1 !important;\r\n  width: 100% !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] > div > :not([data-testid=\"live-docked\"]) {\r\n  order: 2 !important;\r\n  justify-content: center !important;\r\n  margin: 0 !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n/* Box 2: Onyx 4-Sided Glass Card Surface (neutralizes bottom-composer border-b-0 / pb-8) */\r\nbody .antigravity-voice-toast-docked [data-testid=\"live-docked\"],\r\nbody[data-agy-theme][data-newux-theme=\"onyx\"] .agy-live-dock-slot.antigravity-voice-toast-docked [data-testid=\"live-docked\"],\r\nbody[data-agy-theme][data-newux-theme=\"onyx\"] .agy-live-dock-slot:has(+ .surface-composer).antigravity-voice-toast-docked [data-testid=\"live-docked\"],\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"surface\"],\r\n.agy-voice-hud [data-voice-hud-box=\"surface\"] {\r\n  background-color: var(--glass, rgba(24, 24, 28, 0.88)) !important;\r\n  -webkit-backdrop-filter: blur(20px) saturate(1.6) !important;\r\n  backdrop-filter: blur(20px) saturate(1.6) !important;\r\n  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14)) !important;\r\n  border-radius: var(--agy-voice-outer-radius, 16px) !important;\r\n  box-shadow:\r\n    inset 0 1px 0 var(--glass-highlight, rgba(255, 255, 255, 0.08)),\r\n    var(--glass-shadow, 0 14px 34px -10px rgba(0, 0, 0, 0.45)) !important;\r\n  padding: var(--agy-voice-inner-pad, 4px) 6px !important;\r\n  margin: 0 !important;\r\n  box-sizing: border-box !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n/* Minimize bottom padding when standalone/teleprompter is collapsed into a slim HUD capsule */\r\nbody .antigravity-voice-toast-docked.is-minimized [data-testid=\"live-docked\"],\r\nbody .antigravity-voice-toast-docked[data-minimized=\"true\"] [data-testid=\"live-docked\"],\r\n.agy-voice-hud.is-minimized [data-voice-hud-box=\"surface\"] {\r\n  border-radius: var(--nux-radius-pill, 9999px) !important;\r\n  padding: 3px 6px !important;\r\n}\r\n\r\n/* Box 3: Header Strip & Inner Pills / Recessed Toolbar Well */\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"header\"],\r\nbody .antigravity-voice-toast-docked [data-testid=\"voice-call-controls\"],\r\n.agy-voice-hud [data-voice-hud-box=\"header\"] {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 8px !important;\r\n  width: 100% !important;\r\n  min-width: 0 !important;\r\n  box-sizing: border-box !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n.agy-voice-hud [data-voice-hud-box=\"identity\"],\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"identity\"] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  min-width: 0;\r\n  padding-inline: 6px;\r\n  font-size: 12px;\r\n  font-weight: 500;\r\n  color: var(--muted-foreground, #a1a1aa);\r\n}\r\n\r\n.agy-voice-hud [data-voice-hud-box=\"toolbar\"] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  min-width: 0;\r\n}\r\n\r\n.agy-voice-hud [data-voice-hud-box=\"controls-well\"],\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"controls-well\"] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 4px;\r\n  padding: 2px;\r\n  border-radius: var(--nux-radius-pill, 9999px);\r\n  background-color: var(--onyx-well, rgba(255, 255, 255, 0.055));\r\n  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));\r\n}\r\n\r\n.agy-voice-hud [data-voice-hud-box=\"actions\"],\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"actions\"] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 4px;\r\n}\r\n\r\n.agy-voice-hud .agy-voice-hud-separator {\r\n  inline-size: 1px;\r\n  block-size: 14px;\r\n  background-color: var(--border, rgba(255, 255, 255, 0.16));\r\n}\r\n\r\n/* Native Floating Voice Dock pill row in Chats History & Customizations */\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"dock\"] {\r\n  cursor: default !important;\r\n}\r\n\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"dock\"] > div:last-child {\r\n  order: 1 !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n/* Box 3C: Bounded Transcript / Composer Drawer inside Top HUD */\r\nbody .antigravity-voice-toast-docked [data-testid=\"live-docked-replies\"],\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"drawer\"],\r\n.agy-voice-hud [data-voice-hud-box=\"drawer\"] {\r\n  max-height: min(40vh, 260px) !important;\r\n  overflow-y: auto !important;\r\n  overscroll-behavior: contain;\r\n  border-radius: var(--agy-voice-inner-radius, 12px);\r\n  pointer-events: auto !important;\r\n}\r\n\r\n.agy-voice-hud.is-minimized [data-voice-hud-box=\"drawer\"],\r\nbody .antigravity-voice-toast-docked.is-minimized [data-testid=\"live-docked-replies\"] {\r\n  display: none !important;\r\n}\r\n\r\n/* Box 4: Downward Flip for Mic Disconnected, Mic Switched, Error Tips & Quick Composer */\r\nbody .antigravity-voice-toast-docked [data-testid=\"voice-mic-warning\"],\r\nbody .antigravity-voice-toast-docked [data-testid=\"voice-mic-switched\"],\r\nbody .antigravity-voice-toast-docked [data-testid=\"voice-error-tip\"],\r\nbody .antigravity-voice-toast-docked [data-testid=\"voice-dock-composer\"],\r\nbody .antigravity-voice-toast-docked [data-voice-hud-box=\"alert\"],\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"dock\"] > [role=\"status\"],\r\n.agy-voice-hud [data-voice-hud-box=\"tray\"] {\r\n  top: calc(100% + 8px) !important;\r\n  bottom: auto !important;\r\n  left: 50% !important;\r\n  right: auto !important;\r\n  translate: -50% 0 !important;\r\n  margin-top: 0 !important;\r\n  margin-bottom: 0 !important;\r\n  transform-origin: top center !important;\r\n  max-width: min(360px, calc(100vw - 32px)) !important;\r\n  z-index: 9999 !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n/* In-flow <c6> mic warning inside teleprompter slot sits right below surface card */\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] [data-testid=\"voice-mic-warning\"]:not(.absolute),\r\nbody .antigravity-voice-toast-docked[data-voice-hud-variant=\"teleprompter\"] [data-testid=\"voice-mic-switched\"]:not(.absolute),\r\n.agy-voice-hud [data-voice-hud-box=\"tray\"] > [data-voice-hud-box=\"alert\"] {\r\n  position: relative !important;\r\n  top: auto !important;\r\n  left: auto !important;\r\n  translate: none !important;\r\n  order: 2 !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n/* Dictation Speed Panel & Mic Switcher Popover Portals stay above Top HUD (z > 9998) */\r\nbody [data-popover-popup]:has([data-testid=\"voice-speed-panel\"]),\r\nbody [class*=\"z-[6000]\"]:has([data-testid=\"voice-speed-panel\"]),\r\nbody [data-popover-popup]:has([data-testid=\"voice-mic-warning-switch\"]),\r\nbody [class*=\"z-[6000]\"]:has([data-testid=\"voice-mic-warning-switch\"]) {\r\n  z-index: 10020 !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n/* Interactive Control Ergonomics, ARIA Pressed State & Accessibility */\r\n.antigravity-voice-toast-docked button,\r\nbody .antigravity-voice-toast-docked button,\r\n.antigravity-voice-toast-docked input,\r\nbody .antigravity-voice-toast-docked input,\r\n.antigravity-voice-toast-docked textarea,\r\nbody .antigravity-voice-toast-docked textarea,\r\n.agy-voice-hud button,\r\n.agy-voice-hud input {\r\n  min-inline-size: 24px;\r\n  min-block-size: 24px;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n.agy-voice-hud button[aria-pressed=\"true\"] {\r\n  background-color: var(--secondary, rgba(255, 255, 255, 0.16));\r\n  color: var(--foreground, #ffffff);\r\n  box-shadow: inset 0 0 0 1px var(--border, rgba(255, 255, 255, 0.22));\r\n}\r\n\r\n.antigravity-voice-toast-docked button:focus-visible,\r\nbody .antigravity-voice-toast-docked button:focus-visible,\r\n.agy-voice-hud button:focus-visible {\r\n  outline: 2px solid var(--ring, #3b82f6);\r\n  outline-offset: 2px;\r\n}\r\n\r\n@media (prefers-reduced-motion: reduce) {\r\n  .antigravity-voice-toast-docked,\r\n  body .antigravity-voice-toast-docked,\r\n  .agy-voice-hud[data-voice-hud-box=\"viewport-anchor\"] {\r\n    transition: none !important;\r\n  }\r\n}\r\n\r\n@media (forced-colors: active) {\r\n  body .antigravity-voice-toast-docked [data-voice-hud-box=\"surface\"],\r\n  .agy-voice-hud [data-voice-hud-box=\"surface\"] {\r\n    border: 1px solid CanvasText !important;\r\n    background-color: Canvas !important;\r\n    color: CanvasText !important;\r\n  }\r\n}\r\n\r\n";
   }
 
   get id() {
@@ -7553,18 +14067,38 @@ class VoiceAssistantMod extends AntigravityMod {
   }
 
   /**
-   * Renders the voice assistant button markup and scoped stylesheet.
+   * Returns scoped Voice Mode HUD stylesheets without mounting a chat-input speaker button.
    * @param {Object} [context={}]
    * @returns {{ html: string, css: string }}
    */
   render(context = {}) {
-    const state = context.voiceState || 'idle';
-    const enabled = context.voiceEnabled !== false;
-
     return {
-      html: renderVoiceButtonHtml({ state, enabled }),
+      html: '',
       css: this.cachedCss
     };
+  }
+
+  /**
+   * Conditions agent selection, mode, and multi-chat routing from a voice transcript or `<talker_agent_context>`.
+   * @param {string|Object} transcriptOrContext
+   * @param {Object} [options={}]
+   * @returns {Object}
+   */
+  conditionVoicePrompt(transcriptOrContext, options = {}) {
+    return this.promptConditioner.condition(transcriptOrContext, options);
+  }
+
+  /**
+   * Synthesizes text using the configured TTS adapter.
+   * @param {string} text
+   * @param {Object} [options]
+   * @returns {Promise<Object>}
+   */
+  async synthesize(text, options = {}) {
+    if (!this.ttsAdapter || typeof this.ttsAdapter.synthesize !== 'function') {
+      return { success: false, reason: 'no_adapter' };
+    }
+    return this.ttsAdapter.synthesize(text, options);
   }
 
   /**
@@ -7580,6 +14114,1371 @@ class VoiceAssistantMod extends AntigravityMod {
 }
 
 
+// ===================== Model Slots Mod =====================
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
+/**
+ * Base models grouped with their supported effort levels for hierarchical flyout selection.
+ * Acts as the static fallback before live discovery from Antigravity's native model selector context.
+ */
+const BASE_MODELS = [
+  {
+    name: 'Gemini 4 Neon',
+    family: 'Neon',
+    color: '#a3e635',
+    efforts: [
+      { id: 'gemini-4-neon-low', label: 'Low', shortName: 'Neon Low' },
+      { id: 'gemini-4-neon-medium', label: 'Medium', shortName: 'Neon Med' },
+      { id: 'gemini-4-neon-high', label: 'High', shortName: 'Neon High' },
+      { id: 'gemini-4-neon-xhigh', label: 'XHigh', shortName: 'Neon XHigh' }
+    ]
+  },
+  {
+    name: 'Gemini 4 Argon',
+    family: 'Argon',
+    color: '#38bdf8',
+    efforts: [
+      { id: 'gemini-4-argon-low', label: 'Low', shortName: 'Argon Low' },
+      { id: 'gemini-4-argon-medium', label: 'Medium', shortName: 'Argon Med' },
+      { id: 'gemini-4-argon-high', label: 'High', shortName: 'Argon High' }
+    ]
+  },
+  {
+    name: 'Gemini 4 Hydrogen',
+    family: 'Hydrogen',
+    color: '#34d399',
+    efforts: [
+      { id: 'gemini-4-hydrogen-low', label: 'Low', shortName: 'Hydrogen Low' },
+      { id: 'gemini-4-hydrogen-medium', label: 'Medium', shortName: 'Hydrogen Med' },
+      { id: 'gemini-4-hydrogen-high', label: 'High', shortName: 'Hydrogen High' },
+      { id: 'gemini-4-hydrogen-xhigh', label: 'XHigh', shortName: 'Hydrogen XHigh' }
+    ]
+  },
+  {
+    name: 'Gemini 3.8 Flash',
+    family: 'Gemini 3.8',
+    color: '#fbbf24',
+    efforts: [
+      { id: 'gemini-3.8-flash-low', label: 'Low', shortName: 'Flash 3.8 Low' },
+      { id: 'gemini-3.8-flash-medium', label: 'Medium', shortName: 'Flash 3.8 Med' },
+      { id: 'gemini-3.8-flash-high', label: 'High', shortName: 'Flash 3.8 High' }
+    ]
+  },
+  {
+    name: 'Claude Opus 5.5',
+    family: 'Claude',
+    color: '#c084fc',
+    efforts: [
+      { id: 'claude-opus-5-5-low', label: 'Low', shortName: 'Opus 5.5 Low' },
+      { id: 'claude-opus-5-5-medium', label: 'Medium', shortName: 'Opus 5.5 Med' },
+      { id: 'claude-opus-5-5-high', label: 'High', shortName: 'Opus 5.5 High' }
+    ]
+  },
+  {
+    name: 'Claude Sonnet 5.5',
+    family: 'Claude',
+    color: '#a78bfa',
+    efforts: [
+      { id: 'claude-sonnet-5-5-low', label: 'Low', shortName: 'Sonnet 5.5 Low' },
+      { id: 'claude-sonnet-5-5-medium', label: 'Medium', shortName: 'Sonnet 5.5 Med' },
+      { id: 'claude-sonnet-5-5-high', label: 'High', shortName: 'Sonnet 5.5 High' }
+    ]
+  },
+  {
+    name: 'GPT-OSS 120B',
+    family: 'OpenAI OSS',
+    color: '#f472b6',
+    efforts: [
+      { id: 'gpt-oss-120b-medium', label: 'Medium', shortName: 'GPT-OSS 120B' }
+    ]
+  },
+  {
+    name: 'Orchestrator (Neon)',
+    family: 'Neon',
+    color: '#a3e635',
+    efforts: [
+      { id: 'gemini-pro-orchestrator-neon', label: 'Standard', shortName: 'Orch. Neon' }
+    ]
+  },
+  {
+    name: 'Orchestrator (Argon)',
+    family: 'Argon',
+    color: '#38bdf8',
+    efforts: [
+      { id: 'gemini-pro-orchestrator-g1-pro', label: 'Standard', shortName: 'Orchestrator' }
+    ]
+  }
+];
+
+/**
+ * Full symmetrical catalog of supported models for Planner and Builder slots.
+ */
+const MODEL_CATALOG = [
+  {
+    id: 'gemini-4-neon-xhigh',
+    name: 'Gemini 4 Neon (XHigh)',
+    shortName: 'Neon XHigh',
+    family: 'Neon',
+    color: '#a3e635'
+  },
+  {
+    id: 'gemini-4-neon-high',
+    name: 'Gemini 4 Neon (High)',
+    shortName: 'Neon High',
+    family: 'Neon',
+    color: '#a3e635'
+  },
+  {
+    id: 'gemini-4-neon-medium',
+    name: 'Gemini 4 Neon (Medium)',
+    shortName: 'Neon Med',
+    family: 'Neon',
+    color: '#a3e635'
+  },
+  {
+    id: 'gemini-4-neon-low',
+    name: 'Gemini 4 Neon (Low)',
+    shortName: 'Neon Low',
+    family: 'Neon',
+    color: '#a3e635'
+  },
+  {
+    id: 'gemini-4-argon-high',
+    name: 'Gemini 4 Argon (High)',
+    shortName: 'Argon High',
+    family: 'Argon',
+    color: '#38bdf8'
+  },
+  {
+    id: 'gemini-4-argon-medium',
+    name: 'Gemini 4 Argon (Medium)',
+    shortName: 'Argon Med',
+    family: 'Argon',
+    color: '#38bdf8'
+  },
+  {
+    id: 'gemini-4-argon-low',
+    name: 'Gemini 4 Argon (Low)',
+    shortName: 'Argon Low',
+    family: 'Argon',
+    color: '#38bdf8'
+  },
+  {
+    id: 'gemini-4-hydrogen-xhigh',
+    name: 'Gemini 4 Hydrogen (XHigh)',
+    shortName: 'Hydrogen XHigh',
+    family: 'Hydrogen',
+    color: '#34d399'
+  },
+  {
+    id: 'gemini-4-hydrogen-high',
+    name: 'Gemini 4 Hydrogen (High)',
+    shortName: 'Hydrogen High',
+    family: 'Hydrogen',
+    color: '#34d399'
+  },
+  {
+    id: 'gemini-4-hydrogen-medium',
+    name: 'Gemini 4 Hydrogen (Medium)',
+    shortName: 'Hydrogen Med',
+    family: 'Hydrogen',
+    color: '#34d399'
+  },
+  {
+    id: 'gemini-4-hydrogen-low',
+    name: 'Gemini 4 Hydrogen (Low)',
+    shortName: 'Hydrogen Low',
+    family: 'Hydrogen',
+    color: '#34d399'
+  },
+  {
+    id: 'gemini-3.8-flash-high',
+    name: 'Gemini 3.8 Flash (High)',
+    shortName: 'Flash 3.8 High',
+    family: 'Gemini 3.8',
+    color: '#fbbf24'
+  },
+  {
+    id: 'gemini-3.8-flash-medium',
+    name: 'Gemini 3.8 Flash (Medium)',
+    shortName: 'Flash 3.8 Med',
+    family: 'Gemini 3.8',
+    color: '#fbbf24'
+  },
+  {
+    id: 'gemini-3.8-flash-low',
+    name: 'Gemini 3.8 Flash (Low)',
+    shortName: 'Flash 3.8 Low',
+    family: 'Gemini 3.8',
+    color: '#fbbf24'
+  },
+  {
+    id: 'claude-opus-5-5-high',
+    name: 'Claude Opus 5.5 (High)',
+    shortName: 'Opus 5.5 High',
+    family: 'Claude',
+    color: '#c084fc'
+  },
+  {
+    id: 'claude-opus-5-5-medium',
+    name: 'Claude Opus 5.5 (Medium)',
+    shortName: 'Opus 5.5 Med',
+    family: 'Claude',
+    color: '#c084fc'
+  },
+  {
+    id: 'claude-opus-5-5-low',
+    name: 'Claude Opus 5.5 (Low)',
+    shortName: 'Opus 5.5 Low',
+    family: 'Claude',
+    color: '#c084fc'
+  },
+  {
+    id: 'claude-sonnet-5-5-high',
+    name: 'Claude Sonnet 5.5 (High)',
+    shortName: 'Sonnet 5.5 High',
+    family: 'Claude',
+    color: '#a78bfa'
+  },
+  {
+    id: 'claude-sonnet-5-5-medium',
+    name: 'Claude Sonnet 5.5 (Medium)',
+    shortName: 'Sonnet 5.5 Med',
+    family: 'Claude',
+    color: '#a78bfa'
+  },
+  {
+    id: 'claude-sonnet-5-5-low',
+    name: 'Claude Sonnet 5.5 (Low)',
+    shortName: 'Sonnet 5.5 Low',
+    family: 'Claude',
+    color: '#a78bfa'
+  },
+  {
+    id: 'gpt-oss-120b-medium',
+    name: 'GPT-OSS 120B (Medium)',
+    shortName: 'GPT-OSS 120B',
+    family: 'OpenAI OSS',
+    color: '#f472b6'
+  },
+  {
+    id: 'gemini-pro-orchestrator-neon',
+    name: 'Orchestrator (Neon)',
+    shortName: 'Orch. Neon',
+    family: 'Neon',
+    color: '#a3e635'
+  },
+  {
+    id: 'gemini-pro-orchestrator-g1-pro',
+    name: 'Orchestrator (Argon)',
+    shortName: 'Orchestrator',
+    family: 'Argon',
+    color: '#38bdf8'
+  }
+];
+
+/**
+ * Normalizes live Antigravity native model selector data (modelOptions, effortIndex, groups)
+ * into canonical BASE_MODELS, MODEL_CATALOG, and disabledModels collections.
+ * Self-contained so it can be serialized and injected directly into the Electron renderer.
+ * @param {Array<Object>} rawOptions
+ * @param {Map|Object|null} [effortIndex]
+ * @param {Array<Object>} [groups]
+ * @returns {{ baseModels: Array<Object>, modelCatalog: Array<Object>, disabledModels: Array<Object>, totalBaseModels: number, totalModels: number }}
+ */
+function normalizeNativeModelCatalog(rawOptions = [], effortIndex = null, groups = []) {
+  const effortOrder = {
+    minimal: 0,
+    low: 1,
+    medium: 2,
+    high: 3,
+    xhigh: 4,
+    max: 5,
+    standard: 6
+  };
+  const effortDisplay = {
+    minimal: 'Minimal',
+    low: 'Low',
+    medium: 'Medium',
+    high: 'High',
+    xhigh: 'XHigh',
+    max: 'Max',
+    standard: 'Standard'
+  };
+  const effortShort = {
+    minimal: 'Min',
+    low: 'Low',
+    medium: 'Med',
+    high: 'High',
+    xhigh: 'XHigh',
+    max: 'Max',
+    standard: ''
+  };
+  const fallbackPalette = ['#22d3ee', '#fb923c', '#f43f5e', '#818cf8', '#2dd4bf', '#e879f9'];
+
+  const resolveStyle = (baseName) => {
+    const lower = String(baseName || '').toLowerCase();
+    if (lower.includes('neon')) return { family: 'Neon', color: '#a3e635' };
+    if (lower.includes('argon')) return { family: 'Argon', color: '#38bdf8' };
+    if (lower.includes('hydrogen')) return { family: 'Hydrogen', color: '#34d399' };
+    if (lower.includes('carbon')) return { family: 'Carbon', color: '#94a3b8' };
+    if (lower.includes('flash')) return { family: 'Gemini 3.8', color: '#fbbf24' };
+    if (lower.includes('opus')) return { family: 'Claude', color: '#c084fc' };
+    if (lower.includes('sonnet')) return { family: 'Claude', color: '#a78bfa' };
+    if (lower.includes('claude')) return { family: 'Claude', color: '#c084fc' };
+    if (lower.includes('gpt-oss') || lower.includes('openai')) return { family: 'OpenAI OSS', color: '#f472b6' };
+    let hash = 0;
+    for (let i = 0; i < lower.length; i++) {
+      hash = ((hash << 5) - hash + lower.charCodeAt(i)) | 0;
+    }
+    const color = fallbackPalette[Math.abs(hash) % fallbackPalette.length];
+    return { family: String(baseName || 'Custom').split(/\s+/)[0] || 'Custom', color };
+  };
+
+  const makeShortBase = (baseName, modelId) => {
+    const name = String(baseName || '').trim();
+    if (modelId === 'gemini-pro-orchestrator-g1-pro') return 'Orchestrator';
+    const orchMatch = name.match(/^Orchestrator\s*\(([^)]+)\)$/i);
+    if (orchMatch) return `Orch. ${orchMatch[1].trim()}`;
+    if (/^Gemini\s+4\s+/i.test(name)) return name.replace(/^Gemini\s+4\s+/i, '').trim();
+    if (/^Gemini\s+([\d.]+)\s+Flash$/i.test(name)) {
+      const m = name.match(/^Gemini\s+([\d.]+)\s+Flash$/i);
+      return `Flash ${m[1]}`;
+    }
+    if (/^Claude\s+/i.test(name)) return name.replace(/^Claude\s+/i, '').trim();
+    return name;
+  };
+
+  const parseLabelAndEffort = (rawLabel, rawEffortHint) => {
+    const label = String(rawLabel || '').trim();
+    const hint = rawEffortHint ? String(rawEffortHint).trim().toLowerCase() : '';
+    const knownEfforts = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+    const parenMatch = label.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
+    if (parenMatch) {
+      const candidateBase = parenMatch[1].trim();
+      const candidateEffort = parenMatch[2].trim();
+      const lowerEff = candidateEffort.toLowerCase();
+      if (knownEfforts.includes(lowerEff) || (hint && lowerEff === hint)) {
+        return {
+          baseName: candidateBase,
+          effortKey: lowerEff,
+          effortLabel: effortDisplay[lowerEff] || candidateEffort
+        };
+      }
+    }
+    if (hint && knownEfforts.includes(hint)) {
+      return {
+        baseName: label,
+        effortKey: hint,
+        effortLabel: effortDisplay[hint] || hint
+      };
+    }
+    return {
+      baseName: label,
+      effortKey: 'standard',
+      effortLabel: 'Standard'
+    };
+  };
+
+  const combinedRaw = [];
+  const seenIds = new Set();
+  const pushOption = (opt) => {
+    if (!opt || typeof opt !== 'object') return;
+    const id = String(opt.modelId || opt.id || '').trim();
+    if (!id || seenIds.has(id)) return;
+    seenIds.add(id);
+    combinedRaw.push(opt);
+  };
+
+  if (Array.isArray(rawOptions)) {
+    for (const opt of rawOptions) pushOption(opt);
+  }
+  if (Array.isArray(groups)) {
+    for (const grp of groups) {
+      if (grp && Array.isArray(grp.options)) {
+        for (const opt of grp.options) pushOption(opt);
+      }
+    }
+  }
+
+  const disabledModels = [];
+  const baseMap = new Map();
+  const baseOrder = [];
+
+  const ensureBase = (baseName, description, tagTitle) => {
+    if (!baseMap.has(baseName)) {
+      const style = resolveStyle(baseName);
+      baseMap.set(baseName, {
+        name: baseName,
+        family: style.family,
+        color: style.color,
+        tagTitle: tagTitle || '',
+        description: description || '',
+        efforts: []
+      });
+      baseOrder.push(baseName);
+    } else {
+      const entry = baseMap.get(baseName);
+      if (!entry.description && description) entry.description = description;
+      if (!entry.tagTitle && tagTitle) entry.tagTitle = tagTitle;
+    }
+    return baseMap.get(baseName);
+  };
+
+  // Preserve group display order for base models first
+  if (Array.isArray(groups)) {
+    for (const grp of groups) {
+      if (!grp || !Array.isArray(grp.options)) continue;
+      for (const opt of grp.options) {
+        if (!opt || opt.disabled) continue;
+        const parsed = parseLabelAndEffort(opt.label || opt.name, opt.effort || opt.effortLabel);
+        if (parsed.baseName) {
+          ensureBase(parsed.baseName, opt.tagDescription || '', opt.tagTitle || '');
+        }
+      }
+    }
+  }
+
+  // Build lookup of effort hints from Antigravity's native effortIndex if provided
+  const effortHintById = new Map();
+  if (effortIndex && typeof effortIndex === 'object') {
+    const entries = effortIndex instanceof Map
+      ? Array.from(effortIndex.entries())
+      : Object.entries(effortIndex);
+    for (const [baseKey, list] of entries) {
+      if (list instanceof Map) {
+        for (const [effKey, item] of list.entries()) {
+          if (item && (item.modelId || item.id)) {
+            effortHintById.set(String(item.modelId || item.id), { baseName: baseKey, effort: effKey });
+          }
+        }
+      } else if (Array.isArray(list)) {
+        for (const item of list) {
+          if (item && (item.modelId || item.id)) {
+            effortHintById.set(String(item.modelId || item.id), {
+              baseName: baseKey,
+              effort: item.effort || item.effortLabel || ''
+            });
+          }
+        }
+      }
+    }
+  }
+
+  for (const opt of combinedRaw) {
+    const id = String(opt.modelId || opt.id || '').trim();
+    const rawLabel = String(opt.label || opt.name || id).trim();
+    if (opt.disabled) {
+      disabledModels.push({
+        id,
+        name: rawLabel,
+        tagTitle: String(opt.tagTitle || 'Unavailable'),
+        description: String(opt.tagDescription || '')
+      });
+      continue;
+    }
+
+    const hint = effortHintById.get(id);
+    const parsed = parseLabelAndEffort(rawLabel, hint ? hint.effort : (opt.effort || opt.effortLabel));
+    const hintBase = (hint && hint.baseName) ? String(hint.baseName).trim() : '';
+    const isSlugHint = /^[a-z0-9._-]+$/.test(hintBase) && !/\s/.test(hintBase);
+    const baseName = (!isSlugHint && hintBase) ? hintBase : (parsed.baseName || hintBase);
+    const baseEntry = ensureBase(baseName, opt.tagDescription || '', opt.tagTitle || '');
+
+    if (!baseEntry.efforts.some(e => e.id === id)) {
+      const shortBase = makeShortBase(baseName, id);
+      const effShort = effortShort[parsed.effortKey] !== undefined ? effortShort[parsed.effortKey] : parsed.effortLabel;
+      const isSingleStandalone = parsed.effortKey === 'standard' || /^GPT-OSS/i.test(baseName);
+      const shortName = isSingleStandalone ? shortBase : `${shortBase} ${effShort}`.trim();
+
+      baseEntry.efforts.push({
+        id,
+        label: parsed.effortLabel,
+        shortName,
+        effortKey: parsed.effortKey,
+        nativeLabel: rawLabel,
+        value: typeof opt.value === 'number' ? opt.value : undefined
+      });
+    }
+  }
+
+  const baseModels = [];
+  const modelCatalog = [];
+
+  for (const baseName of baseOrder) {
+    const entry = baseMap.get(baseName);
+    if (!entry || entry.efforts.length === 0) continue;
+
+    entry.efforts.sort((a, b) => {
+      const oa = effortOrder[a.effortKey] ?? 99;
+      const ob = effortOrder[b.effortKey] ?? 99;
+      if (oa !== ob) return oa - ob;
+      return a.label.localeCompare(b.label);
+    });
+
+    const cleanEfforts = entry.efforts.map(e => ({
+      id: e.id,
+      label: e.label,
+      shortName: e.shortName
+    }));
+
+    baseModels.push({
+      name: entry.name,
+      family: entry.family,
+      color: entry.color,
+      ...(entry.tagTitle ? { tagTitle: entry.tagTitle } : {}),
+      ...(entry.description ? { description: entry.description } : {}),
+      efforts: cleanEfforts
+    });
+
+    // Populate flat catalog with highest effort first for consistent default lookup
+    for (let i = entry.efforts.length - 1; i >= 0; i--) {
+      const e = entry.efforts[i];
+      const fullName = e.nativeLabel || (e.effortKey === 'standard' ? entry.name : `${entry.name} (${e.label})`);
+      modelCatalog.push({
+        id: e.id,
+        name: fullName,
+        shortName: e.shortName,
+        family: entry.family,
+        color: entry.color
+      });
+    }
+  }
+
+  return {
+    baseModels,
+    modelCatalog,
+    disabledModels,
+    totalBaseModels: baseModels.length,
+    totalModels: modelCatalog.length
+  };
+}
+
+/**
+ * Default assignments for Planner and Builder slots.
+ */
+const DEFAULT_MODEL_SLOTS = {
+  planner: 'gemini-4-argon-high',
+  builder: 'gemini-4-hydrogen-high'
+};
+
+/**
+ * Finds a model in the catalog by its id, or falls back to the first catalog entry.
+ * @param {string} modelId
+ * @param {Array<Object>} [catalog=MODEL_CATALOG]
+ * @returns {Object}
+ */
+function getModelById(modelId, catalog) {
+  if (catalog && Array.isArray(catalog)) {
+    if (catalog[0] && catalog[0].efforts) {
+      for (const bm of catalog) {
+        const found = bm.efforts.find(e => e.id === modelId);
+        if (found) {
+          return {
+            id: found.id,
+            name: `${bm.name} (${found.label})`,
+            shortName: found.shortName,
+            family: bm.family,
+            color: bm.color
+          };
+        }
+      }
+    } else {
+      const match = catalog.find(m => m.id === modelId);
+      if (match) return match;
+    }
+  }
+
+  const list = (typeof window !== 'undefined' && window.__MODEL_CATALOG) || (typeof MODEL_CATALOG !== 'undefined' ? MODEL_CATALOG : []);
+  const fromCatalog = list.find(m => m.id === modelId);
+  if (fromCatalog) return fromCatalog;
+
+  for (const bm of BASE_MODELS) {
+    const found = bm.efforts.find(e => e.id === modelId);
+    if (found) {
+      return {
+        id: found.id,
+        name: `${bm.name} (${found.label})`,
+        shortName: found.shortName,
+        family: bm.family,
+        color: bm.color
+      };
+    }
+  }
+
+  return list[0];
+}
+
+/**
+ * Renders the dual menubar buttons for Planner and Builder slots
+ * along with the Planner-to-Chat synchronization button.
+ * @param {Object} [slots=DEFAULT_MODEL_SLOTS]
+ * @param {Array<Object>} [catalog]
+ * @returns {string}
+ */
+function renderModelSlotsMenubarHtml(slots = DEFAULT_MODEL_SLOTS, catalog) {
+  const currentSlots = slots || DEFAULT_MODEL_SLOTS;
+  const plannerId = currentSlots.planner || DEFAULT_MODEL_SLOTS.planner;
+  const builderId = currentSlots.builder || DEFAULT_MODEL_SLOTS.builder;
+  const planner = getModelById(plannerId, catalog);
+  const builder = getModelById(builderId, catalog);
+  const isSynced = currentSlots.lockNative !== false && !currentSlots.plannerSyncBroken;
+  const syncTitle = isSynced
+    ? `Chat synced with Planner (${planner.name}) - Click to re-sync`
+    : `Sync broken - Click to sync chat back to Planner (${planner.name})`;
+
+  return `
+    <div class="antigravity-model-slots-group" id="antigravity-model-slots-group">
+      <button 
+        type="button"
+        id="antigravity-model-slot-planner" 
+        class="antigravity-model-slot-btn${isSynced ? '' : ' is-desynced'}" 
+        data-slot-role="planner" 
+        data-model-id="${planner.id}" 
+        title="Planner Model: ${planner.name}"
+      >
+        <span class="model-slot-dot" style="background-color: ${planner.color}; box-shadow: 0 0 6px ${planner.color}88;"></span>
+        <span class="model-slot-role">Plan:</span>
+        <span class="model-slot-value">${planner.shortName}</span>
+        <span class="model-slot-caret">▼</span>
+      </button>
+      <button
+        type="button"
+        id="antigravity-planner-sync-btn"
+        class="antigravity-planner-sync-btn ${isSynced ? 'is-synced' : 'is-desynced'}"
+        data-sync-state="${isSynced ? 'synced' : 'desynced'}"
+        aria-pressed="${isSynced ? 'true' : 'false'}"
+        aria-label="Sync chat model with Planner"
+        title="${syncTitle}"
+      >
+        <svg aria-hidden="true" class="planner-sync-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
+      </button>
+      <button 
+        type="button"
+        id="antigravity-model-slot-builder" 
+        class="antigravity-model-slot-btn" 
+        data-slot-role="builder" 
+        data-model-id="${builder.id}" 
+        title="Builder Model: ${builder.name}"
+      >
+        <span class="model-slot-dot" style="background-color: ${builder.color}; box-shadow: 0 0 6px ${builder.color}88;"></span>
+        <span class="model-slot-role">Build:</span>
+        <span class="model-slot-value">${builder.shortName}</span>
+        <span class="model-slot-caret">▼</span>
+      </button>
+    </div>
+  `.trim();
+}
+
+/**
+ * Packages base models into compact provider/family packs for collapsible accordion rendering.
+ * Self-contained so it can be serialized into the Electron renderer.
+ * @param {Array<Object>} baseModels
+ * @returns {Array<{ id: string, label: string, color: string, models: Array<Object> }>}
+ */
+function groupBaseModelsIntoPacks(baseModels = []) {
+  const list = Array.isArray(baseModels) ? baseModels : [];
+  const packMap = new Map();
+  const packOrder = [];
+
+  const classifyPack = (bm) => {
+    const name = String(bm?.name || '');
+    const lower = name.toLowerCase();
+    const fam = String(bm?.family || '').toLowerCase();
+    if (lower.startsWith('orchestrator')) {
+      return { id: 'orchestrators', label: 'Orchestrators', color: '#38bdf8' };
+    }
+    if (lower.startsWith('gemini') || fam === 'neon' || fam === 'carbon' || fam === 'argon' || fam === 'hydrogen' || fam.includes('gemini')) {
+      return { id: 'gemini', label: 'Gemini', color: '#a3e635' };
+    }
+    if (lower.startsWith('claude') || fam === 'claude') {
+      return { id: 'claude', label: 'Claude', color: '#c084fc' };
+    }
+    if (lower.includes('gpt-oss') || fam.includes('openai')) {
+      return { id: 'openai-oss', label: 'OpenAI OSS', color: '#f472b6' };
+    }
+    const label = bm?.family || name.split(/\s+/)[0] || 'Other';
+    const id = label.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'other';
+    return { id, label, color: bm?.color || '#38bdf8' };
+  };
+
+  const formatCompactName = (bm, packId) => {
+    const name = String(bm?.name || '').trim();
+    if (packId === 'gemini') {
+      return name.replace(/^Gemini\s+/i, '').trim() || name;
+    }
+    if (packId === 'orchestrators') {
+      const m = name.match(/^Orchestrator\s*\(([^)]+)\)$/i);
+      return m ? m[1].trim() : name;
+    }
+    if (packId === 'claude') {
+      return name.replace(/^Claude\s+/i, '').trim() || name;
+    }
+    return name;
+  };
+
+  for (const bm of list) {
+    if (!bm || !Array.isArray(bm.efforts) || bm.efforts.length === 0) continue;
+    const meta = classifyPack(bm);
+    if (!packMap.has(meta.id)) {
+      packMap.set(meta.id, {
+        id: meta.id,
+        label: meta.label,
+        color: meta.color,
+        models: []
+      });
+      packOrder.push(meta.id);
+    }
+    packMap.get(meta.id).models.push({
+      ...bm,
+      compactName: formatCompactName(bm, meta.id)
+    });
+  }
+
+  return packOrder.map(id => packMap.get(id));
+}
+
+/**
+ * Renders packaged hierarchical dropdown markup with collapsible family packs and flyout effort submenus.
+ * @param {'planner'|'builder'} role
+ * @param {string} selectedModelId
+ * @param {Array<Object>} [catalog=BASE_MODELS]
+ * @param {Object} [options]
+ * @param {boolean} [options.lockNative=true]
+ * @returns {string} Clean HTML without any emojis
+ */
+function renderModelSlotDropdownHtml(role, selectedModelId, catalog, options = {}) {
+  const baseModels = (catalog && Array.isArray(catalog) && catalog[0] && catalog[0].efforts)
+    ? catalog
+    : ((typeof window !== 'undefined' && window.__BASE_MODELS) || BASE_MODELS);
+  const isPlanner = role === 'planner';
+  const headerTitle = isPlanner ? 'Select Planner Model' : 'Select Builder Model';
+  const roleLabel = isPlanner ? 'PLANNER' : 'BUILDER';
+  const roleDesc = isPlanner ? 'Architecture, planning & chat sync' : 'Fast code edits & subagents';
+  const lockNative = options.lockNative !== false;
+
+  const packFn = typeof groupBaseModelsIntoPacks === 'function'
+    ? groupBaseModelsIntoPacks
+    : (typeof window !== 'undefined' && typeof window.__groupBaseModelsIntoPacks === 'function'
+      ? window.__groupBaseModelsIntoPacks
+      : null);
+
+  const packs = packFn
+    ? packFn(baseModels)
+    : [{ id: 'all', label: 'Models', color: '#38bdf8', models: baseModels.map(m => ({ ...m, compactName: m.name })) }];
+
+  const packsHtml = packs.map((pack, idx) => {
+    let activeModelInPack = null;
+    for (const bm of pack.models) {
+      const found = bm.efforts.find(e => e.id === selectedModelId);
+      if (found) {
+        activeModelInPack = { bm, eff: found };
+        break;
+      }
+    }
+    const isExpanded = Boolean(activeModelInPack) || (idx === 0 && !packs.some(p => p.models.some(m => m.efforts.some(e => e.id === selectedModelId))));
+
+    const rowsHtml = pack.models.map(bm => {
+      const activeEffort = bm.efforts.find(e => e.id === selectedModelId);
+      const isModelActive = Boolean(activeEffort);
+      const singleEffortId = bm.efforts.length === 1 ? bm.efforts[0].id : '';
+      const displayName = bm.compactName || bm.name;
+
+      const effortOptionsHtml = bm.efforts.map(eff => {
+        const isEffortActive = eff.id === selectedModelId;
+        return `
+          <button 
+            type="button" 
+            class="model-effort-option${isEffortActive ? ' active' : ''}" 
+            data-slot-role="${role}" 
+            data-model-id="${eff.id}" 
+            title="${bm.name} - ${eff.label}"
+          >
+            <span class="model-effort-name">${eff.label}</span>
+            <span class="model-effort-check">${isEffortActive ? '✓' : ''}</span>
+          </button>
+        `.trim();
+      }).join('\n');
+
+      return `
+        <div 
+          class="model-slot-row${isModelActive ? ' active' : ''}" 
+          data-slot-role="${role}"
+          ${singleEffortId ? `data-model-id="${singleEffortId}"` : ''}
+          data-base-model="${bm.name}"
+        >
+          <div class="model-slot-row-left">
+            <span class="model-slot-row-dot" style="background-color: ${bm.color}; box-shadow: 0 0 6px ${bm.color}66;"></span>
+            <span class="model-slot-row-name">${displayName}</span>
+          </div>
+          <div class="model-slot-row-right">
+            ${activeEffort ? `<span class="model-slot-active-badge">${activeEffort.label}</span>` : ''}
+            <span class="model-slot-chevron">&#8250;</span>
+          </div>
+          <div class="model-slot-submenu">
+            ${effortOptionsHtml}
+          </div>
+        </div>
+      `.trim();
+    }).join('\n');
+
+    return `
+      <div class="model-pack${isExpanded ? ' expanded' : ''}${activeModelInPack ? ' has-active' : ''}" data-pack-id="${pack.id}">
+        <button type="button" class="model-pack-header" data-pack-id="${pack.id}" aria-expanded="${isExpanded ? 'true' : 'false'}">
+          <span class="model-pack-header-left">
+            <span class="model-pack-dot" style="background-color: ${pack.color};"></span>
+            <span class="model-pack-title">${pack.label}</span>
+            <span class="model-pack-count">${pack.models.length}</span>
+          </span>
+          <span class="model-pack-header-right">
+            ${activeModelInPack ? `<span class="model-pack-active-pill">${activeModelInPack.eff.shortName}</span>` : ''}
+            <span class="model-pack-caret">&#9656;</span>
+          </span>
+        </button>
+        <div class="model-pack-body">
+          ${rowsHtml}
+        </div>
+      </div>
+    `.trim();
+  }).join('\n');
+
+  const lockToggleHtml = isPlanner
+    ? `
+      <button
+        type="button"
+        id="antigravity-model-lock-toggle"
+        class="model-slot-lock-toggle${lockNative ? ' locked' : ' desynced'}"
+        data-lock-toggle="true"
+        data-locked="${lockNative ? 'true' : 'false'}"
+        aria-pressed="${lockNative ? 'true' : 'false'}"
+        title="${lockNative ? 'Chat synced with Planner slot. Change model in chat anytime to override.' : 'Sync broken by manual chat selection. Click to sync back to Planner slot.'}"
+      >
+        <span class="model-lock-dot"></span>
+        <span class="model-lock-label">${lockNative ? 'Chat Synced' : 'Sync Planner'}</span>
+      </button>
+    `.trim()
+    : '';
+
+  return `
+    <div class="model-slot-dropdown-header">
+      <div class="model-slot-dropdown-title-row">
+        <span class="model-slot-dropdown-title">${headerTitle}</span>
+        <span class="model-slot-dropdown-role-badge ${role}">${roleLabel}</span>
+      </div>
+      <div class="model-slot-dropdown-meta-row">
+        <span class="model-slot-dropdown-sub">${roleDesc}</span>
+        ${lockToggleHtml}
+      </div>
+    </div>
+    <div class="model-slot-options-list">
+      ${packsHtml}
+    </div>
+  `.trim();
+}
+
+/**
+ * Renders the model badge pill for subagent footers.
+ * @param {string} modelId
+ * @param {Array<Object>} [catalog=MODEL_CATALOG]
+ * @returns {string} Clean HTML without any emojis
+ */
+function renderSubagentModelPill(modelId, catalog) {
+  const getFn = typeof getModelById === 'function'
+    ? getModelById
+    : (typeof window !== 'undefined' && typeof window.__getModelById === 'function' ? window.__getModelById : null);
+  const model = (getFn ? getFn(modelId, catalog) : null) || { id: modelId, name: modelId, shortName: modelId, color: '#34d399' };
+  return `
+    <span 
+      id="antigravity-subagent-model-pill" 
+      class="antigravity-subagent-model-pill" 
+      data-model-id="${model.id}" 
+      title="Subagent Builder Model: ${model.name}" 
+      style="border-color: ${model.color}55; background: ${model.color}18; color: ${model.color};"
+    >
+      <span class="subagent-model-dot" style="background: ${model.color}; box-shadow: 0 0 5px ${model.color};"></span>
+      <span class="subagent-model-label">${model.shortName}</span>
+    </span>
+  `.trim();
+}
+
+
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
+
+
+
+
+
+
+
+
+/**
+ * Mod providing dual menubar selectors for Planner and Builder model slots.
+ */
+class ModelSlotsMod extends AntigravityMod {
+  constructor() {
+    super({
+      id: 'model-slots',
+      name: 'Planner & Builder Model Slots',
+      version: '1.0.0',
+      slot: 'menubar-actions',
+      priority: 90
+    });
+
+    this.cachedCss = "/* =========================================================================\r\n   ANTIGRAVITY PLANNER & BUILDER MODEL SLOTS MOD - STYLES\r\n   ========================================================================= */\r\n\r\n/* Menubar Buttons Container */\r\n#antigravity-model-slots-group,\r\n.antigravity-model-slots-group {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  flex-shrink: 0 !important;\r\n  white-space: nowrap !important;\r\n  transform: none !important;\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n  user-select: none !important;\r\n}\r\n\r\n/* Individual Slot Selector Button */\r\n.antigravity-model-slot-btn {\r\n  height: 26px !important;\r\n  padding: 0 8px !important;\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  color: rgba(255, 255, 255, 0.85) !important;\r\n  background: rgba(255, 255, 255, 0.04) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  flex-shrink: 0 !important;\r\n  white-space: nowrap !important;\r\n  transition: background-color 0.12s ease, border-color 0.12s ease !important;\r\n  transform: none !important;\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n  user-select: none !important;\r\n  line-height: 1 !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n#antigravity-model-slot-planner,\r\n#antigravity-model-slot-builder {\r\n  flex-shrink: 0 !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.antigravity-model-slot-btn.is-desynced {\r\n  border-color: rgba(245, 158, 11, 0.45) !important;\r\n}\r\n\r\n/* Planner-to-Chat Sync Button (Menubar) */\r\n.antigravity-planner-sync-btn {\r\n  height: 26px !important;\r\n  min-width: 26px !important;\r\n  padding: 0 6px !important;\r\n  border-radius: 6px !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.28) !important;\r\n  background: rgba(56, 189, 248, 0.08) !important;\r\n  color: #38bdf8 !important;\r\n  cursor: pointer !important;\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  flex-shrink: 0 !important;\r\n  box-sizing: border-box !important;\r\n  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease !important;\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n  user-select: none !important;\r\n}\r\n\r\n.antigravity-planner-sync-btn:hover {\r\n  background: rgba(56, 189, 248, 0.16) !important;\r\n  border-color: rgba(56, 189, 248, 0.5) !important;\r\n  color: #7dd3fc !important;\r\n}\r\n\r\n.antigravity-planner-sync-btn:focus-visible {\r\n  outline: 2px solid #38bdf8 !important;\r\n  outline-offset: 2px !important;\r\n}\r\n\r\n.antigravity-planner-sync-btn.is-desynced {\r\n  background: rgba(245, 158, 11, 0.18) !important;\r\n  border-color: rgba(245, 158, 11, 0.55) !important;\r\n  color: #fbbf24 !important;\r\n  box-shadow: 0 0 8px rgba(245, 158, 11, 0.25) !important;\r\n}\r\n\r\n.antigravity-planner-sync-btn.is-desynced:hover {\r\n  background: rgba(245, 158, 11, 0.28) !important;\r\n  border-color: rgba(245, 158, 11, 0.8) !important;\r\n  color: #fde68a !important;\r\n}\r\n\r\n.antigravity-planner-sync-btn .planner-sync-icon {\r\n  pointer-events: none !important;\r\n  display: block !important;\r\n}\r\n\r\n.antigravity-model-slot-btn.compact {\r\n  height: 22px !important;\r\n  padding: 2px 6px !important;\r\n  font-size: 11px !important;\r\n  gap: 4px !important;\r\n}\r\n\r\n@media (max-width: 1100px) {\r\n  #antigravity-mod-model-slots .antigravity-model-slot-btn,\r\n  .antigravity-model-slot-btn {\r\n    height: 22px !important;\r\n    padding: 2px 6px !important;\r\n    font-size: 11px !important;\r\n    gap: 4px !important;\r\n  }\r\n\r\n  #antigravity-mod-model-slots .antigravity-model-slot-btn .model-slot-role,\r\n  .antigravity-model-slot-btn .model-slot-role {\r\n    font-size: 9.5px !important;\r\n  }\r\n}\r\n\r\n.antigravity-model-slot-btn:hover {\r\n  background: rgba(255, 255, 255, 0.09) !important;\r\n  border-color: rgba(255, 255, 255, 0.22) !important;\r\n  color: #ffffff !important;\r\n  transform: none !important;\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n}\r\n\r\n.antigravity-model-slot-btn.open {\r\n  background: rgba(255, 255, 255, 0.13) !important;\r\n  border-color: rgba(56, 189, 248, 0.45) !important;\r\n  color: #ffffff !important;\r\n  box-shadow: 0 0 10px rgba(56, 189, 248, 0.15) !important;\r\n}\r\n\r\n/* Menubar Button Elements */\r\n.antigravity-model-slot-btn .model-slot-dot {\r\n  width: 6px !important;\r\n  height: 6px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.antigravity-model-slot-btn .model-slot-role {\r\n  font-weight: 600 !important;\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.5) !important;\r\n  text-transform: uppercase !important;\r\n  letter-spacing: 0.3px !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.antigravity-model-slot-btn .model-slot-value {\r\n  font-weight: 500 !important;\r\n  color: #ffffff !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.antigravity-model-slot-btn .model-slot-caret {\r\n  font-size: 8px !important;\r\n  opacity: 0.5 !important;\r\n  pointer-events: none !important;\r\n  margin-left: 1px !important;\r\n}\r\n\r\n/* Floating Portal Dropdown */\r\n.antigravity-model-slot-dropdown-portal {\r\n  position: fixed !important;\r\n  z-index: 1000001 !important;\r\n  width: 250px !important;\r\n  max-height: none !important;\r\n  overflow: visible !important;\r\n  background: #161822 !important;\r\n  background-color: #161822 !important;\r\n  background-image: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  opacity: 1 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  border-radius: 12px !important;\r\n  box-shadow: 0 24px 60px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 10px !important;\r\n  color: #c0caf5 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  display: none;\r\n  flex-direction: column !important;\r\n  box-sizing: border-box !important;\r\n  animation: modelSlotPopIn 0.15s cubic-bezier(0, 0, 0.2, 1) forwards;\r\n}\r\n\r\n.antigravity-model-slot-dropdown-portal.open {\r\n  display: flex !important;\r\n}\r\n\r\n@keyframes modelSlotPopIn {\r\n  from {\r\n    opacity: 0;\r\n    transform: translateY(-5px) scale(0.98);\r\n  }\r\n  to {\r\n    opacity: 1;\r\n    transform: translateY(0) scale(1);\r\n  }\r\n}\r\n\r\n/* Dropdown Header */\r\n.model-slot-dropdown-header {\r\n  padding-bottom: 8px !important;\r\n  margin-bottom: 8px !important;\r\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 2px !important;\r\n}\r\n\r\n.model-slot-dropdown-title-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n}\r\n\r\n.model-slot-dropdown-title {\r\n  font-size: 13px !important;\r\n  font-weight: 700 !important;\r\n  color: #ffffff !important;\r\n  letter-spacing: -0.2px !important;\r\n}\r\n\r\n.model-slot-dropdown-role-badge {\r\n  font-size: 9px !important;\r\n  font-weight: 700 !important;\r\n  letter-spacing: 0.4px !important;\r\n  padding: 1px 6px !important;\r\n  border-radius: 4px !important;\r\n  text-transform: uppercase !important;\r\n}\r\n\r\n.model-slot-dropdown-role-badge.planner {\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.model-slot-dropdown-role-badge.builder {\r\n  background: rgba(52, 211, 153, 0.15) !important;\r\n  color: #34d399 !important;\r\n  border: 1px solid rgba(52, 211, 153, 0.3) !important;\r\n}\r\n\r\n.model-slot-dropdown-sub {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n}\r\n\r\n.model-slot-dropdown-meta-row {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  gap: 6px !important;\r\n  margin-top: 2px !important;\r\n}\r\n\r\n.model-slot-lock-toggle {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  padding: 2px 6px !important;\r\n  border-radius: 4px !important;\r\n  font-size: 9.5px !important;\r\n  font-weight: 600 !important;\r\n  cursor: pointer !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  color: rgba(255, 255, 255, 0.65) !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\r\n  font-family: inherit !important;\r\n  white-space: nowrap !important;\r\n  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease !important;\r\n}\r\n\r\n.model-slot-lock-toggle:hover {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.model-slot-lock-toggle.locked {\r\n  background: rgba(56, 189, 248, 0.14) !important;\r\n  color: #38bdf8 !important;\r\n  border-color: rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.model-slot-lock-toggle.desynced {\r\n  background: rgba(245, 158, 11, 0.16) !important;\r\n  color: #fbbf24 !important;\r\n  border-color: rgba(245, 158, 11, 0.45) !important;\r\n}\r\n\r\n.model-slot-lock-toggle.desynced:hover {\r\n  background: rgba(245, 158, 11, 0.26) !important;\r\n  border-color: rgba(245, 158, 11, 0.7) !important;\r\n  color: #fde68a !important;\r\n}\r\n\r\n.model-slot-lock-toggle .model-lock-dot {\r\n  width: 5px !important;\r\n  height: 5px !important;\r\n  border-radius: 50% !important;\r\n  background: rgba(255, 255, 255, 0.4) !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-lock-toggle.locked .model-lock-dot {\r\n  background: #38bdf8 !important;\r\n  box-shadow: 0 0 5px #38bdf8 !important;\r\n}\r\n\r\n.model-slot-lock-toggle.desynced .model-lock-dot {\r\n  background: #f59e0b !important;\r\n  box-shadow: 0 0 5px #f59e0b !important;\r\n}\r\n\r\n.model-slot-lock-toggle .model-lock-label {\r\n  pointer-events: none !important;\r\n}\r\n\r\n/* Packaged Collapsible Model Packs */\r\n.model-slot-options-list {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 4px !important;\r\n  overflow: visible !important;\r\n}\r\n\r\n.model-pack {\r\n  border: 1px solid rgba(255, 255, 255, 0.06) !important;\r\n  border-radius: 8px !important;\r\n  background: rgba(255, 255, 255, 0.02) !important;\r\n  overflow: visible !important;\r\n}\r\n\r\n.model-pack.has-active {\r\n  border-color: rgba(56, 189, 248, 0.2) !important;\r\n}\r\n\r\n.model-pack-header {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 5px 8px !important;\r\n  background: transparent !important;\r\n  border: none !important;\r\n  border-radius: 7px !important;\r\n  cursor: pointer !important;\r\n  color: rgba(255, 255, 255, 0.78) !important;\r\n  font-family: inherit !important;\r\n  box-sizing: border-box !important;\r\n  transition: background-color 0.12s ease !important;\r\n}\r\n\r\n.model-pack-header:hover {\r\n  background: rgba(255, 255, 255, 0.06) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.model-pack-header-left {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  min-width: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-pack-dot {\r\n  width: 6px !important;\r\n  height: 6px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n}\r\n\r\n.model-pack-title {\r\n  font-size: 11px !important;\r\n  font-weight: 700 !important;\r\n  letter-spacing: 0.2px !important;\r\n  color: #e2e8f0 !important;\r\n}\r\n\r\n.model-pack-count {\r\n  font-size: 9.5px !important;\r\n  font-weight: 600 !important;\r\n  padding: 0 5px !important;\r\n  border-radius: 999px !important;\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  color: rgba(255, 255, 255, 0.55) !important;\r\n}\r\n\r\n.model-pack-header-right {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 5px !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-pack-active-pill {\r\n  font-size: 9.5px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  max-width: 90px !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n.model-pack-caret {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n  transition: transform 0.12s ease !important;\r\n  display: inline-block !important;\r\n}\r\n\r\n.model-pack.expanded > .model-pack-header .model-pack-caret {\r\n  transform: rotate(90deg) !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.model-pack-body {\r\n  display: none !important;\r\n  flex-direction: column !important;\r\n  gap: 1px !important;\r\n  padding: 2px 4px 4px 4px !important;\r\n  border-top: 1px solid rgba(255, 255, 255, 0.05) !important;\r\n  overflow: visible !important;\r\n}\r\n\r\n.model-pack.expanded > .model-pack-body {\r\n  display: flex !important;\r\n}\r\n\r\n/* Native Chat Model Selector Soft-Locked (Synced) & Desynced States */\r\nbutton[data-testid=\"model-selector-trigger\"].antigravity-native-model-locked {\r\n  cursor: pointer !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.35) !important;\r\n  position: relative !important;\r\n}\r\n\r\nbutton[data-testid=\"model-selector-trigger\"].antigravity-native-model-desynced {\r\n  cursor: pointer !important;\r\n  border: 1px solid rgba(245, 158, 11, 0.55) !important;\r\n  box-shadow: 0 0 8px rgba(245, 158, 11, 0.16) !important;\r\n  position: relative !important;\r\n}\r\n\r\n/* Inline Chatbox Sync-to-Planner Action Button (visible when sync is broken) */\r\n.antigravity-chat-planner-sync-btn {\r\n  display: none !important;\r\n  align-items: center !important;\r\n  justify-content: center !important;\r\n  gap: 5px !important;\r\n  height: 26px !important;\r\n  min-width: 26px !important;\r\n  padding: 0 8px !important;\r\n  border-radius: 9999px !important;\r\n  background: rgba(245, 158, 11, 0.16) !important;\r\n  border: 1px solid rgba(245, 158, 11, 0.5) !important;\r\n  color: #fbbf24 !important;\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  line-height: 1 !important;\r\n  cursor: pointer !important;\r\n  flex-shrink: 0 !important;\r\n  white-space: nowrap !important;\r\n  box-sizing: border-box !important;\r\n  user-select: none !important;\r\n  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease !important;\r\n  box-shadow: 0 0 8px rgba(245, 158, 11, 0.2) !important;\r\n}\r\n\r\n.antigravity-chat-planner-sync-btn.is-desynced {\r\n  display: inline-flex !important;\r\n}\r\n\r\n.antigravity-chat-planner-sync-btn:hover {\r\n  background: rgba(245, 158, 11, 0.28) !important;\r\n  border-color: rgba(245, 158, 11, 0.8) !important;\r\n  color: #fde68a !important;\r\n  box-shadow: 0 0 12px rgba(245, 158, 11, 0.35) !important;\r\n}\r\n\r\n.antigravity-chat-planner-sync-btn:focus-visible {\r\n  outline: 2px solid #fbbf24 !important;\r\n  outline-offset: 2px !important;\r\n}\r\n\r\n.antigravity-chat-planner-sync-btn .chat-planner-sync-icon,\r\n.antigravity-chat-planner-sync-btn .chat-planner-sync-label {\r\n  pointer-events: none !important;\r\n}\r\n\r\n@media (max-width: 960px) {\r\n  .antigravity-chat-planner-sync-btn {\r\n    padding: 0 6px !important;\r\n  }\r\n  .antigravity-chat-planner-sync-btn .chat-planner-sync-label {\r\n    display: none !important;\r\n  }\r\n}\r\n\r\n/* Base Model Row */\r\n.model-slot-row {\r\n  position: relative !important;\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 6px 8px !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  transition: all 0.12s ease !important;\r\n  user-select: none !important;\r\n  font-family: inherit !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.model-slot-row:hover {\r\n  background: rgba(255, 255, 255, 0.07) !important;\r\n  border-color: rgba(255, 255, 255, 0.1) !important;\r\n}\r\n\r\n.model-slot-row.active {\r\n  background: rgba(56, 189, 248, 0.08) !important;\r\n  border-color: rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n.model-slot-row.open {\r\n  background: rgba(255, 255, 255, 0.1) !important;\r\n  border-color: rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.model-slot-row-left {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  min-width: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-row-dot {\r\n  width: 7px !important;\r\n  height: 7px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-row-name {\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-row-right {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 6px !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-active-badge {\r\n  font-size: 10px !important;\r\n  font-weight: 600 !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(56, 189, 248, 0.15) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.3) !important;\r\n  letter-spacing: 0.2px !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-chevron {\r\n  font-size: 14px !important;\r\n  line-height: 1 !important;\r\n  color: rgba(255, 255, 255, 0.45) !important;\r\n  pointer-events: none !important;\r\n  transition: color 0.12s ease !important;\r\n}\r\n\r\n.model-slot-row:hover .model-slot-chevron,\r\n.model-slot-row.open .model-slot-chevron {\r\n  color: #ffffff !important;\r\n}\r\n\r\n/* Effort Submenu Flyout */\r\n.model-slot-submenu {\r\n  position: absolute !important;\r\n  left: 100% !important;\r\n  top: -4px !important;\r\n  margin-left: 0 !important;\r\n  min-width: 120px !important;\r\n  display: none;\r\n  z-index: 1000002 !important;\r\n  background: #161822 !important;\r\n  background-color: #161822 !important;\r\n  background-image: linear-gradient(180deg, #1a1d2d 0%, #13141d 100%) !important;\r\n  opacity: 1 !important;\r\n  border: 1px solid rgba(255, 255, 255, 0.14) !important;\r\n  border-radius: 8px !important;\r\n  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.06) !important;\r\n  padding: 4px !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.model-slot-submenu::before {\r\n  content: \"\";\r\n  position: absolute;\r\n  top: 0;\r\n  bottom: 0;\r\n  left: -8px;\r\n  width: 8px;\r\n}\r\n\r\n.model-slot-row:hover > .model-slot-submenu,\r\n.model-slot-row.open > .model-slot-submenu {\r\n  display: block !important;\r\n}\r\n\r\n.model-slot-submenu.submenu-left {\r\n  right: 100% !important;\r\n  left: auto !important;\r\n  margin-right: 0 !important;\r\n  margin-left: 0 !important;\r\n}\r\n\r\n.model-slot-submenu.submenu-left::before {\r\n  left: auto;\r\n  right: -8px;\r\n}\r\n\r\n/* Effort Level Option Button */\r\n.model-effort-option {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  justify-content: space-between !important;\r\n  width: 100% !important;\r\n  padding: 5px 8px !important;\r\n  margin-bottom: 2px !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 5px !important;\r\n  cursor: pointer !important;\r\n  text-align: left !important;\r\n  font-family: inherit !important;\r\n  box-sizing: border-box !important;\r\n  transition: all 0.12s ease !important;\r\n}\r\n\r\n.model-effort-option:last-child {\r\n  margin-bottom: 0 !important;\r\n}\r\n\r\n.model-effort-option:hover {\r\n  background: rgba(255, 255, 255, 0.08) !important;\r\n  border-color: rgba(255, 255, 255, 0.12) !important;\r\n}\r\n\r\n.model-effort-option.active {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  border-color: rgba(56, 189, 248, 0.35) !important;\r\n}\r\n\r\n.model-effort-name {\r\n  font-size: 11.5px !important;\r\n  font-weight: 500 !important;\r\n  color: #ffffff !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-effort-option.active .model-effort-name {\r\n  color: #38bdf8 !important;\r\n  font-weight: 600 !important;\r\n}\r\n\r\n.model-effort-check {\r\n  font-size: 12px !important;\r\n  font-weight: 700 !important;\r\n  color: #38bdf8 !important;\r\n  width: 14px !important;\r\n  text-align: right !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n/* Legacy option styles retained for compatibility */\r\n.model-slot-option {\r\n  display: flex !important;\r\n  align-items: center !important;\r\n  gap: 8px !important;\r\n  width: 100% !important;\r\n  padding: 6px 8px !important;\r\n  background: transparent !important;\r\n  border: 1px solid transparent !important;\r\n  border-radius: 6px !important;\r\n  cursor: pointer !important;\r\n  text-align: left !important;\r\n  transition: all 0.12s ease !important;\r\n  user-select: none !important;\r\n  font-family: inherit !important;\r\n  box-sizing: border-box !important;\r\n}\r\n\r\n.model-slot-option:hover {\r\n  background: rgba(255, 255, 255, 0.065) !important;\r\n  border-color: rgba(255, 255, 255, 0.1) !important;\r\n}\r\n\r\n.model-slot-option.active {\r\n  background: rgba(56, 189, 248, 0.1) !important;\r\n  border-color: rgba(56, 189, 248, 0.3) !important;\r\n}\r\n\r\n.model-slot-option-dot {\r\n  width: 8px !important;\r\n  height: 8px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-option-info {\r\n  display: flex !important;\r\n  flex-direction: column !important;\r\n  gap: 1px !important;\r\n  flex: 1 !important;\r\n  min-width: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-option-name {\r\n  font-size: 12px !important;\r\n  font-weight: 500 !important;\r\n  color: #ffffff !important;\r\n  white-space: nowrap !important;\r\n  overflow: hidden !important;\r\n  text-overflow: ellipsis !important;\r\n}\r\n\r\n.model-slot-option-family {\r\n  font-size: 10px !important;\r\n  color: rgba(255, 255, 255, 0.42) !important;\r\n}\r\n\r\n.model-slot-option-badge {\r\n  font-size: 9.5px !important;\r\n  padding: 1px 5px !important;\r\n  border-radius: 4px !important;\r\n  background: rgba(255, 255, 255, 0.05) !important;\r\n  color: rgba(255, 255, 255, 0.6) !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.model-slot-option-check {\r\n  font-size: 12px !important;\r\n  font-weight: 700 !important;\r\n  color: #38bdf8 !important;\r\n  width: 14px !important;\r\n  text-align: center !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n/* Mods Manager Icon Box for Model Slots */\r\n.mod-icon-box.slots-icon {\r\n  background: rgba(56, 189, 248, 0.12) !important;\r\n  color: #38bdf8 !important;\r\n  border: 1px solid rgba(56, 189, 248, 0.25) !important;\r\n}\r\n\r\n/* Subagent Model Pill Badge */\r\n.antigravity-subagent-model-pill {\r\n  display: inline-flex !important;\r\n  align-items: center !important;\r\n  gap: 4px !important;\r\n  height: 18px !important;\r\n  padding: 0 6px !important;\r\n  margin-left: 6px !important;\r\n  font-size: 11px !important;\r\n  font-weight: 600 !important;\r\n  line-height: 1 !important;\r\n  border-radius: 4px !important;\r\n  border: 1px solid !important;\r\n  user-select: none !important;\r\n  vertical-align: middle !important;\r\n  box-sizing: border-box !important;\r\n  transition: all 0.15s ease !important;\r\n}\r\n\r\n.antigravity-subagent-model-pill .subagent-model-dot {\r\n  width: 5px !important;\r\n  height: 5px !important;\r\n  border-radius: 50% !important;\r\n  flex-shrink: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n.antigravity-subagent-model-pill .subagent-model-label {\r\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\r\n  letter-spacing: 0.2px !important;\r\n  pointer-events: none !important;\r\n  white-space: nowrap !important;\r\n}\r\n\r\n";
+  }
+
+  /**
+   * Renders the top menubar buttons for Planner and Builder slots.
+   * @param {Object} [context]
+   * @returns {{ html: string, css: string }}
+   */
+  render(context = {}) {
+    const slots = context.slots || context.modelSlots;
+    const catalog = context.modelCatalog?.modelCatalog || context.modelCatalog?.baseModels || undefined;
+    return {
+      html: renderModelSlotsMenubarHtml(slots, catalog),
+      css: this.cachedCss
+    };
+  }
+}
+
+
+// ======================= Pit Wall Mod ========================
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
+/**
+ * Renders the compact top menubar trigger button for the Pit Wall analytics modal.
+ * @param {Object} [pitWall={}]
+ * @returns {string}
+ */
+function renderPitWallMenubarButton(pitWall = {}) {
+  const streak = Number(pitWall?.currentStreak || 0);
+  const cost = pitWall?.displayTotalCost || '$0';
+  const titleText = streak > 0
+    ? `Pit Wall Analytics (${streak}-day streak · ${cost} API eq.)`
+    : 'Pit Wall Telemetry & Cost Analytics';
+
+  return `
+    <button
+      type="button"
+      class="antigravity-pit-wall-btn"
+      id="antigravity-pit-wall-trigger"
+      title="${titleText}"
+    >
+      <svg class="pit-wall-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 3v18h18"></path>
+        <rect x="7" y="10" width="3" height="7" rx="1"></rect>
+        <rect x="12" y="6" width="3" height="11" rx="1"></rect>
+        <rect x="17" y="13" width="3" height="4" rx="1"></rect>
+      </svg>
+      <span class="pit-wall-btn-label">Pit Wall</span>
+    </button>
+  `.trim();
+}
+
+/**
+ * Renders the complete Pit Wall analytics dashboard modal HTML.
+ * Strictly self-contained so it can be serialized into the Electron renderer via .toString().
+ * @param {Object} [pitWall={}]
+ * @returns {string}
+ */
+function renderPitWallModalHtml(pitWall = {}) {
+  const esc = (val) => String(val ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+  const fmtInt = (n) => Number(n || 0).toLocaleString('en-US');
+  const fmtUsdExact = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const data = pitWall && typeof pitWall === 'object' ? pitWall : {};
+  const streak = Number(data.currentStreak || 0);
+  const bestStreak = Number(data.bestStreak || 0);
+  const totalHours = Number(data.totalHours || 0).toFixed(1);
+  const activeDays = Number(data.activeDaysCount || 0);
+  const firstDate = esc(data.firstSessionDate || 'today');
+  const avgHours = Number(data.avgHoursPerDay || 0).toFixed(1);
+  const stretchHours = Number(data.currentStretchHours || 0).toFixed(1);
+  const stretchSub = esc(data.currentStretchSub || 'no recent activity');
+  const isStretchActive = Boolean(data.isStretchActive);
+  const displayCost = esc(data.displayTotalCost || '$0');
+  const displayTokens = esc(data.displayTotalTokens || '0');
+  const displayWritten = esc(data.displayWrittenTokens || '0');
+  const totalSessions = Number(data.totalSessions || 0);
+
+  const uncachedTok = Number(data.uncachedInputTokens ?? (Number(data.totalTokens || 0) - Number(data.cacheReadTokens || 0) - Number(data.writtenTokens || 0)));
+  const cacheTok = Number(data.cacheReadTokens || 0);
+  const writtenTok = Number(data.writtenTokens || 0);
+
+  const tipStretch = {
+    title: 'Current Stretch',
+    rows: [
+      { label: 'Active time', val: `${data.exactCurrentStretchDurationLabel || `${stretchHours}h`} (${stretchHours} h)`, accent: true },
+      { label: 'Status', val: isStretchActive ? 'Active session' : 'Idle' },
+      { label: 'Timeline', val: data.currentStretchSub || 'no recent activity' }
+    ]
+  };
+
+  const tipTotalHours = {
+    title: 'Hours Worked (All Time)',
+    rows: [
+      { label: 'Total active time', val: `${data.exactTotalDurationLabel || `${totalHours}h`} (${totalHours} h)`, accent: true },
+      { label: 'Active calendar days', val: `${activeDays} days` },
+      { label: 'Daily average', val: `${avgHours} h / day` },
+      { label: 'First session', val: data.firstSessionDate || 'today' }
+    ]
+  };
+
+  const tipCost = {
+    title: 'Cost at API Prices',
+    rows: [
+      { label: 'Total equivalent', val: data.exactDisplayTotalCost || displayCost, accent: true },
+      { label: 'Cache read pricing', val: '10% of input rate (90% discount)' },
+      { label: 'Plan benefit', val: 'Included with plan' }
+    ]
+  };
+
+  const tipTokens = {
+    title: 'Tokens Processed',
+    rows: [
+      { label: 'Total tokens', val: fmtInt(data.totalTokens), accent: true },
+      { label: 'Uncached input', val: fmtInt(uncachedTok) },
+      { label: 'Cache reads (10% rate)', val: fmtInt(cacheTok) },
+      { label: 'Written by models', val: fmtInt(writtenTok) }
+    ]
+  };
+
+  const tipStreak = {
+    title: 'Day Streak',
+    rows: [
+      { label: 'Current streak', val: `${streak} day${streak === 1 ? '' : 's'}`, accent: true },
+      { label: 'Best record', val: `${bestStreak} days` },
+      { label: 'Total active days', val: `${activeDays} days` }
+    ]
+  };
+
+  const tipSessions = {
+    title: 'Sessions',
+    rows: [
+      { label: 'All-time sessions', val: fmtInt(totalSessions), accent: true },
+      { label: 'Scope', val: 'All projects & workspaces' },
+      { label: 'Aggregation', val: 'Full historical audit' }
+    ]
+  };
+
+  const last60Days = Array.isArray(data.last60Days) && data.last60Days.length > 0
+    ? data.last60Days
+    : Array.from({ length: 60 }, (_, i) => ({
+        date: `d-${i}`,
+        label: i === 0 ? '60d ago' : (i === 59 ? 'Today' : ''),
+        hours: 0,
+        mainCostUsd: 0,
+        bgCostUsd: 0,
+        totalCostUsd: 0
+      }));
+
+  const maxHoursVal = Math.max(10, ...last60Days.map(d => Number(d.hours || 0)));
+  const yHoursCeiling = Math.ceil(maxHoursVal / 5) * 5;
+  const yHoursMid = Math.round(yHoursCeiling / 2);
+
+  const hourBarsHtml = last60Days.map(d => {
+    const h = Number(d.hours || 0);
+    const pct = Math.min(100, Math.round((h / Math.max(1, yHoursCeiling)) * 100));
+    const barHeight = h > 0 ? Math.max(3, pct) : 0;
+    const durLabel = d.durationLabel || `${h.toFixed(1)}h`;
+    const tip = {
+      title: d.fullDate || d.date,
+      rows: [
+        { label: 'Active time', val: `${durLabel} (${h.toFixed(2)} h)`, accent: true },
+        { label: 'Sessions active', val: fmtInt(d.sessions || 0) },
+        { label: 'API cost equivalent', val: fmtUsdExact(d.totalCostUsd || 0) },
+        { label: 'Tokens processed', val: fmtInt(d.tokens || 0) }
+      ]
+    };
+    return `<div class="pit-wall-bar-col" tabindex="0" data-pw-tip="${esc(JSON.stringify(tip))}">
+      <div class="pit-wall-bar-hours" style="height: ${barHeight}%;"></div>
+    </div>`;
+  }).join('');
+
+  const tickIndices = [0, 14, 29, 44, last60Days.length - 1];
+  const dateTicksHtml = tickIndices
+    .filter(idx => idx >= 0 && idx < last60Days.length)
+    .map(idx => `<span>${esc(last60Days[idx].label || last60Days[idx].date)}</span>`)
+    .join('');
+
+  const maxCostDayVal = Math.max(50, ...last60Days.map(d => Number(d.totalCostUsd || 0)));
+  const costStep = maxCostDayVal <= 100 ? 25 : (maxCostDayVal <= 500 ? 100 : Math.ceil(maxCostDayVal / 500) * 100);
+  const yCostCeiling = Math.ceil(maxCostDayVal / costStep) * costStep;
+  const yCostTicks = [
+    `$${yCostCeiling}`,
+    `$${Math.round(yCostCeiling * 0.75)}`,
+    `$${Math.round(yCostCeiling * 0.5)}`,
+    `$${Math.round(yCostCeiling * 0.25)}`,
+    '$0'
+  ];
+
+  const costBarsHtml = last60Days.map(d => {
+    const mainUsd = Number(d.mainCostUsd || 0);
+    const bgUsd = Number(d.bgCostUsd || 0);
+    const totUsd = Number(d.totalCostUsd !== undefined ? d.totalCostUsd : (mainUsd + bgUsd));
+    const totalPct = Math.min(100, (totUsd / Math.max(1, yCostCeiling)) * 100);
+    const mainPct = totUsd > 0 ? (mainUsd / totUsd) * totalPct : 0;
+    const bgPct = totUsd > 0 ? (bgUsd / totUsd) * totalPct : 0;
+    const mainSharePct = totUsd > 0 ? ((mainUsd / totUsd) * 100).toFixed(1) : '0.0';
+    const bgSharePct = totUsd > 0 ? ((bgUsd / totUsd) * 100).toFixed(1) : '0.0';
+    const tip = {
+      title: d.fullDate || d.date,
+      rows: [
+        { label: 'Total API cost', val: fmtUsdExact(totUsd), accent: true },
+        { label: 'Main thread', val: `${fmtUsdExact(mainUsd)} (${mainSharePct}%)` },
+        { label: 'Background agents', val: `${fmtUsdExact(bgUsd)} (${bgSharePct}%)` },
+        { label: 'Tokens processed', val: fmtInt(d.tokens || 0) }
+      ]
+    };
+    return `<div class="pit-wall-bar-col" tabindex="0" data-pw-tip="${esc(JSON.stringify(tip))}">
+      <div class="pit-wall-bar-stack" style="height: ${totUsd > 0 ? Math.max(3, Math.round(totalPct)) : 0}%;">
+        ${bgUsd > 0 ? `<div class="pit-wall-bar-bg" style="height: ${Math.round((bgPct / Math.max(0.01, totalPct)) * 100)}%;"></div>` : ''}
+        <div class="pit-wall-bar-main" style="height: ${Math.round((mainPct / Math.max(0.01, totalPct)) * 100)}%;"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  const weeks = Array.isArray(data.consistencyWeeks) ? data.consistencyWeeks : [];
+  const levelColors = [
+    'rgba(255, 255, 255, 0.05)',
+    '#172554',
+    '#1d4ed8',
+    '#3b82f6',
+    '#60a5fa'
+  ];
+  const monthHeadersHtml = weeks.map(w => `<div class="pit-wall-heatmap-month">${esc(w.monthLabel || '')}</div>`).join('');
+  const heatmapColsHtml = weeks.map(w => {
+    const cells = (w.days || []).map(cell => {
+      const isFuture = Boolean(cell.isFuture);
+      const bg = isFuture ? 'transparent' : (levelColors[cell.level] || levelColors[0]);
+      const border = isFuture ? '1px solid transparent' : '1px solid rgba(255,255,255,0.04)';
+      if (isFuture) {
+        return `<div class="pit-wall-heat-cell" style="background: ${bg}; border: ${border};"></div>`;
+      }
+      const cellHrs = Number(cell.hours || 0);
+      const durLabel = cell.durationLabel || `${cellHrs.toFixed(1)}h`;
+      const tip = {
+        title: cell.fullDate || cell.date,
+        rows: [
+          { label: 'Active time', val: `${durLabel} (${cellHrs.toFixed(2)} h)`, accent: true },
+          { label: 'Sessions active', val: fmtInt(cell.sessions || 0) },
+          { label: 'API cost equivalent', val: fmtUsdExact(cell.totalCostUsd || 0) },
+          { label: 'Tokens processed', val: fmtInt(cell.tokens || 0) }
+        ]
+      };
+      return `<div class="pit-wall-heat-cell" style="background: ${bg}; border: ${border};" tabindex="0" data-pw-tip="${esc(JSON.stringify(tip))}"></div>`;
+    }).join('');
+    return `<div class="pit-wall-heatmap-col">${cells}</div>`;
+  }).join('');
+
+  const costByModel = Array.isArray(data.costByModel) ? data.costByModel : [];
+  const modelRowsHtml = costByModel.length > 0
+    ? costByModel.map(m => {
+        const barColor = m.isTop ? '#60a5fa' : '#71717a';
+        const pct = Math.max(2, Math.min(100, Number(m.pctOfMax || 0)));
+        const costVal = Number(m.exactCostUsd !== undefined ? m.exactCostUsd : (m.costUsd || 0));
+        const pctOfTot = m.pctOfTotal !== undefined
+          ? m.pctOfTotal
+          : (data.totalCostUsd > 0 ? Number(((costVal / data.totalCostUsd) * 100).toFixed(1)) : 0);
+        const tip = {
+          title: m.name,
+          rows: [
+            { label: 'API cost equivalent', val: `${fmtUsdExact(costVal)} (${pctOfTot}%)`, accent: true },
+            { label: 'Total tokens', val: fmtInt(m.tokens || 0) },
+            { label: 'Uncached input', val: fmtInt(m.uncachedInput || 0) },
+            { label: 'Cache reads (10%)', val: fmtInt(m.cacheRead || 0) },
+            { label: 'Output written', val: fmtInt(m.output || 0) },
+            { label: 'Rates (/1M tokens)', val: `$${m.inputPerM ?? 0} in / $${m.cacheReadPerM ?? 0} cache / $${m.outputPerM ?? 0} out` }
+          ]
+        };
+        return `<div class="pit-wall-model-row" tabindex="0" data-pw-tip="${esc(JSON.stringify(tip))}">
+          <span class="pit-wall-model-name">${esc(m.name)}</span>
+          <div class="pit-wall-model-bar-track">
+            <div class="pit-wall-model-bar-fill" style="width: ${pct}%; background: ${barColor};"></div>
+          </div>
+          <span class="pit-wall-model-cost">${esc(m.exactDisplayCost || m.displayCost || '$0')}</span>
+        </div>`;
+      }).join('')
+    : '<div class="pit-wall-empty-note">No model usage recorded yet.</div>';
+
+  return `
+    <div class="pit-wall-modal-shell">
+      <div class="pit-wall-header">
+        <div class="pit-wall-header-text">
+          <h2 class="pit-wall-title">Pit Wall</h2>
+          <p class="pit-wall-subtitle">
+            ${streak}-day streak. ${totalHours} hours of work across ${activeDays} days since ${firstDate}, worth ${displayCost} at API prices.
+          </p>
+        </div>
+        <button type="button" class="pit-wall-close-btn" id="antigravity-pit-wall-close" title="Close Pit Wall"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+      </div>
+
+      <div class="pit-wall-kpi-grid">
+        <div class="pit-wall-kpi-card" tabindex="0" data-pw-tip="${esc(JSON.stringify(tipStretch))}">
+          <div class="pit-wall-kpi-label">Current stretch</div>
+          <div class="pit-wall-kpi-value">${stretchHours} h</div>
+          <div class="pit-wall-kpi-sub">${stretchSub}</div>
+        </div>
+        <div class="pit-wall-kpi-card" tabindex="0" data-pw-tip="${esc(JSON.stringify(tipTotalHours))}">
+          <div class="pit-wall-kpi-label">Hours worked, all time</div>
+          <div class="pit-wall-kpi-value">${totalHours}</div>
+          <div class="pit-wall-kpi-sub">${avgHours} h on an average day</div>
+        </div>
+        <div class="pit-wall-kpi-card" tabindex="0" data-pw-tip="${esc(JSON.stringify(tipCost))}">
+          <div class="pit-wall-kpi-label">Cost at API prices</div>
+          <div class="pit-wall-kpi-value">${displayCost}</div>
+          <div class="pit-wall-kpi-sub">what the plan saved you</div>
+        </div>
+        <div class="pit-wall-kpi-card" tabindex="0" data-pw-tip="${esc(JSON.stringify(tipTokens))}">
+          <div class="pit-wall-kpi-label">Tokens processed</div>
+          <div class="pit-wall-kpi-value">${displayTokens}</div>
+          <div class="pit-wall-kpi-sub">${displayWritten} written by models</div>
+        </div>
+        <div class="pit-wall-kpi-card" tabindex="0" data-pw-tip="${esc(JSON.stringify(tipStreak))}">
+          <div class="pit-wall-kpi-label">Day streak</div>
+          <div class="pit-wall-kpi-value">${streak}</div>
+          <div class="pit-wall-kpi-sub">best run ${bestStreak} days</div>
+        </div>
+        <div class="pit-wall-kpi-card" tabindex="0" data-pw-tip="${esc(JSON.stringify(tipSessions))}">
+          <div class="pit-wall-kpi-label">Sessions</div>
+          <div class="pit-wall-kpi-value">${totalSessions}</div>
+          <div class="pit-wall-kpi-sub">across every project</div>
+        </div>
+      </div>
+
+      <div class="pit-wall-analytics-grid">
+        <div class="pit-wall-panel">
+          <div class="pit-wall-panel-title">Hours worked per day</div>
+          <div class="pit-wall-panel-sub">Last 60 days. Active time: any stretch with no gap over 20 minutes, agents included, parallel sessions counted once.</div>
+          <div class="pit-wall-chart-frame">
+            <div class="pit-wall-y-axis">
+              <span>${yHoursCeiling} h</span>
+              <span>${yHoursMid} h</span>
+              <span>0 h</span>
+            </div>
+            <div class="pit-wall-chart-area">
+              <div class="pit-wall-grid-lines">
+                <div class="pit-wall-grid-line"></div>
+                <div class="pit-wall-grid-line"></div>
+                <div class="pit-wall-grid-line"></div>
+              </div>
+              <div class="pit-wall-bars-row">${hourBarsHtml}</div>
+              <div class="pit-wall-x-axis">${dateTicksHtml}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="pit-wall-panel">
+          <div class="pit-wall-panel-title">Consistency</div>
+          <div class="pit-wall-panel-sub">Last 20 weeks. Brighter blue means more hours.</div>
+          <div class="pit-wall-heatmap-wrap">
+            <div class="pit-wall-heatmap-months-row">
+              <div class="pit-wall-heatmap-day-spacer"></div>
+              <div class="pit-wall-heatmap-months-grid">${monthHeadersHtml}</div>
+            </div>
+            <div class="pit-wall-heatmap-body">
+              <div class="pit-wall-heatmap-days">
+                <span>Mon</span>
+                <span></span>
+                <span>Wed</span>
+                <span></span>
+                <span>Fri</span>
+                <span></span>
+                <span></span>
+              </div>
+              <div class="pit-wall-heatmap-cols">${heatmapColsHtml}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="pit-wall-panel">
+          <div class="pit-wall-panel-title">Cost per day at API prices</div>
+          <div class="pit-wall-panel-sub">Last 60 days, USD. The darker part is background agents.</div>
+          <div class="pit-wall-chart-frame">
+            <div class="pit-wall-y-axis pit-wall-y-axis-cost">
+              ${yCostTicks.map(t => `<span>${esc(t)}</span>`).join('')}
+            </div>
+            <div class="pit-wall-chart-area">
+              <div class="pit-wall-grid-lines">
+                <div class="pit-wall-grid-line"></div>
+                <div class="pit-wall-grid-line"></div>
+                <div class="pit-wall-grid-line"></div>
+                <div class="pit-wall-grid-line"></div>
+                <div class="pit-wall-grid-line"></div>
+              </div>
+              <div class="pit-wall-bars-row">${costBarsHtml}</div>
+              <div class="pit-wall-x-axis">${dateTicksHtml}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="pit-wall-panel">
+          <div class="pit-wall-panel-title">Cost by model</div>
+          <div class="pit-wall-panel-sub">All time, USD, at each model's list price.</div>
+          <div class="pit-wall-models-list">${modelRowsHtml}</div>
+        </div>
+      </div>
+
+      <div id="antigravity-pit-wall-tooltip" class="pit-wall-tooltip" role="tooltip" popover="manual" aria-hidden="true"></div>
+    </div>
+  `.trim();
+}
+
+
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Victor Manuel Martinez Munoz
+
+
+
+
+
+
+
+
+
+/**
+ * First-party menubar mod providing all-time Pit Wall telemetry,
+ * active stretches, consistency heatmap, and API cost analytics.
+ */
+class PitWallMod extends AntigravityMod {
+  constructor() {
+    super({
+      id: 'pit-wall',
+      name: 'Pit Wall Telemetry & Cost Analytics',
+      version: '1.0.0',
+      slot: 'menubar-actions',
+      priority: 85
+    });
+
+    this.cachedCss = "/* =========================================================================\n   ANTIGRAVITY PIT WALL ANALYTICS MOD - STYLES\n   ========================================================================= */\n\n/* Menubar Button */\n.antigravity-pit-wall-btn {\n  height: 26px !important;\n  padding: 0 8px !important;\n  font-size: 11.5px !important;\n  font-weight: 500 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  color: rgba(255, 255, 255, 0.85) !important;\n  background: rgba(255, 255, 255, 0.04) !important;\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\n  border-radius: 6px !important;\n  cursor: pointer !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  gap: 5px !important;\n  flex-shrink: 0 !important;\n  white-space: nowrap !important;\n  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease !important;\n  transform: none !important;\n  -webkit-app-region: no-drag !important;\n  app-region: no-drag !important;\n  user-select: none !important;\n  line-height: 1 !important;\n  box-sizing: border-box !important;\n}\n\n.antigravity-pit-wall-btn:hover {\n  background: rgba(255, 255, 255, 0.09) !important;\n  border-color: rgba(96, 165, 250, 0.4) !important;\n  color: #ffffff !important;\n}\n\n.antigravity-pit-wall-btn.open {\n  background: rgba(96, 165, 250, 0.15) !important;\n  border-color: rgba(96, 165, 250, 0.5) !important;\n  color: #93c5fd !important;\n}\n\n.antigravity-pit-wall-btn .pit-wall-btn-icon {\n  width: 13px !important;\n  height: 13px !important;\n  color: #60a5fa !important;\n  flex-shrink: 0 !important;\n  pointer-events: none !important;\n}\n\n.antigravity-pit-wall-btn .pit-wall-btn-label {\n  pointer-events: none !important;\n}\n\n/* Floating Modal Portal */\n.antigravity-pit-wall-portal {\n  position: fixed !important;\n  top: 50% !important;\n  left: 50% !important;\n  transform: translate(-50%, -50%) !important;\n  z-index: 1000003 !important;\n  width: min(860px, calc(100vw - 32px)) !important;\n  max-height: calc(100vh - 56px) !important;\n  overflow-y: auto !important;\n  background: #0b0c0f !important;\n  color: #f4f4f5 !important;\n  border: 1px solid rgba(255, 255, 255, 0.12) !important;\n  border-radius: 14px !important;\n  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.88), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;\n  padding: 20px 22px !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  display: none;\n  box-sizing: border-box !important;\n}\n\n.antigravity-pit-wall-portal.open {\n  display: block !important;\n}\n\n.antigravity-pit-wall-portal::-webkit-scrollbar {\n  width: 6px;\n}\n\n.antigravity-pit-wall-portal::-webkit-scrollbar-thumb {\n  background: rgba(255, 255, 255, 0.14);\n  border-radius: 999px;\n}\n\n/* Modal Content */\n.pit-wall-modal-shell {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 14px !important;\n}\n\n.pit-wall-header {\n  display: flex !important;\n  align-items: flex-start !important;\n  justify-content: space-between !important;\n  gap: 12px !important;\n}\n\n.pit-wall-title {\n  margin: 0 !important;\n  font-size: 19px !important;\n  font-weight: 700 !important;\n  color: #fafafa !important;\n  letter-spacing: -0.3px !important;\n  line-height: 1.2 !important;\n}\n\n.pit-wall-subtitle {\n  margin: 4px 0 0 0 !important;\n  font-size: 12px !important;\n  color: #a1a1aa !important;\n  line-height: 1.4 !important;\n}\n\n.pit-wall-close-btn {\n  width: 26px !important;\n  height: 26px !important;\n  border-radius: 6px !important;\n  border: 1px solid rgba(255, 255, 255, 0.1) !important;\n  background: rgba(255, 255, 255, 0.04) !important;\n  color: #a1a1aa !important;\n  cursor: pointer !important;\n  display: inline-flex !important;\n  align-items: center !important;\n  justify-content: center !important;\n  font-size: 12px !important;\n  flex-shrink: 0 !important;\n}\n\n.pit-wall-close-btn:hover {\n  background: rgba(255, 255, 255, 0.1) !important;\n  color: #ffffff !important;\n}\n\n/* 6 Top KPI Bento Cards */\n.pit-wall-kpi-grid {\n  display: grid !important;\n  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;\n  gap: 10px !important;\n}\n\n@media (max-width: 720px) {\n  .pit-wall-kpi-grid {\n    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;\n  }\n}\n\n.pit-wall-kpi-card {\n  background: #141519 !important;\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\n  border-radius: 10px !important;\n  padding: 12px 14px !important;\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 4px !important;\n}\n\n.pit-wall-kpi-label {\n  font-size: 11px !important;\n  color: #a1a1aa !important;\n  font-weight: 500 !important;\n}\n\n.pit-wall-kpi-value {\n  font-size: 24px !important;\n  font-weight: 700 !important;\n  color: #ffffff !important;\n  letter-spacing: -0.5px !important;\n  line-height: 1.15 !important;\n  font-variant-numeric: tabular-nums !important;\n}\n\n.pit-wall-kpi-sub {\n  font-size: 10.5px !important;\n  color: #71717a !important;\n}\n\n/* 4 Analytics Panels */\n.pit-wall-analytics-grid {\n  display: grid !important;\n  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;\n  gap: 12px !important;\n}\n\n@media (max-width: 720px) {\n  .pit-wall-analytics-grid {\n    grid-template-columns: 1fr !important;\n  }\n}\n\n.pit-wall-panel {\n  background: #141519 !important;\n  border: 1px solid rgba(255, 255, 255, 0.08) !important;\n  border-radius: 10px !important;\n  padding: 14px 16px !important;\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 6px !important;\n  min-width: 0 !important;\n}\n\n.pit-wall-panel-title {\n  font-size: 13.5px !important;\n  font-weight: 600 !important;\n  color: #f4f4f5 !important;\n}\n\n.pit-wall-panel-sub {\n  font-size: 10.5px !important;\n  color: #71717a !important;\n  line-height: 1.35 !important;\n  margin-bottom: 6px !important;\n}\n\n/* 60-Day Vertical Bar Charts */\n.pit-wall-chart-frame {\n  display: flex !important;\n  align-items: stretch !important;\n  gap: 8px !important;\n  height: 140px !important;\n  margin-top: auto !important;\n}\n\n.pit-wall-y-axis {\n  display: flex !important;\n  flex-direction: column !important;\n  justify-content: space-between !important;\n  font-size: 9.5px !important;\n  color: #71717a !important;\n  font-family: ui-monospace, monospace !important;\n  padding-bottom: 18px !important;\n  text-align: right !important;\n  min-width: 30px !important;\n}\n\n.pit-wall-chart-area {\n  position: relative !important;\n  flex: 1 !important;\n  display: flex !important;\n  flex-direction: column !important;\n  min-width: 0 !important;\n}\n\n.pit-wall-grid-lines {\n  position: absolute !important;\n  inset: 0 0 18px 0 !important;\n  display: flex !important;\n  flex-direction: column !important;\n  justify-content: space-between !important;\n  pointer-events: none !important;\n}\n\n.pit-wall-grid-line {\n  width: 100% !important;\n  height: 1px !important;\n  background: rgba(255, 255, 255, 0.06) !important;\n}\n\n.pit-wall-bars-row {\n  position: relative !important;\n  z-index: 1 !important;\n  flex: 1 !important;\n  display: flex !important;\n  align-items: flex-end !important;\n  gap: 2px !important;\n}\n\n.pit-wall-bar-col {\n  flex: 1 !important;\n  height: 100% !important;\n  display: flex !important;\n  align-items: flex-end !important;\n  min-width: 0 !important;\n}\n\n.pit-wall-bar-hours {\n  width: 100% !important;\n  background: #60a5fa !important;\n  border-radius: 2px 2px 0 0 !important;\n  transition: opacity 0.12s ease !important;\n}\n\n.pit-wall-bar-col:hover .pit-wall-bar-hours,\n.pit-wall-bar-col:hover .pit-wall-bar-stack {\n  filter: brightness(1.2) !important;\n}\n\n.pit-wall-bar-stack {\n  width: 100% !important;\n  display: flex !important;\n  flex-direction: column !important;\n  justify-content: flex-end !important;\n  border-radius: 2px 2px 0 0 !important;\n  overflow: hidden !important;\n}\n\n.pit-wall-bar-bg {\n  width: 100% !important;\n  background: #1d4ed8 !important;\n}\n\n.pit-wall-bar-main {\n  width: 100% !important;\n  background: #60a5fa !important;\n}\n\n.pit-wall-x-axis {\n  height: 18px !important;\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  font-size: 9.5px !important;\n  color: #71717a !important;\n  font-family: ui-monospace, monospace !important;\n  padding-top: 4px !important;\n}\n\n/* Consistency Heatmap */\n.pit-wall-heatmap-wrap {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 4px !important;\n  margin: auto 0 !important;\n  overflow-x: auto !important;\n}\n\n.pit-wall-heatmap-months-row {\n  display: flex !important;\n  align-items: center !important;\n  gap: 6px !important;\n}\n\n.pit-wall-heatmap-day-spacer {\n  width: 24px !important;\n  flex-shrink: 0 !important;\n}\n\n.pit-wall-heatmap-months-grid {\n  display: flex !important;\n  gap: 3px !important;\n  flex: 1 !important;\n}\n\n.pit-wall-heatmap-month {\n  width: 11px !important;\n  font-size: 9px !important;\n  color: #71717a !important;\n  white-space: nowrap !important;\n  overflow: visible !important;\n}\n\n.pit-wall-heatmap-body {\n  display: flex !important;\n  align-items: stretch !important;\n  gap: 6px !important;\n}\n\n.pit-wall-heatmap-days {\n  width: 24px !important;\n  display: flex !important;\n  flex-direction: column !important;\n  justify-content: space-between !important;\n  font-size: 9px !important;\n  color: #71717a !important;\n  flex-shrink: 0 !important;\n}\n\n.pit-wall-heatmap-days span {\n  height: 11px !important;\n  line-height: 11px !important;\n}\n\n.pit-wall-heatmap-cols {\n  display: flex !important;\n  gap: 3px !important;\n  flex: 1 !important;\n}\n\n.pit-wall-heatmap-col {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 3px !important;\n}\n\n.pit-wall-heat-cell {\n  width: 11px !important;\n  height: 11px !important;\n  border-radius: 2px !important;\n}\n\n/* Cost by Model Horizontal Bars */\n.pit-wall-models-list {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 8px !important;\n  margin-top: 4px !important;\n}\n\n.pit-wall-model-row {\n  display: grid !important;\n  grid-template-columns: 110px 1fr 48px !important;\n  align-items: center !important;\n  gap: 10px !important;\n  font-size: 11px !important;\n}\n\n.pit-wall-model-name {\n  color: #a1a1aa !important;\n  white-space: nowrap !important;\n  overflow: hidden !important;\n  text-overflow: ellipsis !important;\n}\n\n.pit-wall-model-bar-track {\n  height: 10px !important;\n  background: rgba(255, 255, 255, 0.04) !important;\n  border-radius: 4px !important;\n  overflow: hidden !important;\n}\n\n.pit-wall-model-bar-fill {\n  height: 100% !important;\n  border-radius: 4px !important;\n}\n\n.pit-wall-model-cost {\n  font-family: ui-monospace, monospace !important;\n  font-size: 11px !important;\n  color: #e4e4e7 !important;\n  text-align: right !important;\n  font-variant-numeric: tabular-nums !important;\n}\n\n.pit-wall-empty-note {\n  font-size: 11px !important;\n  color: #71717a !important;\n  padding: 12px 0 !important;\n}\n\n/* Tooltip & Interactive State Enhancements */\n.pit-wall-tooltip {\n  position: fixed !important;\n  inset: auto !important;\n  margin: 0 !important;\n  display: none !important;\n  z-index: 2147483647 !important;\n  pointer-events: none !important;\n  background: rgba(9, 9, 11, 0.97) !important;\n  border: 1px solid rgba(255, 255, 255, 0.16) !important;\n  border-radius: 8px !important;\n  padding: 8px 10px !important;\n  min-width: 180px !important;\n  max-width: 280px !important;\n  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.72) !important;\n  color: #f4f4f5 !important;\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif !important;\n  font-size: 11px !important;\n  line-height: 1.4 !important;\n  box-sizing: border-box !important;\n}\n\n.pit-wall-tooltip.visible,\n.pit-wall-tooltip:popover-open {\n  display: block !important;\n}\n\n.pit-wall-tooltip::after {\n  content: \"\" !important;\n  position: absolute !important;\n  left: var(--pw-tip-caret-left, 50%) !important;\n  transform: translateX(-50%) !important;\n  width: 0 !important;\n  height: 0 !important;\n  border-left: 5px solid transparent !important;\n  border-right: 5px solid transparent !important;\n  pointer-events: none !important;\n}\n\n.pit-wall-tooltip[data-placement=\"top\"]::after {\n  bottom: -5px !important;\n  border-top: 5px solid rgba(9, 9, 11, 0.97) !important;\n  border-bottom: 0 !important;\n}\n\n.pit-wall-tooltip[data-placement=\"bottom\"]::after {\n  top: -5px !important;\n  border-bottom: 5px solid rgba(9, 9, 11, 0.97) !important;\n  border-top: 0 !important;\n}\n\n.pit-wall-tip-title {\n  font-weight: 600 !important;\n  font-size: 11.5px !important;\n  color: #ffffff !important;\n  margin-bottom: 6px !important;\n  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;\n  padding-bottom: 4px !important;\n}\n\n.pit-wall-tip-rows {\n  display: flex !important;\n  flex-direction: column !important;\n  gap: 3px !important;\n}\n\n.pit-wall-tip-row {\n  display: flex !important;\n  align-items: center !important;\n  justify-content: space-between !important;\n  gap: 12px !important;\n}\n\n.pit-wall-tip-label {\n  color: #a1a1aa !important;\n  font-size: 10.5px !important;\n  white-space: nowrap !important;\n}\n\n.pit-wall-tip-val {\n  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;\n  font-variant-numeric: tabular-nums !important;\n  font-size: 10.5px !important;\n  color: #f4f4f5 !important;\n  text-align: right !important;\n  white-space: nowrap !important;\n}\n\n.pit-wall-tip-val.accent {\n  color: #60a5fa !important;\n  font-weight: 600 !important;\n}\n\n/* Hover & Focus Highlights */\n.pit-wall-kpi-card {\n  transition: border-color 0.12s ease, background 0.12s ease !important;\n  outline: none !important;\n}\n\n.pit-wall-kpi-card:hover,\n.pit-wall-kpi-card:focus-visible {\n  border-color: rgba(96, 165, 250, 0.35) !important;\n  background: #181920 !important;\n  cursor: default !important;\n}\n\n.pit-wall-bar-col {\n  cursor: pointer !important;\n  outline: none !important;\n}\n\n.pit-wall-bar-col:focus-visible .pit-wall-bar-hours,\n.pit-wall-bar-col:focus-visible .pit-wall-bar-stack {\n  filter: brightness(1.3) !important;\n  outline: 2px solid #60a5fa !important;\n}\n\n.pit-wall-heat-cell {\n  cursor: pointer !important;\n  outline: none !important;\n  transition: filter 0.12s ease !important;\n}\n\n.pit-wall-heat-cell:hover,\n.pit-wall-heat-cell:focus-visible {\n  filter: brightness(1.35) !important;\n  outline: 1.5px solid #60a5fa !important;\n}\n\n.pit-wall-model-row {\n  cursor: pointer !important;\n  padding: 3px 6px !important;\n  border-radius: 6px !important;\n  transition: background 0.12s ease !important;\n  outline: none !important;\n}\n\n.pit-wall-model-row:hover,\n.pit-wall-model-row:focus-visible {\n  background: rgba(255, 255, 255, 0.05) !important;\n}\n";
+  }
+
+  /**
+   * Renders the compact Pit Wall button in the top menubar.
+   * @param {Object} [context]
+   * @returns {{ html: string, css: string }}
+   */
+  render(context = {}) {
+    return {
+      html: renderPitWallMenubarButton(context.pitWall || {}),
+      css: this.cachedCss
+    };
+  }
+}
+
+
 // ======================= Entrypoint Execution =======================
 async function main() {
   try {
@@ -7587,6 +15486,8 @@ async function main() {
     host.registerMod(new ContextTachometerMod());
     host.registerMod(new AgentSelectorMod());
     host.registerMod(new ModsManagerMod());
+    host.registerMod(new ModelSlotsMod());
+    host.registerMod(new PitWallMod());
 
     // Lazy VCS: Avoid running 20+ git/gh processes synchronously on every hook execution.
     // Full VCS overview will be fetched on demand by GitGraph via the local HTTP bridge.

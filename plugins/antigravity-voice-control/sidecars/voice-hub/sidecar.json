@@ -1,0 +1,21 @@
+{
+  "command": "node",
+  "args": [
+    "../launch.mjs",
+    "voice-hub"
+  ],
+  "restart_policy": "always",
+  "display_name": "Antigravity Voice Hub",
+  "description": "Global application-level voice control hub providing real-time local STT bridge and auxiliary pane dashboard.",
+  "has_web_ui": true,
+  "ui_config": {
+    "display_name": "Antigravity Voice Hub",
+    "views": [
+      {
+        "title": "Voice Hub",
+        "path": "/",
+        "entrypoint": "SIDECAR_UI_ENTRYPOINT_AUX_PANE"
+      }
+    ]
+  }
+}

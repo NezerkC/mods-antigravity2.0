@@ -22,7 +22,7 @@
   display: inline-flex !important;
   align-items: center !important;
   gap: 6px !important;
-  transition: all 0.15s ease !important;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;
   user-select: none !important;
 }
 
@@ -35,6 +35,10 @@
   background: #1e2438 !important;
   color: #38bdf8 !important;
   border-color: rgba(56, 189, 248, 0.25) !important;
+}
+
+#antigravity-git-panel-host[data-open="false"] {
+  display: none !important;
 }
 
 /* Full Auxiliary Panel Body */
@@ -99,12 +103,18 @@
   color: #38bdf8 !important;
   border: 1px solid rgba(56, 189, 248, 0.3) !important;
   font-family: monospace !important;
+  max-width: 110px !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
 }
 
 .git-header-actions {
   display: flex !important;
   align-items: center !important;
   gap: 6px !important;
+  flex-shrink: 0 !important;
 }
 
 .git-pill-auto {
@@ -122,11 +132,14 @@
   color: #94a3b8 !important;
   font-size: 12px !important;
   cursor: pointer !important;
-  padding: 2px 4px !important;
+  min-width: 24px !important;
+  min-height: 24px !important;
+  padding: 2px 5px !important;
   border-radius: 4px !important;
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
+  flex-shrink: 0 !important;
 }
 
 .git-tool-btn:hover {
@@ -137,6 +150,43 @@
 .git-tool-close:hover {
   background: rgba(239, 68, 68, 0.2) !important;
   color: #ef4444 !important;
+}
+
+@media (max-width: 320px) {
+  .git-header-repo,
+  .git-pill-auto {
+    display: none !important;
+  }
+  .git-branch-pill {
+    max-width: 82px !important;
+  }
+}
+
+.git-commit-files-container {
+  max-height: 240px !important;
+  overflow-y: auto !important;
+}
+
+.git-files-overflow-note {
+  font-size: 10px !important;
+  color: #94a3b8 !important;
+  padding: 4px 8px !important;
+  background: rgba(255, 255, 255, 0.03) !important;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08) !important;
+}
+
+.git-uncommitted-row {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 6px !important;
+  padding: 4px 8px !important;
+  margin-bottom: 4px !important;
+  border-radius: 5px !important;
+  background: rgba(245, 158, 11, 0.09) !important;
+  border: 1px dashed rgba(245, 158, 11, 0.4) !important;
+  font-size: 11px !important;
+  color: #fbbf24 !important;
 }
 
 /* Status Toast Banner */
@@ -289,7 +339,7 @@
   border: 1px solid rgba(34, 197, 94, 0.35) !important;
   cursor: pointer !important;
   white-space: nowrap !important;
-  transition: all 0.12s ease !important;
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease !important;
 }
 
 .git-commit-push-btn:hover {
@@ -713,7 +763,7 @@
   font-weight: 600 !important;
   cursor: pointer !important;
   border: 1px solid transparent !important;
-  transition: all 0.15s ease !important;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;
   user-select: none !important;
 }
 
@@ -878,7 +928,7 @@
   display: inline-flex !important;
   align-items: center !important;
   gap: 4px !important;
-  transition: all 0.15s ease !important;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;
 }
 
 .git-filter-pill:hover {
@@ -1161,7 +1211,7 @@
   color: #38bdf8 !important;
   border: 1px solid rgba(56, 189, 248, 0.3) !important;
   text-decoration: none !important;
-  transition: all 0.15s ease !important;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease !important;
 }
 
 .git-inspector-btn-gh:hover {
@@ -1277,4 +1327,42 @@
   background: rgba(14, 165, 233, 0.2) !important;
   color: #38bdf8 !important;
   border: 1px solid rgba(14, 165, 233, 0.4) !important;
+}
+
+/* =========================================================================
+   GIT LOCAL VS GITHUB REMOTE VISUAL DISTINCTION
+   ========================================================================= */
+
+.git-route-local {
+  stroke: #f59e0b !important;
+}
+
+.git-route-remote {
+  stroke-opacity: 0.95;
+}
+
+.git-route-sync-bridge {
+  stroke: #f59e0b !important;
+  stroke-dasharray: 3, 2 !important;
+  stroke-opacity: 0.9;
+}
+
+.git-commit-row.is-local-commit {
+  border-left: 2px solid rgba(245, 158, 11, 0.7) !important;
+}
+
+.git-commit-row.is-remote-commit {
+  border-left: 2px solid rgba(56, 189, 248, 0.4) !important;
+}
+
+.git-filter-pill[data-branch-filter="local"].active {
+  background: rgba(245, 158, 11, 0.18) !important;
+  color: #fbbf24 !important;
+  border-color: rgba(245, 158, 11, 0.4) !important;
+}
+
+.git-filter-pill[data-branch-filter="remote"].active {
+  background: rgba(56, 189, 248, 0.18) !important;
+  color: #38bdf8 !important;
+  border-color: rgba(56, 189, 248, 0.4) !important;
 }

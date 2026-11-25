@@ -1,0 +1,18 @@
+{
+  "command": "node",
+  "args": ["server.mjs"],
+  "restart_policy": "always",
+  "display_name": "Antigravity Mods & Telemetry Hub",
+  "description": "Panel lateral nativo con tacómetro de contexto en tiempo real, selector jerárquico de agentes, telemetría VCS y monitoreo del asistente de voz.",
+  "has_web_ui": true,
+  "ui_config": {
+    "display_name": "Mods Hub",
+    "views": [
+      {
+        "title": "Mods & Telemetría",
+        "path": "/",
+        "entrypoint": "SIDECAR_UI_ENTRYPOINT_AUX_PANE"
+      }
+    ]
+  }
+}

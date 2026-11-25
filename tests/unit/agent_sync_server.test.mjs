@@ -97,12 +97,14 @@ describe('AgentSyncServer', () => {
     assert.equal(fetchData.success, true);
   });
 
-  it('updates modifiers (caveman mode) for cascade and handles POST /active-agent/modifier', async () => {
+  it('updates modifiers (caveman and adhd mode) for cascade and handles POST /active-agent/modifier', async () => {
     // 1. Direct method call
     server.updateModifiersForCascade('cascade-123', { caveman: true });
     let onDisk = server.readActiveAgents();
     assert.equal(onDisk['cascade-123'].caveman, true);
+    assert.equal(onDisk['cascade-123'].adhd, true);
     assert.equal(onDisk['cascade-123'].modifiers.caveman, true);
+    assert.equal(onDisk['cascade-123'].modifiers.adhd, true);
 
     // 2. HTTP POST endpoint
     const postRes = await fetch('http://127.0.0.1:53913/active-agent/modifier', {
@@ -110,7 +112,7 @@ describe('AgentSyncServer', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         cascadeId: 'cascade-456',
-        modifiers: { caveman: true }
+        modifiers: { caveman: true, adhd: true }
       })
     });
     assert.equal(postRes.status, 200);
@@ -120,7 +122,9 @@ describe('AgentSyncServer', () => {
 
     onDisk = server.readActiveAgents();
     assert.equal(onDisk['cascade-456'].caveman, true);
+    assert.equal(onDisk['cascade-456'].adhd, true);
     assert.equal(onDisk['cascade-456'].modifiers.caveman, true);
+    assert.equal(onDisk['cascade-456'].modifiers.adhd, true);
 
     // 3. Toggle back to false
     const toggleOff = await fetch('http://127.0.0.1:53913/active-agent/modifier', {
@@ -128,13 +132,15 @@ describe('AgentSyncServer', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         cascadeId: 'cascade-456',
-        modifiers: { caveman: false }
+        modifiers: { caveman: false, adhd: false }
       })
     });
     assert.equal(toggleOff.status, 200);
     onDisk = server.readActiveAgents();
     assert.equal(onDisk['cascade-456'].caveman, false);
+    assert.equal(onDisk['cascade-456'].adhd, false);
     assert.equal(onDisk['cascade-456'].modifiers.caveman, false);
+    assert.equal(onDisk['cascade-456'].modifiers.adhd, false);
   });
 
   it('rejects POST /active-agent payloads larger than 64KB with 413', async () => {
@@ -160,5 +166,43 @@ describe('AgentSyncServer', () => {
   it('unrefs underlying http server upon listen', () => {
     assert.ok(server.server);
     assert.equal(typeof server.server.unref, 'function');
+  });
+
+  it('normalizes file:// URIs and resolves per-cascade repositories from transcripts', async () => {
+    const repoRoot = path.join(tmpDir, 'mock-session-repo');
+    const subDir = path.join(repoRoot, 'packages', 'core');
+    const mockBrain = path.join(tmpDir, 'brain');
+    const cascadeId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const logsDir = path.join(mockBrain, cascadeId, '.system_generated', 'logs');
+
+    fs.mkdirSync(path.join(repoRoot, '.git'), { recursive: true });
+    fs.mkdirSync(subDir, { recursive: true });
+    fs.mkdirSync(logsDir, { recursive: true });
+
+    const transcriptLine = JSON.stringify({
+      step_index: 1,
+      content: `Command Working Directory: ${subDir}\n`
+    }) + '\n';
+    fs.writeFileSync(path.join(logsDir, 'transcript.jsonl'), transcriptLine, 'utf-8');
+
+    server.brainDir = mockBrain;
+
+    const uriCandidate = 'file:///' + subDir.replace(/\\/g, '/');
+    assert.equal(server.normalizeRepoCandidate(uriCandidate, true), path.normalize(repoRoot));
+    assert.equal(server.resolveRepoForCascade(cascadeId), path.normalize(repoRoot));
+
+    let capturedRepo = null;
+    const prevOverview = mockVcs.getRepositoryOverview;
+    mockVcs.getRepositoryOverview = ({ repoPath }) => {
+      capturedRepo = repoPath;
+      return prevOverview({ repoPath });
+    };
+    try {
+      const res = await fetch(`http://127.0.0.1:53913/vcs/overview?cascadeId=${cascadeId}`);
+      assert.equal(res.status, 200);
+      assert.equal(capturedRepo, path.normalize(repoRoot));
+    } finally {
+      mockVcs.getRepositoryOverview = prevOverview;
+    }
   });
 });

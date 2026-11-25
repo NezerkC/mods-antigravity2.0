@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { ModHost } from './ModHost.js';
 import { CdpPortResolver } from './CdpPortResolver.js';
 import { CdpWebSocketClient } from './CdpWebSocketClient.js';
@@ -5,6 +7,9 @@ import { ContextTachometerMod } from '../../mods/context-tachometer/index.js';
 import { AgentSelectorMod } from '../../mods/agent-selector/index.js';
 import { ModsManagerMod } from '../../mods/mods-manager/index.js';
 import { GitGraphMod } from '../../mods/git-graph/index.js';
+import { ModelSlotsMod } from '../../mods/model-slots/index.js';
+import { VoiceAssistantMod } from '../../mods/voice-assistant/index.js';
+import { PitWallMod } from '../../mods/pit-wall/index.js';
 
 /**
  * Creates a ModHost instance pre-configured with default first-party mods.
@@ -17,6 +22,9 @@ export function createDefaultHost(options = {}) {
   host.registerMod(new AgentSelectorMod());
   host.registerMod(new ModsManagerMod());
   host.registerMod(new GitGraphMod());
+  host.registerMod(new ModelSlotsMod());
+  host.registerMod(new VoiceAssistantMod());
+  host.registerMod(new PitWallMod());
   return host;
 }
 
@@ -46,6 +54,35 @@ export class ModDaemon {
     this.connectedPort = null;
     this.lastInjectedAt = null;
     this.isInjecting = false;
+    this.lastVcsSig = null;
+  }
+
+  /**
+   * Computes a lightweight mtime signature for .git/HEAD, .git/index, and .git/refs
+   * without spawning subprocesses, allowing reactive Git Graph updates on commit/push/stage.
+   * @param {string} [repoPath]
+   * @returns {string}
+   */
+  getGitMtimeSignature(repoPath) {
+    const targetRepo = repoPath || this.modHost?.syncServer?.repoPath || process.cwd();
+    try {
+      const gitDir = path.join(targetRepo, '.git');
+      if (!fs.existsSync(gitDir)) return '';
+      const resolvedGitDir = fs.statSync(gitDir).isFile()
+        ? path.resolve(targetRepo, fs.readFileSync(gitDir, 'utf-8').replace(/^gitdir:\s*/i, '').trim())
+        : gitDir;
+      const probes = [
+        path.join(resolvedGitDir, 'HEAD'),
+        path.join(resolvedGitDir, 'index'),
+        path.join(resolvedGitDir, 'refs', 'heads'),
+        path.join(resolvedGitDir, 'refs', 'remotes')
+      ];
+      return probes.map(p => {
+        try { return Math.round(fs.statSync(p).mtimeMs); } catch { return 0; }
+      }).join(':');
+    } catch {
+      return '';
+    }
   }
 
   /**
@@ -101,6 +138,15 @@ export class ModDaemon {
       const activeAgents = (this.modHost.syncServer && typeof this.modHost.syncServer.readActiveAgents === 'function')
         ? this.modHost.syncServer.readActiveAgents()
         : {};
+      const pitWall = (typeof this.modHost.telemetryService.getPitWallMetrics === 'function')
+        ? this.modHost.telemetryService.getPitWallMetrics()
+        : null;
+
+      const currentVcsSig = this.getGitMtimeSignature();
+      const vcsChanged = Boolean(currentVcsSig && this.lastVcsSig && currentVcsSig !== this.lastVcsSig);
+      if (currentVcsSig) {
+        this.lastVcsSig = currentVcsSig;
+      }
 
       const refreshScript = `
         (() => {
@@ -108,7 +154,11 @@ export class ModDaemon {
             window.__antigravityAllMetrics = ${JSON.stringify(allMetrics)};
             window.__antigravityLatestMetric = ${JSON.stringify(primaryMetric)};
             window.__antigravityActiveAgents = ${JSON.stringify(activeAgents)};
+            window.__antigravityPitWall = ${JSON.stringify(pitWall)};
             window.__updateAntigravityTelemetry();
+          }
+          if (${vcsChanged} && typeof window.__antigravityFetchSessionVcsOverview === 'function') {
+            window.__antigravityFetchSessionVcsOverview();
           }
         })()
       `;

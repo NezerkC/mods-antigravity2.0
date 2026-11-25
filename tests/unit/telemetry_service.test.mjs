@@ -128,12 +128,21 @@ test('TelemetryService - tracks multi-model state machine per chat and calculate
     assert.ok(flashEntry);
     assert.ok(argonEntry);
     assert.equal(flashEntry.hasDualLimit, true);
+    assert.equal(flashEntry.color, '#fbbf24');
+    assert.equal(flashEntry.poolId, 'gemini_unified');
     assert.ok(flashEntry.tokens >= 30000);
     assert.equal(flashEntry.chatRollingPct, 10);
 
     assert.equal(argonEntry.hasDualLimit, false);
+    assert.equal(argonEntry.color, '#38bdf8');
+    assert.equal(argonEntry.poolId, 'argon_weekly');
     assert.ok(argonEntry.tokens >= 50000);
     assert.equal(argonEntry.chatWeeklyPct, 10);
+
+    // Waffle grid & 3-pool summary enrichment
+    assert.equal(snapshot.waffleCells.length, 100);
+    assert.equal(snapshot.poolsSummary.length, 3);
+    assert.deepEqual(snapshot.poolsSummary.map(p => p.id), ['gemini_unified', 'argon_weekly', 'third_party']);
 
     // Active model at end of chat is Gemini 4 Argon (Medium)
     assert.equal(snapshot.modelQuota.hasDualLimit, false);
@@ -358,5 +367,217 @@ test('TelemetryService - resolveNativeQuotaForModel maps RPC groups to accurate 
   assert.ok(html.includes('49%'));
   assert.ok(html.includes('Cuota 5h Restante'));
   assert.ok(html.includes('92%'));
+});
+
+test('TelemetryService - resolves subagent models (inherit + explicit), nested trees, and groups per model without double-counting global quota', () => {
+  const tempBrain = fs.mkdtempSync(path.join(os.tmpdir(), 'telemetry-subagents-'));
+  const nowIso = new Date().toISOString();
+
+  const parentId = '11111111-1111-4111-8111-111111111111';
+  const childInheritId = '22222222-2222-4222-8222-222222222222';
+  const grandchildId = '33333333-3333-4333-8333-333333333333';
+  const childFlashId = '44444444-4444-4444-8444-444444444444';
+
+  const makeConvTranscript = (convId, lines) => {
+    const logsDir = path.join(tempBrain, convId, '.system_generated', 'logs');
+    fs.mkdirSync(logsDir, { recursive: true });
+    const p = path.join(logsDir, 'transcript.jsonl');
+    fs.writeFileSync(p, lines.join('\n'), 'utf-8');
+    return p;
+  };
+
+  try {
+    const parentTranscript = makeConvTranscript(parentId, [
+      JSON.stringify({
+        type: 'USER_INPUT',
+        created_at: nowIso,
+        content: '<USER_REQUEST>Run research and UI worker</USER_REQUEST>\n<USER_SETTINGS_CHANGE>\nThe user changed setting `Model Selection` from None to Gemini 4 Argon (High).\n</USER_SETTINGS_CHANGE>'
+      }),
+      JSON.stringify({
+        step_index: 2,
+        type: 'PLANNER_RESPONSE',
+        created_at: nowIso,
+        input_tokens: 20000,
+        output_tokens: 5000,
+        content: 'Spawning two subagents',
+        tool_calls: [
+          {
+            name: 'invoke_subagent',
+            args: {
+              Model: '"inherit"',
+              Role: '"Deep Architecture Investigator"',
+              TypeName: '"DeepInvestigator"'
+            }
+          },
+          {
+            name: 'invoke_subagent',
+            args: {
+              Model: '"flash"',
+              Role: '"UI Component Builder"',
+              TypeName: '"self"'
+            }
+          }
+        ]
+      }),
+      JSON.stringify({
+        step_index: 3,
+        type: 'GENERIC',
+        created_at: nowIso,
+        content: `Created the following subagent:\n{\n  "conversationId": "${childInheritId}"\n}`
+      }),
+      JSON.stringify({
+        step_index: 4,
+        type: 'GENERIC',
+        created_at: nowIso,
+        content: `Created the following subagent:\n{\n  "conversationId": "${childFlashId}"\n}`
+      }),
+      JSON.stringify({
+        step_index: 5,
+        type: 'SYSTEM_MESSAGE',
+        created_at: nowIso,
+        content: `[Message] sender=${childInheritId} content=Investigation finished.`
+      })
+    ]);
+
+    makeConvTranscript(childInheritId, [
+      JSON.stringify({
+        step_index: 1,
+        type: 'PLANNER_RESPONSE',
+        created_at: nowIso,
+        input_tokens: 15000,
+        output_tokens: 5000,
+        content: 'Delegating to worker',
+        tool_calls: [
+          {
+            name: 'invoke_subagent',
+            args: {
+              Model: '"inherit"',
+              Role: '"Layer 0 Worker"',
+              TypeName: '"WorkerL0"'
+            }
+          }
+        ]
+      }),
+      JSON.stringify({
+        step_index: 2,
+        type: 'GENERIC',
+        created_at: nowIso,
+        content: `Created the following subagent:\n{\n  "conversationId": "${grandchildId}"\n}`
+      })
+    ]);
+
+    makeConvTranscript(grandchildId, [
+      JSON.stringify({
+        step_index: 1,
+        type: 'PLANNER_RESPONSE',
+        created_at: nowIso,
+        input_tokens: 25000,
+        output_tokens: 5000,
+        content: 'Worker finished report'
+      })
+    ]);
+
+    makeConvTranscript(childFlashId, [
+      JSON.stringify({
+        step_index: 1,
+        type: 'PLANNER_RESPONSE',
+        created_at: nowIso,
+        input_tokens: 12000,
+        output_tokens: 3000,
+        tool_calls: [{ name: 'read_file', args: { Path: '"index.js"' } }]
+      })
+    ]);
+
+    // Write killed state metadata for childFlashId to verify .system_generated/subagents integration
+    const parentSubDir = path.join(tempBrain, parentId, '.system_generated', 'subagents');
+    fs.mkdirSync(parentSubDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(parentSubDir, `${childFlashId}.json`),
+      JSON.stringify({
+        conversationId: childFlashId,
+        subagentDescriptor: { typeName: 'self', role: 'UI Component Builder' },
+        state: 'SUBAGENT_STATE_KILLED',
+        spawnStepIndex: 4
+      }),
+      'utf-8'
+    );
+
+    const service = new TelemetryService({ brainDir: tempBrain });
+    const snap = service.parseTranscriptFile(parentTranscript);
+
+    assert.equal(snap.subagents.length, 3);
+
+    const argonModel = snap.chatModels.find(m => m.modelName === 'Gemini 4 Argon (High)');
+    const flashModel = snap.chatModels.find(m => m.modelName === 'Gemini 3.8 Flash');
+
+    assert.ok(argonModel);
+    assert.ok(flashModel);
+
+    // Argon includes parent (~25k) + childInherit (20k) + grandchild (30k) => >= 75k, 2 subagents
+    assert.equal(argonModel.subagentCount, 2);
+    assert.equal(argonModel.subagents.length, 2);
+    assert.equal(argonModel.subagents[0].role, 'Deep Architecture Investigator');
+    assert.equal(argonModel.subagents[0].isInherited, true);
+    assert.equal(argonModel.subagents[0].status, 'done');
+    assert.equal(argonModel.subagents[1].role, 'Layer 0 Worker');
+    assert.equal(argonModel.subagents[1].depth, 1);
+    assert.equal(argonModel.subagents[1].status, 'done');
+    assert.ok(argonModel.tokens >= 75000);
+
+    // Flash includes childFlash (15k), 1 subagent, status killed
+    assert.equal(flashModel.directTokens, 0);
+    assert.equal(flashModel.subagentTokens, 15000);
+    assert.equal(flashModel.tokens, 15000);
+    assert.equal(flashModel.subagentCount, 1);
+    assert.equal(flashModel.subagents[0].role, 'UI Component Builder');
+    assert.equal(flashModel.subagents[0].requestedModel, 'flash');
+    assert.equal(flashModel.subagents[0].isInherited, false);
+    assert.equal(flashModel.subagents[0].status, 'killed');
+
+    // Verify getAllMetrics attributes inherited subagents to Argon and does NOT double-count steps
+    const all = service.getAllMetrics();
+    assert.ok(all[parentId]);
+    // Total Argon tokens across tempBrain = ~75,000 out of 500,000 weekly ceiling => ~15% weeklyUsed (not 30%!)
+    assert.equal(all[parentId].modelQuota.weeklyUsed, 15);
+  } finally {
+    fs.rmSync(tempBrain, { recursive: true, force: true });
+  }
+});
+
+test('TelemetryService - uses mtimeMs/size cache on repeated parses and estimates tool_calls without JSON.stringify', () => {
+  const tempBrain = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-telemetry-cache-'));
+  try {
+    const convDir = path.join(tempBrain, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', '.system_generated', 'logs');
+    fs.mkdirSync(convDir, { recursive: true });
+    const filePath = path.join(convDir, 'transcript.jsonl');
+    fs.writeFileSync(filePath, JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      content: 'Done',
+      tool_calls: [{ name: 'write_file', args: { Path: '/tmp/foo.js', Content: 'x'.repeat(200) } }]
+    }) + '\n', 'utf-8');
+
+    const service = new TelemetryService({ brainDir: tempBrain });
+    assert.equal(service.estimateToolCallsChars([{ name: 'read', args: { Path: 'a.txt' } }]) > 20, true);
+
+    const first = service.parseTranscriptFile(filePath);
+    assert.ok(first.estTokens > 0);
+    assert.ok(service.cache.size >= 1);
+
+    const origRead = fs.readFileSync;
+    let diskReads = 0;
+    fs.readFileSync = (...args) => {
+      if (args[0] === filePath) diskReads++;
+      return origRead(...args);
+    };
+    try {
+      const second = service.parseTranscriptFile(filePath);
+      assert.equal(second.estTokens, first.estTokens);
+      assert.equal(diskReads, 0, 'Unchanged mtimeMs and size must serve cached parse result without re-reading transcript');
+    } finally {
+      fs.readFileSync = origRead;
+    }
+  } finally {
+    fs.rmSync(tempBrain, { recursive: true, force: true });
+  }
 });
 

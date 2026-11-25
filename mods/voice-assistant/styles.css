@@ -1,70 +1,308 @@
-/* Voice Assistant Mod Styles */
-.antigravity-slot-chat-input-actions {
+/* Voice Assistant Mod Styles (Top HUD) */
+
+/* ==========================================================================
+   Generalized HTML5 Box-in-Box Voice Mode HUD (Top-Centered Across Views)
+   Box 0: viewport-anchor (.antigravity-voice-toast-docked / .agy-voice-hud)
+   Box 1: frame           ([data-voice-hud-box="frame"])
+   Box 2: surface         ([data-voice-hud-box="surface"] / [data-testid="live-docked"])
+   Box 3: header/toolbar  ([data-voice-hud-box="header"] / [role="toolbar"])
+            -> identity | controls-well | actions | drawer
+   Box 4: tray/alerts     ([data-voice-hud-box="tray"] / mic warning / composer)
+   ========================================================================== */
+
+/* Box 0: Top-Centered Viewport Anchor (Chats, History, and Customizations HUD) */
+.antigravity-voice-toast-docked,
+body .antigravity-voice-toast-docked,
+:root .antigravity-voice-toast-docked,
+.agy-voice-hud[data-voice-hud-box="viewport-anchor"],
+body .agy-voice-hud[data-voice-hud-box="viewport-anchor"] {
+  --agy-voice-hud-top: 4px;
+  --agy-voice-outer-radius: var(--nux-radius-lg, 16px);
+  --agy-voice-inner-pad: 4px;
+  --agy-voice-inner-radius: calc(var(--agy-voice-outer-radius) - var(--agy-voice-inner-pad));
+  position: fixed !important;
+  inset-block-start: var(--agy-voice-hud-top) !important;
+  inset-inline: 0 !important;
+  top: var(--agy-voice-hud-top) !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: auto !important;
+  margin-inline: auto !important;
+  margin-bottom: 0 !important;
+  width: fit-content !important;
+  min-width: min(260px, calc(100vw - 32px)) !important;
+  max-width: min(440px, max(260px, calc(100vw - 320px)), calc(100vw - 48px)) !important;
+  height: auto !important;
+  padding: 0 !important;
+  transform: none !important;
+  z-index: 9998 !important;
+  box-sizing: border-box !important;
+  overflow: visible !important;
+  pointer-events: auto !important;
+  transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease;
+}
+
+/* Offset cleanly below the 35px menubar when present (Chats & Customizations) */
+body:has([data-testid="title-menu-bar"]) .antigravity-voice-toast-docked,
+:root:has([data-testid="title-menu-bar"]) .antigravity-voice-toast-docked,
+body:has([data-testid="title-menu-bar"]) .agy-voice-hud[data-voice-hud-box="viewport-anchor"] {
+  --agy-voice-hud-top: 39px;
+}
+
+/* Multi-layer variant wrappers stack vertically (Header surface above Alert tray) */
+body .antigravity-voice-toast-docked[data-voice-hud-variant="teleprompter"],
+body .antigravity-voice-toast-docked[data-voice-hud-variant="dock"],
+body .antigravity-voice-toast-docked.agy-voice-hud,
+.agy-voice-hud[data-voice-hud-box="viewport-anchor"] {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: 6px !important;
+  pointer-events: none !important;
+}
+
+/* Direct compact/minimized bar keeps pill ergonomics centered at the Top HUD */
+.antigravity-voice-toast-docked.is-minimized,
+body .antigravity-voice-toast-docked.is-minimized,
+.antigravity-voice-toast-docked[data-minimized="true"],
+body .antigravity-voice-toast-docked[data-minimized="true"],
+.antigravity-voice-toast-docked.minimized,
+body .antigravity-voice-toast-docked.minimized {
+  position: fixed !important;
+  inset-block-start: var(--agy-voice-hud-top, 4px) !important;
+  inset-inline: 0 !important;
+  top: var(--agy-voice-hud-top, 4px) !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: auto !important;
+  margin-inline: auto !important;
+  transform: none !important;
+  border-radius: var(--nux-radius-pill, 9999px) !important;
+  transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease, border-radius 0.2s ease;
+}
+
+/* Box 1: Frame (normalizes native teleprompter inner wrapper & standalone frame) */
+body .antigravity-voice-toast-docked[data-voice-hud-variant="teleprompter"] > div,
+body .antigravity-voice-toast-docked [data-voice-hud-box="frame"],
+.agy-voice-hud [data-voice-hud-box="frame"] {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: 6px !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  pointer-events: none !important;
+}
+
+/* Order Box 2 (Surface) above native <c6> inline mic warning inside teleprompter slot */
+body .antigravity-voice-toast-docked[data-voice-hud-variant="teleprompter"] > div > [data-testid="live-docked"],
+body .antigravity-voice-toast-docked [data-voice-hud-box="surface"] {
+  order: 1 !important;
+  width: 100% !important;
+  pointer-events: auto !important;
+}
+
+body .antigravity-voice-toast-docked[data-voice-hud-variant="teleprompter"] > div > :not([data-testid="live-docked"]) {
+  order: 2 !important;
+  justify-content: center !important;
+  margin: 0 !important;
+  pointer-events: auto !important;
+}
+
+/* Box 2: Onyx 4-Sided Glass Card Surface (neutralizes bottom-composer border-b-0 / pb-8) */
+body .antigravity-voice-toast-docked [data-testid="live-docked"],
+body[data-agy-theme][data-newux-theme="onyx"] .agy-live-dock-slot.antigravity-voice-toast-docked [data-testid="live-docked"],
+body[data-agy-theme][data-newux-theme="onyx"] .agy-live-dock-slot:has(+ .surface-composer).antigravity-voice-toast-docked [data-testid="live-docked"],
+body .antigravity-voice-toast-docked [data-voice-hud-box="surface"],
+.agy-voice-hud [data-voice-hud-box="surface"] {
+  background-color: var(--glass, rgba(24, 24, 28, 0.88)) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(1.6) !important;
+  backdrop-filter: blur(20px) saturate(1.6) !important;
+  border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.14)) !important;
+  border-radius: var(--agy-voice-outer-radius, 16px) !important;
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight, rgba(255, 255, 255, 0.08)),
+    var(--glass-shadow, 0 14px 34px -10px rgba(0, 0, 0, 0.45)) !important;
+  padding: var(--agy-voice-inner-pad, 4px) 6px !important;
+  margin: 0 !important;
+  box-sizing: border-box !important;
+  pointer-events: auto !important;
+}
+
+/* Minimize bottom padding when standalone/teleprompter is collapsed into a slim HUD capsule */
+body .antigravity-voice-toast-docked.is-minimized [data-testid="live-docked"],
+body .antigravity-voice-toast-docked[data-minimized="true"] [data-testid="live-docked"],
+.agy-voice-hud.is-minimized [data-voice-hud-box="surface"] {
+  border-radius: var(--nux-radius-pill, 9999px) !important;
+  padding: 3px 6px !important;
+}
+
+/* Box 3: Header Strip & Inner Pills / Recessed Toolbar Well */
+body .antigravity-voice-toast-docked [data-voice-hud-box="header"],
+body .antigravity-voice-toast-docked [data-testid="voice-call-controls"],
+.agy-voice-hud [data-voice-hud-box="header"] {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  pointer-events: auto !important;
+}
+
+.agy-voice-hud [data-voice-hud-box="identity"],
+body .antigravity-voice-toast-docked [data-voice-hud-box="identity"] {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  margin-right: 2px;
+  gap: 6px;
+  min-width: 0;
+  padding-inline: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground, #a1a1aa);
 }
 
-.antigravity-voice-assistant-wrapper {
+.agy-voice-hud [data-voice-hud-box="toolbar"] {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  position: relative;
+  gap: 6px;
+  min-width: 0;
 }
 
-.antigravity-voice-assistant-btn {
+.agy-voice-hud [data-voice-hud-box="controls-well"],
+body .antigravity-voice-toast-docked [data-voice-hud-box="controls-well"] {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 1.75rem;
-  height: 1.75rem;
-  padding: 0.375rem;
-  border-radius: 9999px;
-  background: transparent;
-  color: var(--secondary-foreground, #ececec);
-  border: none;
-  cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
-  user-select: none;
-  outline: none;
+  gap: 4px;
+  padding: 2px;
+  border-radius: var(--nux-radius-pill, 9999px);
+  background-color: var(--onyx-well, rgba(255, 255, 255, 0.055));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
 }
 
-.antigravity-voice-assistant-btn:hover {
-  background-color: var(--secondary, rgba(255, 255, 255, 0.08));
+.agy-voice-hud [data-voice-hud-box="actions"],
+body .antigravity-voice-toast-docked [data-voice-hud-box="actions"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.antigravity-voice-assistant-btn:focus-visible {
+.agy-voice-hud .agy-voice-hud-separator {
+  inline-size: 1px;
+  block-size: 14px;
+  background-color: var(--border, rgba(255, 255, 255, 0.16));
+}
+
+/* Native Floating Voice Dock pill row in Chats History & Customizations */
+body .antigravity-voice-toast-docked[data-voice-hud-variant="dock"] {
+  cursor: default !important;
+}
+
+body .antigravity-voice-toast-docked[data-voice-hud-variant="dock"] > div:last-child {
+  order: 1 !important;
+  pointer-events: auto !important;
+}
+
+/* Box 3C: Bounded Transcript / Composer Drawer inside Top HUD */
+body .antigravity-voice-toast-docked [data-testid="live-docked-replies"],
+body .antigravity-voice-toast-docked [data-voice-hud-box="drawer"],
+.agy-voice-hud [data-voice-hud-box="drawer"] {
+  max-height: min(40vh, 260px) !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  border-radius: var(--agy-voice-inner-radius, 12px);
+  pointer-events: auto !important;
+}
+
+.agy-voice-hud.is-minimized [data-voice-hud-box="drawer"],
+body .antigravity-voice-toast-docked.is-minimized [data-testid="live-docked-replies"] {
+  display: none !important;
+}
+
+/* Box 4: Downward Flip for Mic Disconnected, Mic Switched, Error Tips & Quick Composer */
+body .antigravity-voice-toast-docked [data-testid="voice-mic-warning"],
+body .antigravity-voice-toast-docked [data-testid="voice-mic-switched"],
+body .antigravity-voice-toast-docked [data-testid="voice-error-tip"],
+body .antigravity-voice-toast-docked [data-testid="voice-dock-composer"],
+body .antigravity-voice-toast-docked [data-voice-hud-box="alert"],
+body .antigravity-voice-toast-docked[data-voice-hud-variant="dock"] > [role="status"],
+.agy-voice-hud [data-voice-hud-box="tray"] {
+  top: calc(100% + 8px) !important;
+  bottom: auto !important;
+  left: 50% !important;
+  right: auto !important;
+  translate: -50% 0 !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  transform-origin: top center !important;
+  max-width: min(360px, calc(100vw - 32px)) !important;
+  z-index: 9999 !important;
+  pointer-events: auto !important;
+}
+
+/* In-flow <c6> mic warning inside teleprompter slot sits right below surface card */
+body .antigravity-voice-toast-docked[data-voice-hud-variant="teleprompter"] [data-testid="voice-mic-warning"]:not(.absolute),
+body .antigravity-voice-toast-docked[data-voice-hud-variant="teleprompter"] [data-testid="voice-mic-switched"]:not(.absolute),
+.agy-voice-hud [data-voice-hud-box="tray"] > [data-voice-hud-box="alert"] {
+  position: relative !important;
+  top: auto !important;
+  left: auto !important;
+  translate: none !important;
+  order: 2 !important;
+  pointer-events: auto !important;
+}
+
+/* Dictation Speed Panel & Mic Switcher Popover Portals stay above Top HUD (z > 9998) */
+body [data-popover-popup]:has([data-testid="voice-speed-panel"]),
+body [class*="z-[6000]"]:has([data-testid="voice-speed-panel"]),
+body [data-popover-popup]:has([data-testid="voice-mic-warning-switch"]),
+body [class*="z-[6000]"]:has([data-testid="voice-mic-warning-switch"]) {
+  z-index: 10020 !important;
+  pointer-events: auto !important;
+}
+
+/* Interactive Control Ergonomics, ARIA Pressed State & Accessibility */
+.antigravity-voice-toast-docked button,
+body .antigravity-voice-toast-docked button,
+.antigravity-voice-toast-docked input,
+body .antigravity-voice-toast-docked input,
+.antigravity-voice-toast-docked textarea,
+body .antigravity-voice-toast-docked textarea,
+.agy-voice-hud button,
+.agy-voice-hud input {
+  min-inline-size: 24px;
+  min-block-size: 24px;
+  pointer-events: auto !important;
+}
+
+.agy-voice-hud button[aria-pressed="true"] {
+  background-color: var(--secondary, rgba(255, 255, 255, 0.16));
+  color: var(--foreground, #ffffff);
+  box-shadow: inset 0 0 0 1px var(--border, rgba(255, 255, 255, 0.22));
+}
+
+.antigravity-voice-toast-docked button:focus-visible,
+body .antigravity-voice-toast-docked button:focus-visible,
+.agy-voice-hud button:focus-visible {
   outline: 2px solid var(--ring, #3b82f6);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
-.antigravity-voice-assistant-btn.state-muted {
-  opacity: 0.45;
-}
-
-.antigravity-voice-assistant-btn.state-speaking {
-  color: #38bdf8;
-  background-color: rgba(56, 189, 248, 0.12);
-}
-
-.antigravity-voice-assistant-btn.state-speaking .wave-1 {
-  animation: voiceWavePulse 1.2s infinite ease-in-out;
-}
-
-.antigravity-voice-assistant-btn.state-speaking .wave-2 {
-  animation: voiceWavePulse 1.2s infinite ease-in-out 0.3s;
-}
-
-@keyframes voiceWavePulse {
-  0%, 100% {
-    opacity: 0.3;
-    transform: scale(0.95);
-    transform-origin: center;
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.1);
-    transform-origin: center;
+@media (prefers-reduced-motion: reduce) {
+  .antigravity-voice-toast-docked,
+  body .antigravity-voice-toast-docked,
+  .agy-voice-hud[data-voice-hud-box="viewport-anchor"] {
+    transition: none !important;
   }
 }
+
+@media (forced-colors: active) {
+  body .antigravity-voice-toast-docked [data-voice-hud-box="surface"],
+  .agy-voice-hud [data-voice-hud-box="surface"] {
+    border: 1px solid CanvasText !important;
+    background-color: Canvas !important;
+    color: CanvasText !important;
+  }
+}
+

@@ -26,7 +26,7 @@ test('AgentSelectorMod - renders badge with dynamic Lucide icon and agent dropdo
   assert.ok(rendered.html.includes('antigravity-caveman-reticle-trigger'), 'Must include exterior reticle button');
   assert.ok(rendered.html.includes('reticle-icon'), 'Must include reticle SVG icon');
   assert.ok(rendered.html.includes('antigravity-caveman-card'), 'Must include caveman modifier card in dropdown');
-  assert.ok(rendered.html.includes('Modo Focus (Caveman)'), 'Must include Focus title');
+  assert.ok(rendered.html.includes('Modo Focus (Caveman + ADHD)'), 'Must include Focus title');
   assert.ok(rendered.html.includes('antigravity-caveman-toggle'), 'Must include toggle switch');
   assert.ok(rendered.html.includes('antigravity-caveman-pill'), 'Must include status pill');
 });

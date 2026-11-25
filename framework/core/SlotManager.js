@@ -77,40 +77,105 @@ export class SlotManager {
   }
 
   /**
-   * Generates browser-executable JavaScript to mount a mod within a target slot
-   * across ALL conversation tabs and split panels matching the selector.
-   * @param {Object} params
-   * @param {string} params.slotId
-   * @param {string} params.modId
-   * @param {string} params.htmlContent
+   * Computes a deterministic content signature to skip redundant innerHTML writes.
+   * @param {string} html
    * @returns {string}
    */
-  generateMountCode({ slotId, modId, htmlContent }) {
+  static computeHtmlSignature(html) {
+    const text = String(html || '');
+    let hash = 5381;
+    for (let i = 0; i < text.length; i++) {
+      hash = ((hash << 5) + hash) ^ text.charCodeAt(i);
+    }
+    return `${text.length}:${(hash >>> 0).toString(36)}`;
+  }
+
+  /**
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * using default SlotManager definitions.
+   * @param {string} slotId
+   * @param {string} modId
+   * @param {string} htmlContent
+   * @returns {string}
+   */
+  static generateMountSnippet(slotId, modId, htmlContent) {
+    return new SlotManager().generateMountSnippet(slotId, modId, htmlContent);
+  }
+
+  /**
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * across ALL conversation tabs and split panels matching the selector.
+   * @param {string} slotId
+   * @param {string} modId
+   * @param {string} htmlContent
+   * @returns {string}
+   */
+  generateMountSnippet(slotId, modId, htmlContent) {
     const slot = this.getSlot(slotId);
     const containerId = this.getContainerId(slotId);
     const modWrapperId = `antigravity-mod-${modId}`;
+    const htmlSig = SlotManager.computeHtmlSignature(htmlContent);
 
     return `
       (() => {
-        let anchors = Array.from(document.querySelectorAll('${slot.selector}'));
-        if (!anchors.length && '${slotId}' === 'aux-pane-tab') {
-          const auxBar = document.querySelector('[data-active-tab-id]') ||
-                         document.querySelector('.shrink-0.flex.items-center.gap-0\\\\.5.border-b') ||
-                         document.querySelector('div[class*="shrink-0"][class*="border-b"]');
-          if (auxBar) {
-            anchors = [auxBar.querySelector('.overflow-x-auto') || auxBar];
+        let anchorEntries = Array.from(document.querySelectorAll('${slot.selector}'))
+          .map(anchor => ({ anchor, strategy: '${slot.strategy}' }));
+
+        if (!anchorEntries.length && '${slotId}' === 'menubar-actions') {
+          const menubar = document.querySelector('.shrink-0.bg-sidebar .flex.items-center.bg-sidebar') ||
+                          document.querySelector('.shrink-0 .flex.items-center.bg-sidebar') ||
+                          document.querySelector('.shrink-0.bg-sidebar');
+          if (menubar) {
+            anchorEntries = [{ anchor: menubar, strategy: '${slot.strategy}' }];
+          }
+        }
+
+        if (!anchorEntries.length && '${slotId}' === 'aux-pane-tab') {
+          const sidePanelNewTabBtns = Array.from(document.querySelectorAll('button[data-testid="side-panel-new-tab-button"]'));
+          if (sidePanelNewTabBtns.length) {
+            anchorEntries = sidePanelNewTabBtns.map(anchor => ({ anchor, strategy: 'before' }));
+          } else {
+            let auxBars = Array.from(document.querySelectorAll('[data-active-tab-id], [data-side-panel-strip="true"]'));
+            if (!auxBars.length) {
+              auxBars = Array.from(document.querySelectorAll('.shrink-0.flex.items-center.gap-0\\\\.5.border-b'));
+            }
+            if (!auxBars.length) {
+              auxBars = Array.from(document.querySelectorAll('div[class*="shrink-0"][class*="border-b"]'));
+            }
+            for (const auxBar of auxBars) {
+              const newTabBtn = auxBar.querySelector('button[data-testid="side-panel-new-tab-button"], button[data-testid="aux-pane-new-tab-button"]');
+              if (newTabBtn) {
+                anchorEntries.push({ anchor: newTabBtn, strategy: 'before' });
+              } else {
+                const tabScrollStrip = auxBar.querySelector('.overflow-x-auto');
+                if (tabScrollStrip) {
+                  anchorEntries.push({ anchor: tabScrollStrip, strategy: 'after' });
+                } else {
+                  anchorEntries.push({ anchor: auxBar, strategy: 'append' });
+                }
+              }
+            }
           }
         }
 
         // Clean up any misplaced legacy slot containers that were injected directly inside non-flex wrappers
-        document.querySelectorAll('#${containerId}').forEach(el => {
-          if (el.parentElement && !el.parentElement.className.includes('flex')) {
-            el.remove();
-          }
-        });
+        if ('${slot.strategy}' === 'before' || '${slot.strategy}' === 'after') {
+          document.querySelectorAll('#${containerId}').forEach(el => {
+            const parent = el.parentElement;
+            const parentCls = parent && typeof parent.className === 'string' ? parent.className : '';
+            if (parent && !parentCls.includes('flex') && !parent.hasAttribute('data-active-tab-id') && !parent.hasAttribute('data-side-panel-strip')) {
+              el.remove();
+            }
+          });
+        }
 
-        // If containers already exist in the DOM, ensure mod nodes are refreshed immediately
-        document.querySelectorAll('#${containerId}').forEach(container => {
+        const ensureSlotSizing = (container) => {
+          if (container.style.minWidth !== '0') container.style.minWidth = '0';
+          if (container.style.maxWidth !== '100%') container.style.maxWidth = '100%';
+        };
+
+        const syncModNode = (container) => {
+          ensureSlotSizing(container);
           let modNode = container.querySelector('#${modWrapperId}');
           if (!modNode) {
             modNode = document.createElement('div');
@@ -119,21 +184,34 @@ export class SlotManager {
             modNode.style.display = 'inline-flex';
             modNode.style.alignItems = 'center';
             modNode.style.height = '28px';
+            if ('${slotId}' === 'header-actions') {
+              modNode.style.minWidth = '0';
+              modNode.style.maxWidth = '100%';
+            }
             container.appendChild(modNode);
           }
-          modNode.setAttribute('data-version', '2');
-          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
-            modNode.innerHTML = ${JSON.stringify(htmlContent)};
+          if (modNode.getAttribute('data-version') !== '2') {
+            modNode.setAttribute('data-version', '2');
           }
-        });
+          const prevSig = modNode.getAttribute('data-render-hash') || modNode.getAttribute('data-sig');
+          const isLiveStateMod = '${modId}' === 'agent-selector' || '${modId}' === 'context-tachometer';
+          if (!modNode.firstElementChild || (!isLiveStateMod && prevSig !== '${htmlSig}')) {
+            modNode.innerHTML = ${JSON.stringify(htmlContent)};
+            modNode.setAttribute('data-sig', '${htmlSig}');
+            modNode.setAttribute('data-render-hash', '${htmlSig}');
+          }
+        };
 
-        if (!anchors.length) return;
+        // If containers already exist in the DOM, ensure mod nodes are hydrated without redundant innerHTML churn
+        document.querySelectorAll('#${containerId}').forEach(syncModNode);
 
-        for (const anchor of anchors) {
+        if (!anchorEntries.length) return;
+
+        for (const { anchor, strategy } of anchorEntries) {
           let parent;
           let targetItem = anchor;
 
-          if ('${slot.strategy}' === 'append' || '${slot.strategy}' === 'prepend') {
+          if (strategy === 'append' || strategy === 'prepend') {
             parent = anchor;
           } else {
             parent = anchor.parentElement;
@@ -166,50 +244,56 @@ export class SlotManager {
             container.style.alignItems = 'center';
             container.style.gap = '6px';
             container.style.height = '100%';
+            container.style.minWidth = '0';
+            container.style.maxWidth = '100%';
             container.style.setProperty('app-region', 'no-drag');
 
-            if ('${slot.strategy}' === 'after') {
+            if (strategy === 'after') {
               if (targetItem.nextSibling) {
                 parent.insertBefore(container, targetItem.nextSibling);
               } else {
                 parent.appendChild(container);
               }
-            } else if ('${slot.strategy}' === 'before') {
+            } else if (strategy === 'before') {
               parent.insertBefore(container, targetItem);
-            } else if ('${slot.strategy}' === 'prepend') {
+            } else if (strategy === 'prepend') {
               parent.prepend(container);
             } else {
               parent.appendChild(container);
             }
           } else {
-            // Ensure slot container remains directly in parent flex row, right after targetItem
-            if ('${slot.strategy}' === 'after' && (container.parentElement !== parent || container.previousElementSibling !== targetItem)) {
+            // Ensure slot container remains in the expected position relative to targetItem
+            if (strategy === 'after' && (container.parentElement !== parent || container.previousElementSibling !== targetItem)) {
               if (targetItem.nextSibling) {
                 parent.insertBefore(container, targetItem.nextSibling);
               } else {
                 parent.appendChild(container);
               }
-            } else if (('${slot.strategy}' === 'append' || '${slot.strategy}' === 'prepend') && container.parentElement !== parent) {
+            } else if (strategy === 'before' && (container.parentElement !== parent || container.nextElementSibling !== targetItem)) {
+              parent.insertBefore(container, targetItem);
+            } else if (strategy === 'prepend' && (container.parentElement !== parent || parent.firstElementChild !== container)) {
+              parent.prepend(container);
+            } else if (strategy === 'append' && container.parentElement !== parent) {
               parent.appendChild(container);
             }
           }
 
-          let modNode = container.querySelector('#${modWrapperId}');
-          if (!modNode) {
-            modNode = document.createElement('div');
-            modNode.id = '${modWrapperId}';
-            modNode.className = '${modWrapperId}';
-            modNode.style.display = 'inline-flex';
-            modNode.style.alignItems = 'center';
-            modNode.style.height = '28px';
-            container.appendChild(modNode);
-          }
-          modNode.setAttribute('data-version', '2');
-          if (!modNode.firstElementChild || '${modId}' !== 'agent-selector') {
-            modNode.innerHTML = ${JSON.stringify(htmlContent)};
-          }
+          syncModNode(container);
         }
       })();
     `;
+  }
+
+  /**
+   * Generates browser-executable JavaScript to mount a mod within a target slot
+   * across ALL conversation tabs and split panels matching the selector.
+   * @param {Object} params
+   * @param {string} params.slotId
+   * @param {string} params.modId
+   * @param {string} params.htmlContent
+   * @returns {string} Executable JavaScript.
+   */
+  generateMountCode({ slotId, modId, htmlContent }) {
+    return this.generateMountSnippet(slotId, modId, htmlContent);
   }
 }

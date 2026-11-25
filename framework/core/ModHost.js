@@ -32,7 +32,7 @@ export class ModHost {
     this.slotManager = options.slotManager || new SlotManager();
     this.modLoader = options.modLoader || new ModLoader({ slotManager: this.slotManager });
     this.telemetryService = options.telemetryService || new TelemetryService();
-    this.syncServer = options.syncServer || new AgentSyncServer();
+    this.syncServer = options.syncServer || new AgentSyncServer({ telemetryService: this.telemetryService });
     this.gitService = options.gitService || new GitService();
     this.vcsOrchestrator = options.vcsOrchestrator || new VcsOrchestrator({ gitService: this.gitService });
     this.portResolver = options.portResolver || new CdpPortResolver();
@@ -44,6 +44,22 @@ export class ModHost {
    */
   registerMod(mod) {
     this.modLoader.register(mod);
+  }
+
+  /**
+   * Returns registered mods from the mod loader.
+   * @returns {Array<import('../sdk/AntigravityMod.js').AntigravityMod>}
+   */
+  getMods() {
+    return this.modLoader.getRegisteredMods();
+  }
+
+  /**
+   * Returns registered mods from the mod loader.
+   * @returns {Array<import('../sdk/AntigravityMod.js').AntigravityMod>}
+   */
+  getRegisteredMods() {
+    return this.modLoader.getRegisteredMods();
   }
 
   /**
@@ -63,24 +79,52 @@ export class ModHost {
    * @returns {Promise<string>}
    */
   async resolveRepoPath(cdpClient, explicitTranscriptPath) {
-    // 1. Try resolving via live CDP renderer active tab, editor resource, or query parameter
+    // 1. Try resolving via live CDP renderer active conversation trajectory or editor tab
     if (cdpClient) {
       try {
         const res = await cdpClient.evaluate(`
-          (() => {
+          (async () => {
+            try {
+              const cascadeId = window.location.pathname.split('/c/')[1]?.split('/')[0]?.split('?')[0] ||
+                                document.querySelector('[data-cascade-id]')?.getAttribute('data-cascade-id');
+              if (cascadeId && window.__APP_CONFIG__?.csrfToken) {
+                const resp = await fetch('/exa.language_server_pb.LanguageServerService/GetAllCascadeTrajectories', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Connect-Protocol-Version': '1',
+                    'x-codeium-csrf-token': window.__APP_CONFIG__.csrfToken
+                  },
+                  body: '{}'
+                });
+                if (resp.ok) {
+                  const data = await resp.json();
+                  const summary = data?.trajectorySummaries?.[cascadeId];
+                  const ws = summary?.workspaces?.[0] || summary?.trajectoryMetadata?.workspaces?.[0];
+                  const uri = ws?.gitRootAbsoluteUri || ws?.workspaceFolderAbsoluteUri || summary?.trajectoryMetadata?.workspaceUris?.[0];
+                  if (uri) return uri;
+                }
+              }
+            } catch (e) {}
+
             // 1. Check active editor tab or resource in VS Code / Antigravity DOM
             const activeTab = document.querySelector('.tab.active, [aria-selected="true"].tab, .tab-label[aria-selected="true"]');
             if (activeTab) {
               const resource = activeTab.getAttribute('data-resource-name') ||
                                activeTab.getAttribute('title') ||
                                activeTab.getAttribute('aria-label');
-              if (resource) return resource;
+              if (resource && !resource.includes('.gemini/antigravity/builtin') && !resource.includes('.gemini\\\\antigravity\\\\builtin')) {
+                return resource;
+              }
             }
             // 2. Query editor tab query parameter
             const search = window.location.search || '';
             const match = search.match(/tab=file__file%3A%2F%2F%2F([^&]+)/i);
             if (match && match[1]) {
-              return decodeURIComponent(match[1]);
+              const decoded = decodeURIComponent(match[1]);
+              if (!decoded.includes('.gemini/antigravity/builtin') && !decoded.includes('.gemini\\\\antigravity\\\\builtin')) {
+                return decoded;
+              }
             }
             // 3. Document title fallback
             if (document.title) {
@@ -92,8 +136,13 @@ export class ModHost {
         if (res && res.value && typeof res.value === 'string') {
           // Normalize clean path candidate
           let candidate = res.value.trim();
-          if (candidate.startsWith('file:///')) {
-            candidate = decodeURIComponent(candidate.replace('file:///', ''));
+          if (candidate.startsWith('file://')) {
+            candidate = decodeURIComponent(candidate.replace(/^file:\/\/\/?/, ''));
+          } else if (candidate.includes('%')) {
+            try { candidate = decodeURIComponent(candidate); } catch {}
+          }
+          if (/^\/([a-zA-Z]:)/.test(candidate)) {
+            candidate = candidate.slice(1);
           }
           if (candidate.includes(' — ')) {
             const parts = candidate.split(' — ');
@@ -103,6 +152,7 @@ export class ModHost {
             candidate = parts[0].trim();
           }
 
+          candidate = path.normalize(candidate);
           let currentDir = fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()
             ? candidate
             : path.dirname(candidate);
@@ -221,11 +271,19 @@ export class ModHost {
     };
 
     const activeAgents = this.syncServer.readActiveAgents();
+    const modelSlots = this.syncServer.readModelSlots();
+    const modelCatalog = this.syncServer.readModelCatalog();
+    const pitWall = (this.telemetryService && typeof this.telemetryService.getPitWallMetrics === 'function')
+      ? this.telemetryService.getPitWallMetrics()
+      : null;
 
     const hostContext = {
       telemetry: primaryMetric,
       allMetrics,
       activeAgents,
+      modelSlots,
+      modelCatalog,
+      pitWall,
       ...vcsOverview,
       timestamp: Date.now()
     };
@@ -259,6 +317,29 @@ export class ModHost {
           }
           this.syncServer.writeActiveAgents(merged);
         }
+      }
+    } catch {}
+
+    // Sync model slots from renderer localStorage to disk
+    try {
+      let rawSlots = evalRes?.value?.modelSlots;
+      if (!rawSlots) {
+        const slotsRes = await cdpClient.evaluate("localStorage.getItem('__antigravity_model_slots')");
+        rawSlots = slotsRes?.value;
+      }
+      if (rawSlots) {
+        const parsedSlots = typeof rawSlots === 'string' ? JSON.parse(rawSlots) : rawSlots;
+        if (parsedSlots && typeof parsedSlots === 'object') {
+          this.syncServer.updateModelSlots(parsedSlots);
+        }
+      }
+    } catch {}
+
+    // Sync discovered live model catalog from renderer React context to disk
+    try {
+      const discovered = evalRes?.value?.discoveredModelCatalog;
+      if (discovered && typeof discovered === 'object' && Array.isArray(discovered.baseModels) && discovered.baseModels.length > 0) {
+        this.syncServer.updateModelCatalog(discovered);
       }
     } catch {}
 
