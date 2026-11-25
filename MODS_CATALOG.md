@@ -20,9 +20,10 @@ Antigravity 2.0 UI mods mount cleanly into Electron DOM slots via non-destructiv
 |---|---|---|:---:|---|---|:---:|:---:|:---:|
 | `agent-selector` | **Agent Role Selector** | `2.0.0` | 45 | `header-actions` | `button[data-testid="model-selector-trigger"]` | `after` | 3 | 20.3 KB |
 | `context-tachometer` | **Context Window Tachometer** | `2.0.0` | 50 | `header-actions` | `button[data-testid="model-selector-trigger"]` | `after` | 2 | 4.2 KB |
-| `git-graph` | **Git & GitHub Topological Graph** | `2.0.0` | 60 | `aux-pane-tab` | `button[data-testid="aux-pane-new-tab-button"]` | `before` | 3 | 33.5 KB |
-| `model-slots` | **Planner & Builder Model Slots** | `1.0.0` | 90 | `menubar-actions` | `.shrink-0 > .bg-sidebar` | `append` | 1 | 14.5 KB |
+| `git-graph` | **Git & GitHub Topological Graph** | `2.0.0` | 60 | `aux-pane-tab` | `button[data-testid="aux-pane-new-tab-button"]` | `before` | 3 | 34.7 KB |
+| `model-slots` | **Planner & Builder Model Slots** | `1.0.0` | 90 | `menubar-actions` | `.shrink-0 > .bg-sidebar` | `append` | 1 | 23.4 KB |
 | `mods-manager` | **Mods Manager** | `2.0.0` | 100 | `menubar-actions` | `.shrink-0 > .bg-sidebar` | `append` | 1 | 10.4 KB |
+| `pit-wall` | **Pit Wall Telemetry & Cost Analytics** | `1.0.0` | 85 | `menubar-actions` | `.shrink-0 > .bg-sidebar` | `append` | 1 | 14.3 KB |
 | `my-custom-mod` | **My Custom Mod** | `1.0.0` | 10 | `header-actions` | `button[data-testid="model-selector-trigger"]` | `after` | 0 | 0.5 KB |
 | `voice-assistant` | **Voice Assistant** | `1.0.0` | 40 | `chat-input-actions` | `button[aria-label="Record voice memo"]` | `before` | 1 | 12.4 KB |
 
@@ -46,14 +47,14 @@ Antigravity 2.0 UI mods mount cleanly into Electron DOM slots via non-destructiv
 - **Primary Slot:** `aux-pane-tab` (injects `before` target `button[data-testid="aux-pane-new-tab-button"]`)
 - **Priority:** 60
 - **Components:** `mods/git-graph/components/GitGraphPanelHtml.js`, `mods/git-graph/components/GitGraphSvg.js`, `mods/git-graph/components/PrCiCardHtml.js`
-- **Styles:** `mods/git-graph/styles.css` (34330 bytes)
+- **Styles:** `mods/git-graph/styles.css` (35568 bytes)
 
 #### Mod: `model-slots` (Planner & Builder Model Slots)
 - **Description:** Dual menubar selectors to assign any model as Planner or Builder across actions
 - **Primary Slot:** `menubar-actions` (injects `append` target `.shrink-0 > .bg-sidebar`)
 - **Priority:** 90
 - **Components:** `mods/model-slots/components/ModelSlotsHtml.js`
-- **Styles:** `mods/model-slots/styles.css` (14823 bytes)
+- **Styles:** `mods/model-slots/styles.css` (23955 bytes)
 
 #### Mod: `mods-manager` (Mods Manager)
 - **Description:** Panel de control y switches para activar o desactivar mods y persistencia en Antigravity.
@@ -62,6 +63,13 @@ Antigravity 2.0 UI mods mount cleanly into Electron DOM slots via non-destructiv
 - **Author:** Victor Manuel Martinez Munoz
 - **Components:** `mods/mods-manager/components/ModsManagerHtml.js`
 - **Styles:** `mods/mods-manager/styles.css` (10622 bytes)
+
+#### Mod: `pit-wall` (Pit Wall Telemetry & Cost Analytics)
+- **Description:** Desktop UI Mod for Antigravity.
+- **Primary Slot:** `menubar-actions` (injects `append` target `.shrink-0 > .bg-sidebar`)
+- **Priority:** 85
+- **Components:** `mods/pit-wall/components/PitWallHtml.js`
+- **Styles:** `mods/pit-wall/styles.css` (14627 bytes)
 
 #### Mod: `my-custom-mod` (My Custom Mod)
 - **Description:** A starter boilerplate mod for Antigravity 2.0 desktop UI
@@ -89,7 +97,7 @@ Registered in `framework/core/SlotManager.js`. Mods declare one of these slots t
 | `floating-dock` | `body` | `append` | *(none)* | Detached floating container anchored directly to DOM body. |
 | `header-actions` | `button[data-testid="model-selector-trigger"]` | `after` | `agent-selector`, `context-tachometer`, `my-custom-mod` | Header action row next to the model selection trigger. |
 | `header-right` | `header, [role="banner"]` | `append` | *(none)* | Top-right corner of the global application banner. |
-| `menubar-actions` | `.shrink-0 > .bg-sidebar` | `append` | `model-slots`, `mods-manager` | Sidebar navigation action strip for persistent mod icons and menus. |
+| `menubar-actions` | `.shrink-0 > .bg-sidebar` | `append` | `model-slots`, `mods-manager`, `pit-wall` | Sidebar navigation action strip for persistent mod icons and menus. |
 | `status-bar` | `footer, [data-testid="status-bar"]` | `append` | *(none)* | Footer status bar container for telemetry summaries and background statuses. |
 
 ---
@@ -131,6 +139,7 @@ Autonomous background daemon watcher that monitors Antigravity Electron lifecycl
 | Method | Signature | Returns | Description |
 |---|---|:---:|---|
 | `constructor()` | `constructor(options = {})` | `void` | Public class method. |
+| `getGitMtimeSignature()` | `getGitMtimeSignature(repoPath)` | `{string}` | Computes a lightweight mtime signature for .git/HEAD, .git/index, and .git/refs without spawning subprocesses, allowing reactive Git Graph updates on commit/push/stage. |
 | `async` `checkInjected()` | `checkInjected(client)` | `{Promise<'injected' | 'missing' | 'paused'>}` | Checks whether mod containers are actively mounted in the Electron DOM, or whether the daemon persistence has been paused by the user stealth switch. |
 | `async` `refreshTelemetry()` | `refreshTelemetry(client)` | `{Promise<boolean>}` | Refreshes telemetry metrics and live data in the active Electron DOM session without re-injecting entire mod styles and DOM shells. |
 | `async` `tick()` | `tick()` | `{Promise<{ status: string, port?: number|null, error?: string } >}` | Single polling tick to verify CDP availability and inject mods if missing. |
@@ -215,7 +224,7 @@ Service responsible for discovering and parsing agent markdown files (*.agent.md
 | Method | Signature | Returns | Description |
 |---|---|:---:|---|
 | `constructor()` | `constructor(options = {})` | `void` | Public class method. |
-| `discoverAgents()` | `discoverAgents()` | `{Array<Object>} List of structured agent descriptor objects.` | Scans configured paths and returns all discovered agents. |
+| `discoverAgents()` | `discoverAgents(options = {})` | `{Array<Object>} List of structured agent descriptor objects.` | Scans configured paths and returns all discovered agents. Uses a short-lived TTL cache to avoid repeated filesystem walks. |
 | `parseAgentFile()` | `parseAgentFile(filePath)` | `{Object|null}` | Parses frontmatter or markdown content from an agent file. |
 
 ### `framework/services/AgentSyncServer.js`
@@ -232,6 +241,9 @@ Lightweight local HTTP bridge server for synchronizing active agent selections f
 | `writeActiveAgents()` | `writeActiveAgents(data)` | `void` | Saves active agents map to disk atomically. |
 | `writeModelSlots()` | `writeModelSlots(data)` | `void` | Saves model slots configuration to disk atomically. |
 | `updateModelSlots()` | `updateModelSlots(patch = {})` | `{Object}` | Updates model slots config with partial patch. |
+| `readModelCatalog()` | `readModelCatalog()` | `{Object}` | Reads discovered live model catalog from disk or returns an empty snapshot. |
+| `writeModelCatalog()` | `writeModelCatalog(data)` | `void` | Saves discovered model catalog to disk atomically. |
+| `updateModelCatalog()` | `updateModelCatalog(payload = {})` | `{Object|null}` | Updates and persists the live discovered model catalog. |
 | `readSubagentSessionSlots()` | `readSubagentSessionSlots(sessionId)` | `{Object|null}` | Reads saved model slots for a specific subagent sessionId, or all sessions map if omitted. |
 | `updateSubagentSessionSlots()` | `updateSubagentSessionSlots(sessionId, slots = {})` | `{Object|null}` | Updates and persists model slots for a specific subagent sessionId atomically. |
 | `updateAgentForCascade()` | `updateAgentForCascade(cascadeId, agent)` | `void` | Updates an agent entry for a specific conversation cascadeId. Preserves existing modifiers (like caveman and adhd) unless explicitly specified. |
@@ -301,17 +313,25 @@ Service responsible for calculating detailed context window telemetry and token 
 | Method | Signature | Returns | Description |
 |---|---|:---:|---|
 | `constructor()` | `constructor(options = {})` | `void` | Public class method. |
+| `estimateToolCallsChars()` | `estimateToolCallsChars(toolCalls)` | `{number}` | Estimates character weight of structured tool calls without calling JSON.stringify on large payloads. |
 | `formatTokens()` | `formatTokens(tokens)` | `{string}` | Formats token count into a compact human-readable string. |
 | `sanitizeModelName()` | `sanitizeModelName(rawName = '')` | `{string}` | Sanitizes a raw model name extracted from transcript logs, stripping system prompt instructions or trailing punctuation. |
+| `isValidModelName()` | `isValidModelName(rawName = '')` | `{boolean}` | Validates whether a candidate model string is a realistic model identifier or junk. |
 | `classifyModelFamily()` | `classifyModelFamily(modelName = '')` | `{{ family: 'argon' | 'claude' | 'gemini', hasDualLimit: boolean, rollingCeiling: number, weeklyCeiling: number } }` | Classifies a model name into its quota family and returns its quota limits. |
 | `unwrapToolArg()` | `unwrapToolArg(rawVal)` | `{any}` | Unwraps potentially JSON-encoded tool call arguments from transcript logs. |
 | `resolveSubagentModel()` | `resolveSubagentModel(rawModelArg, parentActiveModel = '')` | `{{ modelName: string, requestedModel: string, isInherited: boolean } }` | Resolves the effective model name used by a subagent given its requested Model argument ('inherit', 'flash', 'flash_lite', 'pro', or explicit name) and parent model. |
 | `inferConversationPaths()` | `inferConversationPaths(filePath)` | `{{ convId: string|null, convDir: string|null, brainRoot: string|null } }` | Infers conversation ID, conversation directory, and brain root from a transcript path. |
 | `resolveConversationTranscriptPath()` | `resolveConversationTranscriptPath(convId, brainRoot = this.brainDir)` | `{string|null}` | Resolves the transcript file path for a given conversation ID inside brainRoot. |
+| `resolveModelVisualMeta()` | `resolveModelVisualMeta(modelName = '')` | `{{ color: string, shortName: string, poolId: 'gemini_unified'|'argon_weekly'|'third_party', poolLabel: string } }` | Resolves display palette, short name, and quota pool classification for a model name. |
+| `buildWaffleCells()` | `buildWaffleCells(estTokens = 0, breakdown = {})` | `{Array<{ index: number, key: string, label: string, color: string, tokens: number, pct: number } >}` | Builds a 100-cell Claude-style waffle grid representing session context usage vs tokenLimit. |
+| `buildPoolsSummary()` | `buildPoolsSummary(chatModels = [])` | `{Array<Object>}` | Aggregates chatModels entries into the 3 Antigravity quota pools. |
+| `extractModelSelectionChange()` | `extractModelSelectionChange(content)` | `{{ fromModel: string|null, toModel: string|null } }` | Extracts { fromModel, toModel } from a <USER_SETTINGS_CHANGE> block when present. Supports both `<USER_SETTINGS_CHANGE>Model Selection from "A" to "B"</USER_SETTINGS_CHANGE>` and `The user changed setting \`Model Selection\` from A to B.` formats, including dotted versions. |
 | `getEmptySnapshot()` | `getEmptySnapshot()` | `void` | Default empty telemetry snapshot. |
 | `parseTranscriptFile()` | `parseTranscriptFile(filePath, options = {})` | `{Object}` | Parses a specific transcript JSONL file and resolves any spawned subagents along with their effective models and per-model consumption breakdown. |
 | `resolveModelQuota()` | `resolveModelQuota(detectedModel = '', stepEntries = [], chatModels = [], nativeQuotaGroups = null)` | `{Object}` | Resolves model quota metrics based on the model tier and conversation activity. |
 | `getAllMetrics()` | `getAllMetrics()` | `{Record<string, Object>}` | Retrieves telemetry metrics for all active conversations in the brain, aggregating global account quota usage across all chats. |
+| `resolveModelPricing()` | `resolveModelPricing(modelName = '')` | `{{ baseName: string, compactName: string, packId: string, packLabel: string, packColor: string, inputPerM: number, cacheReadPerM: number, outputPerM: number } }` | Resolves list API pricing ($ per 1M input/output tokens) and canonical base name for Pit Wall analytics. |
+| `getPitWallMetrics()` | `getPitWallMetrics(options = {})` | `{Object}` | Aggregates all-time Pit Wall metrics (stretches, hours worked, day streaks, consistency heatmap, and API price cost estimates across every conversation in brainDir). |
 
 #### Exported Helper Functions
 | Function | Signature | Returns | Description |
@@ -360,12 +380,12 @@ Service to manage Windows startup persistence and background lifecycle for Antig
 ---
 ## 5. Test Suite Mapping & Coverage
 
-Total verified tests: **278 tests** across **34 unit test files** and **1 functional integration test file**.
+Total verified tests: **309 tests** across **35 unit test files** and **1 functional integration test file**.
 
 | Test Suite File | Type | Tests | Target Under Test (SUT) | Sample / Primary Assertion |
 |---|:---:|:---:|---|---|
 | `tests/functional/remote_mesh_functional.test.mjs` | **Functional** | 1 | `framework/services/RemoteHostServer.js`, `framework/services/TailscaleDiscoveryService.js` | Functional E2E: Complete Remote Mesh Discovery and Conversation Stream Life |
-| `tests/unit/agent_discovery_service.test.mjs` | **Unit** | 2 | `framework/services/AgentDiscoveryService.js` | AgentDiscoveryService - parses frontmatter and markdown headers from agent  |
+| `tests/unit/agent_discovery_service.test.mjs` | **Unit** | 4 | `framework/services/AgentDiscoveryService.js` | AgentDiscoveryService - parses frontmatter and markdown headers from agent  |
 | `tests/unit/agent_selector_mod.test.mjs` | **Unit** | 10 | `mods/agent-selector/index.js`, `mods/agent-selector/components/AgentDropdownHtml.js` | AgentSelectorMod - loads correct manifest metadata |
 | `tests/unit/agent_sync_server.test.mjs` | **Unit** | 8 | `framework/services/AgentSyncServer.js` | reads empty agents when file does not exist |
 | `tests/unit/antigravity_mod.test.mjs` | **Unit** | 3 | `framework/sdk/AntigravityMod.js` | AntigravityMod - enforces required manifest properties |
@@ -374,25 +394,26 @@ Total verified tests: **278 tests** across **34 unit test files** and **1 functi
 | `tests/unit/build_bundle.test.mjs` | **Unit** | 3 | Framework / System | build.js - reads and orders VoicePromptConditioner before VoiceAssistantMod |
 | `tests/unit/cdp_client.test.mjs` | **Unit** | 8 | `framework/core/CdpWebSocketClient.js` | CdpWebSocketClient - generates structured Runtime.evaluate command payload |
 | `tests/unit/cdp_port_resolver.test.mjs` | **Unit** | 8 | `framework/core/CdpPortResolver.js` | CdpPortResolver - parses port from log string |
-| `tests/unit/context_tachometer_mod.test.mjs` | **Unit** | 4 | `mods/context-tachometer/index.js` | ContextTachometerMod - loads correct manifest metadata |
+| `tests/unit/context_tachometer_mod.test.mjs` | **Unit** | 5 | `mods/context-tachometer/index.js`, `mods/context-tachometer/components/GaugeSvg.js` | ContextTachometerMod - loads correct manifest metadata |
 | `tests/unit/framework_exports.test.mjs` | **Unit** | 2 | `framework/index.js`, `framework/host.js` | framework/index.js - exports GitService and AgentSyncServer alongside core  |
 | `tests/unit/generate_mods_catalog.test.mjs` | **Unit** | 1 | Framework / System | generate_mods_catalog - executes cleanly and produces comprehensive MODS_CA |
-| `tests/unit/git_graph_mod.test.mjs` | **Unit** | 15 | `mods/git-graph/index.js`, `mods/git-graph/components/GitGraphSvg.js`, `mods/git-graph/components/GitGraphPanelHtml.js` | GitGraphMod - loads correct manifest metadata |
+| `tests/unit/git_graph_mod.test.mjs` | **Unit** | 16 | `mods/git-graph/index.js`, `mods/git-graph/components/GitGraphSvg.js`, `mods/git-graph/components/GitGraphPanelHtml.js` | GitGraphMod - loads correct manifest metadata |
 | `tests/unit/git_service.test.mjs` | **Unit** | 11 | `framework/services/GitService.js` | GitService - computeAvatarUrl generates deterministic Gravatar identicon UR |
 | `tests/unit/github_cli_service.test.mjs` | **Unit** | 5 | `framework/services/GitHubCliService.js` | GitHubCliService - detects missing gh CLI gracefully |
-| `tests/unit/mod_daemon.test.mjs` | **Unit** | 8 | `framework/core/ModDaemon.js` | ModDaemon - constructor initializes with default configuration and status |
+| `tests/unit/mod_daemon.test.mjs` | **Unit** | 9 | `framework/core/ModDaemon.js` | ModDaemon - constructor initializes with default configuration and status |
 | `tests/unit/mod_host.test.mjs` | **Unit** | 1 | `framework/core/ModHost.js`, `framework/sdk/AntigravityMod.js` | ModHost - initializes with mod loader and manages multiple mods |
 | `tests/unit/mod_loader.test.mjs` | **Unit** | 20 | `framework/core/ModLoader.js`, `framework/sdk/AntigravityMod.js` | ModLoader - registers mods and respects priority order |
-| `tests/unit/model_slots_mod.test.mjs` | **Unit** | 44 | `mods/model-slots/components/ModelSlotsHtml.js`, `mods/model-slots/index.js`, `framework/services/AgentSyncServer.js`, `framework/core/ModDaemon.js`, `framework/core/ModLoader.js`, `framework/core/SlotManager.js`, `framework/sdk/StyleIsolator.js` | BASE_MODELS defines 7 base models with grouped effort levels |
+| `tests/unit/model_slots_mod.test.mjs` | **Unit** | 58 | `mods/model-slots/components/ModelSlotsHtml.js`, `mods/model-slots/index.js`, `framework/services/AgentSyncServer.js`, `framework/core/ModDaemon.js`, `framework/core/ModLoader.js`, `framework/core/SlotManager.js`, `framework/sdk/StyleIsolator.js` | BASE_MODELS defines 9 base models with grouped effort levels including Gemi |
 | `tests/unit/mods_hover_stability.test.mjs` | **Unit** | 3 | `mods/context-tachometer/index.js`, `mods/agent-selector/index.js` | ContextTachometerMod - hover styles are stationary without translateY jitte |
 | `tests/unit/mods_manager_mod.test.mjs` | **Unit** | 3 | `mods/mods-manager/index.js`, `mods/mods-manager/components/ModsManagerHtml.js` | ModsManagerMod - loads correct manifest metadata |
+| `tests/unit/pit_wall_mod.test.mjs` | **Unit** | 10 | `framework/services/TelemetryService.js`, `framework/core/ModLoader.js`, `mods/pit-wall/index.js`, `mods/pit-wall/components/PitWallHtml.js`, `mods/mods-manager/components/ModsManagerHtml.js` | PitWall - TelemetryService.getPitWallMetrics computes merged 20-min stretch |
 | `tests/unit/pr_ci_card.test.mjs` | **Unit** | 3 | `mods/git-graph/components/PrCiCardHtml.js` | renderPrCiCardHtml - renders active PR header with passing CI/CD badge and  |
 | `tests/unit/probe_tool.test.mjs` | **Unit** | 4 | `tools/probe.js` | ProbeTool - inspectDom dispatches query and returns evaluated structure |
 | `tests/unit/RemoteHostServer.test.mjs` | **Unit** | 3 | `framework/services/RemoteHostServer.js` | RemoteHostServer - health endpoint returns valid node metadata |
 | `tests/unit/slot_manager.test.mjs` | **Unit** | 14 | `framework/core/SlotManager.js` | SlotManager - provides default slot definitions |
-| `tests/unit/style_isolator.test.mjs` | **Unit** | 5 | `framework/sdk/StyleIsolator.js` | StyleIsolator - scopes simple class selectors under root container |
+| `tests/unit/style_isolator.test.mjs` | **Unit** | 6 | `framework/sdk/StyleIsolator.js` | StyleIsolator - scopes simple class selectors under root container |
 | `tests/unit/TailscaleDiscoveryService.test.mjs` | **Unit** | 5 | `framework/index.js` | TailscaleDiscoveryService - detects installed status correctly |
-| `tests/unit/telemetry_service.test.mjs` | **Unit** | 9 | `framework/services/TelemetryService.js`, `mods/context-tachometer/components/PopoverHtml.js` | TelemetryService - calculates empty metric snapshot |
+| `tests/unit/telemetry_service.test.mjs` | **Unit** | 10 | `framework/services/TelemetryService.js`, `mods/context-tachometer/components/PopoverHtml.js` | TelemetryService - calculates empty metric snapshot |
 | `tests/unit/vcs_orchestrator.test.mjs` | **Unit** | 2 | `framework/services/VcsOrchestrator.js` | VcsOrchestrator - aggregates local Git and remote GitHub metadata into unif |
 | `tests/unit/voice_assistant_mod.test.mjs` | **Unit** | 11 | `mods/voice-assistant/index.js` | VoiceAssistantMod - loads correct manifest metadata |
 | `tests/unit/voice_control_plugin.test.mjs` | **Unit** | 15 | `plugins/antigravity-voice-control/mcp/server.mjs`, `plugins/antigravity-voice-control/sidecars/HandyTranscribeBridge.mjs`, `plugins/antigravity-voice-control/sidecars/launch.mjs` | plugin.json - adheres strictly to allowed top-level schema keys and values |
@@ -454,6 +475,10 @@ A dense, token-saving lookup table mapping every file in the repository to its e
 - `mods/mods-manager/index.js`: Main entrypoint and AntigravityMod class implementation for 'mods-manager'.
 - `mods/mods-manager/manifest.json`: Manifest metadata, target slot, and priority declaration for 'mods-manager' mod.
 - `mods/mods-manager/styles.css`: Scoped CSS stylesheet defining visual styling, layout, and animations for 'mods-manager'.
+- `mods/pit-wall/components/PitWallHtml.js`: HTML template builder generating DOM markup and event containers for 'pit-wall'.
+- `mods/pit-wall/index.js`: Main entrypoint and AntigravityMod class implementation for 'pit-wall'.
+- `mods/pit-wall/manifest.json`: Manifest metadata, target slot, and priority declaration for 'pit-wall' mod.
+- `mods/pit-wall/styles.css`: Scoped CSS stylesheet defining visual styling, layout, and animations for 'pit-wall'.
 - `mods/template/index.js`: Main entrypoint and AntigravityMod class implementation for 'template'.
 - `mods/template/manifest.json`: Manifest metadata, target slot, and priority declaration for 'template' mod.
 - `mods/template/styles.css`: Scoped CSS stylesheet defining visual styling, layout, and animations for 'template'.
@@ -484,6 +509,8 @@ A dense, token-saving lookup table mapping every file in the repository to its e
 ### Developer Tools & CLI Scripts
 - `tools/generate_icon.ps1`: PowerShell script generating multi-resolution Windows ICO assets from vector shapes.
 - `tools/hooks/context-tracker.py`: Repository module file.
+- `tools/hooks/model-catalog-hook.py`: Repository module file.
+- `tools/hooks/permission-guard.py`: Repository module file.
 - `tools/package_release.mjs`: Packages standalone release distribution zips for deployment and GitHub releases.
 - `tools/probe.js`: CLI diagnostic probe for verifying CDP ports, Electron DOM targets, and running processes.
 - `tools/remote-host-daemon.js`: Stand-alone daemon runner initializing RemoteHostServer for remote mesh transcript streaming.
@@ -538,6 +565,7 @@ A dense, token-saving lookup table mapping every file in the repository to its e
 - `tests/unit/model_slots_mod.test.mjs`: Unit test suite verifying behavior and edge cases for model slots mod.
 - `tests/unit/mods_hover_stability.test.mjs`: Unit test suite verifying behavior and edge cases for mods hover stability.
 - `tests/unit/mods_manager_mod.test.mjs`: Unit test suite verifying behavior and edge cases for mods manager mod.
+- `tests/unit/pit_wall_mod.test.mjs`: Unit test suite verifying behavior and edge cases for pit wall mod.
 - `tests/unit/pr_ci_card.test.mjs`: Unit test suite verifying behavior and edge cases for pr ci card.
 - `tests/unit/probe_tool.test.mjs`: Unit test suite verifying behavior and edge cases for probe tool.
 - `tests/unit/RemoteHostServer.test.mjs`: Unit test suite verifying behavior and edge cases for RemoteHostServer.
