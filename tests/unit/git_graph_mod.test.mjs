@@ -390,3 +390,29 @@ test('GitGraphSvg & GitGraphPanelHtml - distinguish git local vs github remote t
   assert.ok(panelHtml.includes('is-local-commit'));
   assert.ok(panelHtml.includes('is-remote-commit'));
 });
+
+test('GitGraphMod - renders uncommitted node when dirty, overflow note >10 files, and responsive header styles', () => {
+  const files = Array.from({ length: 12 }, (_, i) => ({
+    ext: 'JS',
+    fileName: `file${i}.js`,
+    dir: 'src',
+    path: `src/file${i}.js`,
+    status: 'M'
+  }));
+  const panelHtml = renderGitGraphPanelHtml({
+    status: { branch: 'feat/test', isClean: false, changedFiles: [{ code: 'M', file: 'src/a.js' }], ahead: 0, behind: 0 },
+    commits: [
+      { hash: 'abc1234', shortHash: 'abc1234', subject: 'big commit', expanded: true, files }
+    ]
+  });
+
+  assert.ok(panelHtml.includes('antigravity-git-uncommitted-node'), 'Dirty working tree must render Uncommitted Changes node');
+  assert.ok(panelHtml.includes('Uncommitted Changes'));
+  assert.ok(panelHtml.includes('+2 más'), 'Expanded commits with >10 files must show overflow note');
+
+  const mod = new GitGraphMod();
+  const { css } = mod.render({});
+  assert.ok(css.includes('text-overflow: ellipsis'), 'Branch pill must truncate with ellipsis');
+  assert.ok(css.includes('min-width: 24px'), 'Tool buttons must enforce 24x24px minimum target');
+  assert.ok(css.includes('@media (max-width: 320px)'), 'Responsive header media query <320px must exist');
+});

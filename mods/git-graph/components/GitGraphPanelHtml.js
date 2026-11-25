@@ -183,6 +183,10 @@ export function renderGitGraphPanelHtml(context = {}) {
       : (github.isGitHub && github.webUrl ? `${github.webUrl}/commit/${c.hash}` : '');
     const author = c.author || { name: 'Unknown', email: '', avatarUrl: '' };
 
+    const overflowNoteHtml = files.length > 10
+      ? `<div class="git-files-overflow-note">+${files.length - 10} más (scroll para ver todos)</div>`
+      : '';
+
     return `
       <div class="git-commit-item ${isExpanded ? 'is-expanded' : ''}" data-hash="${escapeGitHtml(c.hash)}" data-index="${idx}" data-commit-type="${commitType}">
         <div class="git-commit-row ${isSelected ? 'selected' : ''} ${rowTypeCls}"
@@ -209,10 +213,19 @@ export function renderGitGraphPanelHtml(context = {}) {
         </div>
         <div class="git-commit-files-container" style="display: ${isExpanded ? 'flex' : 'none'};">
           ${filesListHtml}
+          ${overflowNoteHtml}
         </div>
       </div>
     `;
   }).join('');
+
+  const dirtyList = Array.isArray(status.changedFiles) ? status.changedFiles : [];
+  const uncommittedRowHtml = !status.isClean
+    ? `<div class="git-uncommitted-row" id="antigravity-git-uncommitted-node" title="Cambios sin confirmar en el working tree">
+         <span>● Uncommitted Changes</span>
+         <span>${dirtyList.length > 0 ? `${dirtyList.length} archivo${dirtyList.length === 1 ? '' : 's'}` : 'Working tree dirty'}</span>
+       </div>`
+    : '';
 
   const serializedState = JSON.stringify({
     activeRepo: repoName,
@@ -289,6 +302,7 @@ export function renderGitGraphPanelHtml(context = {}) {
           ${svgGraph}
         </div>
         <div class="git-commits-column" id="antigravity-git-commits-column">
+          ${uncommittedRowHtml}
           ${commitRowsHtml}
         </div>
       </div>

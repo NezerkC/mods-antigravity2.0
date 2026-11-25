@@ -103,12 +103,18 @@
   color: #38bdf8 !important;
   border: 1px solid rgba(56, 189, 248, 0.3) !important;
   font-family: monospace !important;
+  max-width: 110px !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
 }
 
 .git-header-actions {
   display: flex !important;
   align-items: center !important;
   gap: 6px !important;
+  flex-shrink: 0 !important;
 }
 
 .git-pill-auto {
@@ -126,11 +132,14 @@
   color: #94a3b8 !important;
   font-size: 12px !important;
   cursor: pointer !important;
-  padding: 2px 4px !important;
+  min-width: 24px !important;
+  min-height: 24px !important;
+  padding: 2px 5px !important;
   border-radius: 4px !important;
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
+  flex-shrink: 0 !important;
 }
 
 .git-tool-btn:hover {
@@ -141,6 +150,43 @@
 .git-tool-close:hover {
   background: rgba(239, 68, 68, 0.2) !important;
   color: #ef4444 !important;
+}
+
+@media (max-width: 320px) {
+  .git-header-repo,
+  .git-pill-auto {
+    display: none !important;
+  }
+  .git-branch-pill {
+    max-width: 82px !important;
+  }
+}
+
+.git-commit-files-container {
+  max-height: 240px !important;
+  overflow-y: auto !important;
+}
+
+.git-files-overflow-note {
+  font-size: 10px !important;
+  color: #94a3b8 !important;
+  padding: 4px 8px !important;
+  background: rgba(255, 255, 255, 0.03) !important;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08) !important;
+}
+
+.git-uncommitted-row {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 6px !important;
+  padding: 4px 8px !important;
+  margin-bottom: 4px !important;
+  border-radius: 5px !important;
+  background: rgba(245, 158, 11, 0.09) !important;
+  border: 1px dashed rgba(245, 158, 11, 0.4) !important;
+  font-size: 11px !important;
+  color: #fbbf24 !important;
 }
 
 /* Status Toast Banner */

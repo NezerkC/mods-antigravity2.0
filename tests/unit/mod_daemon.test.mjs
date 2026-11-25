@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { ModDaemon } from '../../framework/core/ModDaemon.js';
 
 test('ModDaemon - constructor initializes with default configuration and status', () => {
@@ -206,4 +209,40 @@ test('ModDaemon - tick invokes refreshTelemetry when mods are already present in
   assert.equal(evaluateCalls.length, 2);
   assert.ok(evaluateCalls[1].includes('__updateAntigravityTelemetry'));
   assert.ok(evaluateCalls[1].includes('conv-1'));
+});
+
+test('ModDaemon - triggers reactive VCS refresh when .git refs/index mtime signature changes', async () => {
+  const tmpRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-daemon-gitwatch-'));
+  try {
+    const gitDir = path.join(tmpRepo, '.git');
+    fs.mkdirSync(path.join(gitDir, 'refs', 'heads'), { recursive: true });
+    const headPath = path.join(gitDir, 'HEAD');
+    fs.writeFileSync(headPath, 'ref: refs/heads/main\n', 'utf-8');
+    fs.utimesSync(headPath, new Date(1000000), new Date(1000000));
+
+    const evaluateCalls = [];
+    const daemon = new ModDaemon({
+      portResolver: { resolvePort: async () => 53908, probePort: async () => true },
+      modHost: {
+        syncServer: { repoPath: tmpRepo, readActiveAgents: () => ({}) },
+        telemetryService: { getAllMetrics: () => ({}), getEmptySnapshot: () => ({}) },
+        dispatch: async () => {}
+      },
+      cdpClientFactory: () => ({
+        evaluate: async (script) => {
+          evaluateCalls.push(script);
+          return { value: true };
+        }
+      })
+    });
+
+    await daemon.tick();
+    assert.ok(!evaluateCalls[1].includes('if (true && typeof window.__antigravityFetchSessionVcsOverview'));
+
+    fs.utimesSync(headPath, new Date(5000000), new Date(5000000));
+    await daemon.tick();
+    assert.ok(evaluateCalls[3].includes('if (true && typeof window.__antigravityFetchSessionVcsOverview'));
+  } finally {
+    fs.rmSync(tmpRepo, { recursive: true, force: true });
+  }
 });
