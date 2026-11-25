@@ -544,3 +544,40 @@ test('TelemetryService - resolves subagent models (inherit + explicit), nested t
   }
 });
 
+test('TelemetryService - uses mtimeMs/size cache on repeated parses and estimates tool_calls without JSON.stringify', () => {
+  const tempBrain = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-telemetry-cache-'));
+  try {
+    const convDir = path.join(tempBrain, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', '.system_generated', 'logs');
+    fs.mkdirSync(convDir, { recursive: true });
+    const filePath = path.join(convDir, 'transcript.jsonl');
+    fs.writeFileSync(filePath, JSON.stringify({
+      type: 'PLANNER_RESPONSE',
+      content: 'Done',
+      tool_calls: [{ name: 'write_file', args: { Path: '/tmp/foo.js', Content: 'x'.repeat(200) } }]
+    }) + '\n', 'utf-8');
+
+    const service = new TelemetryService({ brainDir: tempBrain });
+    assert.equal(service.estimateToolCallsChars([{ name: 'read', args: { Path: 'a.txt' } }]) > 20, true);
+
+    const first = service.parseTranscriptFile(filePath);
+    assert.ok(first.estTokens > 0);
+    assert.ok(service.cache.size >= 1);
+
+    const origRead = fs.readFileSync;
+    let diskReads = 0;
+    fs.readFileSync = (...args) => {
+      if (args[0] === filePath) diskReads++;
+      return origRead(...args);
+    };
+    try {
+      const second = service.parseTranscriptFile(filePath);
+      assert.equal(second.estTokens, first.estTokens);
+      assert.equal(diskReads, 0, 'Unchanged mtimeMs and size must serve cached parse result without re-reading transcript');
+    } finally {
+      fs.readFileSync = origRead;
+    }
+  } finally {
+    fs.rmSync(tempBrain, { recursive: true, force: true });
+  }
+});
+

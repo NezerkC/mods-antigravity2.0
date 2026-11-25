@@ -22,13 +22,34 @@ export class AgentDiscoveryService {
       path.join(homedir, '.gemini', 'config', 'skills'),
       path.join(homedir, '.gemini', 'antigravity', 'agents')
     ];
+    this.cacheTtlMs = options.cacheTtlMs ?? 30_000;
+    this.excludedDirs = new Set([
+      'node_modules',
+      '.git',
+      'dist',
+      'scratch',
+      'tests',
+      'apps',
+      '__pycache__',
+      '.playwright-mcp'
+    ]);
+    this._cache = null;
   }
 
   /**
    * Scans configured paths and returns all discovered agents.
+   * Uses a short-lived TTL cache to avoid repeated filesystem walks.
+   * @param {Object} [options]
+   * @param {boolean} [options.bypassCache=false]
+   * @param {number} [options.now]
    * @returns {Array<Object>} List of structured agent descriptor objects.
    */
-  discoverAgents() {
+  discoverAgents(options = {}) {
+    const now = options.now ?? Date.now();
+    if (!options.bypassCache && this._cache && (now - this._cache.ts) < this.cacheTtlMs) {
+      return this._cache.agents;
+    }
+
     const discovered = new Map();
 
     for (const root of this.searchRoots) {
@@ -36,7 +57,9 @@ export class AgentDiscoveryService {
       this._scanDirectory(root, discovered, 0, 4);
     }
 
-    return Array.from(discovered.values());
+    const agents = Array.from(discovered.values());
+    this._cache = { ts: now, agents };
+    return agents;
   }
 
   /**
@@ -53,8 +76,7 @@ export class AgentDiscoveryService {
         const fullPath = path.join(dir, entry.name);
 
         if (entry.isDirectory()) {
-          // Skip node_modules and .git
-          if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue;
+          if (this.excludedDirs.has(entry.name)) continue;
           this._scanDirectory(fullPath, map, depth + 1, maxDepth);
         } else if (entry.isFile() && entry.name.endsWith('.md')) {
           if (this._isAgentFile(entry.name, fullPath)) {

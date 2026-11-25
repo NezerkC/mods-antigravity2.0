@@ -21,8 +21,39 @@ export class TelemetryService {
     this.tokenLimit = options.tokenLimit ?? 1_000_000;
     this.charsPerToken = options.charsPerToken ?? 3.8;
     this.parseCache = new Map();
+    this.cache = this.parseCache;
     this.pitWallCache = { ts: 0, data: null };
     this.pitWallFileCache = new Map();
+  }
+
+  /**
+   * Estimates character weight of structured tool calls without calling JSON.stringify on large payloads.
+   * @param {any} toolCalls
+   * @returns {number}
+   */
+  estimateToolCallsChars(toolCalls) {
+    if (!toolCalls) return 0;
+    if (typeof toolCalls === 'string') return toolCalls.length;
+    if (!Array.isArray(toolCalls)) return 32;
+    let total = 2;
+    for (let i = 0; i < toolCalls.length; i++) {
+      const tc = toolCalls[i];
+      if (!tc || typeof tc !== 'object') {
+        total += typeof tc === 'string' ? tc.length : 8;
+        continue;
+      }
+      if (typeof tc.name === 'string') total += tc.name.length + 12;
+      const args = tc.arguments !== undefined ? tc.arguments : tc.args;
+      if (typeof args === 'string') {
+        total += args.length + 16;
+      } else if (args && typeof args === 'object') {
+        for (const k of Object.keys(args)) {
+          const v = args[k];
+          total += k.length + 6 + (typeof v === 'string' ? v.length : (Array.isArray(v) ? v.length * 16 : 16));
+        }
+      }
+    }
+    return total;
   }
 
   /**
@@ -586,7 +617,7 @@ export class TelemetryService {
       const len = (str) => (typeof str === 'string' ? str.length : 0);
       const contentLen = len(obj.content);
       const thinkingLen = len(obj.thinking);
-      const toolCallsLen = obj.tool_calls ? JSON.stringify(obj.tool_calls).length : 0;
+      const toolCallsLen = this.estimateToolCallsChars(obj.tool_calls);
 
       if (obj.type === 'PLANNER_RESPONSE') {
         hasPlannerResponse = true;
@@ -1950,7 +1981,7 @@ export class TelemetryService {
         } else if (!hasExactTokenTelemetry) {
           const thinkingLen = typeof obj.thinking === 'string' ? obj.thinking.length : 0;
           const contentLen = typeof obj.content === 'string' ? obj.content.length : 0;
-          const toolCallsLen = obj.tool_calls ? JSON.stringify(obj.tool_calls).length : 0;
+          const toolCallsLen = this.estimateToolCallsChars(obj.tool_calls);
           const approx = Math.round(Math.max(rawLine.length, contentLen + thinkingLen + toolCallsLen) / this.charsPerToken);
           if (obj.type === 'PLANNER_RESPONSE') {
             outputTok = approx;
