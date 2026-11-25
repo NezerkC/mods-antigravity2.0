@@ -14,7 +14,8 @@ export class GitHubCliService {
     this.execFn = options.execFn || ((cmd, opts) => execSync(cmd, {
       cwd: opts?.cwd || this.repoPath,
       encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore']
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true
     }));
     this.repoPath = options.repoPath || process.cwd();
   }

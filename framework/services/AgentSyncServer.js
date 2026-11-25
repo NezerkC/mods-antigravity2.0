@@ -753,24 +753,24 @@ export class AgentSyncServer {
                   res.end(JSON.stringify({ error: 'Missing branch for checkout' }));
                   return;
                 }
-                execSync(`git checkout ${branch}`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                execSync(`git checkout ${branch}`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
                 result = { success: true, action: 'checkout', branch, repoPath: targetRepo };
               } else if (action === 'pull') {
                 const targetBranch = branch || 'main';
-                execSync(`git pull origin ${targetBranch}`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                execSync(`git pull origin ${targetBranch}`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
                 result = { success: true, action: 'pull', branch: targetBranch, repoPath: targetRepo };
               } else if (action === 'push') {
                 const targetBranch = branch || 'main';
                 const refspec = targetSha ? `${targetSha}:refs/heads/${targetBranch}` : targetBranch;
-                execSync(`git push origin ${refspec}`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                execSync(`git push origin ${refspec}`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
                 result = { success: true, action: 'push', branch: targetBranch, refspec, repoPath: targetRepo };
               } else if (action === 'create-pr') {
                 try {
-                  const prOut = execSync(`gh pr create --fill`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+                  const prOut = execSync(`gh pr create --fill`, { cwd: targetRepo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
                   result = { success: true, action: 'create-pr', output: prOut.trim(), repoPath: targetRepo };
                 } catch (e) {
                   try {
-                    const remoteUrl = execSync('git remote get-url origin', { cwd: targetRepo, encoding: 'utf-8' }).trim();
+                    const remoteUrl = execSync('git remote get-url origin', { cwd: targetRepo, encoding: 'utf-8', windowsHide: true }).trim();
                     const cleanRemote = remoteUrl.replace(/\.git$/, '').replace(/^git@github\.com:/, 'https://github.com/');
                     result = { success: false, fallbackUrl: `${cleanRemote}/compare`, error: e.message };
                   } catch {

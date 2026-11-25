@@ -13,14 +13,14 @@ fs.mkdirSync(releaseDir, { recursive: true });
 console.log(`📦 Packaging release ${version} assets...`);
 
 // 1. Package individual mods
-const mods = ['context-tachometer', 'agent-selector', 'mods-manager', 'git-graph', 'voice-assistant'];
+const mods = ['context-tachometer', 'agent-selector', 'mods-manager', 'git-graph', 'voice-assistant', 'model-slots', 'pit-wall'];
 for (const mod of mods) {
   const modDir = path.resolve(`mods/${mod}`);
   if (!fs.existsSync(modDir)) continue;
   const zipPath = path.join(releaseDir, `mod-${mod}-${version}.zip`);
   if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
   
-  execSync(`powershell -NoProfile -Command "Compress-Archive -Path '${modDir}\\*' -DestinationPath '${zipPath}' -Force"`);
+  execSync(`powershell -NoProfile -Command "Compress-Archive -Path '${modDir}\\*' -DestinationPath '${zipPath}' -Force"`, { windowsHide: true });
   console.log(`✅ Packaged mod: ${zipPath}`);
 }
 
@@ -39,7 +39,7 @@ fs.copyFileSync('README.md', path.join(stagingDir, 'README.md'));
 fs.copyFileSync('LICENSE', path.join(stagingDir, 'LICENSE'));
 fs.cpSync('mods', path.join(stagingDir, 'mods'), { recursive: true });
 
-execSync(`powershell -NoProfile -Command "Compress-Archive -Path '${stagingDir}\\*' -DestinationPath '${bundleZip}' -Force"`);
+execSync(`powershell -NoProfile -Command "Compress-Archive -Path '${stagingDir}\\*' -DestinationPath '${bundleZip}' -Force"`, { windowsHide: true });
 fs.rmSync(stagingDir, { recursive: true });
 console.log(`✅ Packaged full bundle: ${bundleZip}`);
 

@@ -246,10 +246,10 @@ main();
   fs.writeFileSync(targetLoader, bundle, 'utf-8');
   fs.writeFileSync(targetLegacy, bundle, 'utf-8');
 
-  // Deploy lifecycle hooks alongside runtime bundle
+  // Deploy lifecycle Python hooks alongside runtime bundle (executed directly via pythonw without .cmd window flashes)
   const hooksDir = path.resolve('tools/hooks');
   const deployedHooks = [];
-  for (const hookFile of ['context-tracker.py', 'model-catalog-hook.py']) {
+  for (const hookFile of ['context-tracker.py', 'model-catalog-hook.py', 'permission-guard.py']) {
     const srcHook = path.join(hooksDir, hookFile);
     if (fs.existsSync(srcHook)) {
       const dstHook = path.join(targetDir, hookFile);
@@ -257,13 +257,13 @@ main();
       deployedHooks.push(dstHook);
     }
   }
-  const modelCatalogCmdPath = path.join(targetDir, 'model-catalog-hook.cmd');
-  fs.writeFileSync(
-    modelCatalogCmdPath,
-    `@echo off\r\npython "${path.join(targetDir, 'model-catalog-hook.py')}" %*\r\n`,
-    'utf-8'
-  );
-  deployedHooks.push(modelCatalogCmdPath);
+  // Remove legacy .cmd wrappers if present so Windows never flashes cmd.exe windows
+  for (const legacyCmd of ['model-catalog-hook.cmd', 'permission-guard.cmd']) {
+    const legacyPath = path.join(targetDir, legacyCmd);
+    if (fs.existsSync(legacyPath)) {
+      try { fs.unlinkSync(legacyPath); } catch {}
+    }
+  }
 
   console.log('🚀 Deployed successfully to ~/.gemini/config/mods/:');
   console.log('   - ', targetLoader);

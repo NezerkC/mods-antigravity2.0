@@ -91,7 +91,8 @@ export class GitService {
       const remoteUrl = execSync('git remote get-url origin', {
         cwd: repoPath,
         encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true
       }).trim();
       const data = this.parseGitHubRemote(remoteUrl);
       this.metadataCache.set(repoPath, { timestamp: now, data });
@@ -137,7 +138,8 @@ export class GitService {
       const trunkLog = execSync('git rev-list --first-parent origin/main || git rev-list --first-parent main || git rev-list --first-parent origin/master || git rev-list --first-parent master || git rev-list origin/main || git rev-list main', {
         cwd: repoPath,
         encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true
       });
       for (const h of trunkLog.split('\n')) {
         const tr = h.trim();
@@ -151,7 +153,8 @@ export class GitService {
       const locLog = execSync('git rev-list --branches HEAD', {
         cwd: repoPath,
         encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true
       });
       for (const h of locLog.split('\n')) {
         const tr = h.trim();
@@ -165,7 +168,8 @@ export class GitService {
       const remLog = execSync('git rev-list --remotes', {
         cwd: repoPath,
         encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true
       });
       for (const h of remLog.split('\n')) {
         const tr = h.trim();
@@ -397,7 +401,8 @@ export class GitService {
       const raw = execSync('git branch -a --format="%(refname:short)%00%(objectname:short)%00%(HEAD)%00%(upstream:short)%00%(upstream:track)"', {
         cwd: repoPath,
         encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true
       });
 
       // 2. Get merged branches in main
@@ -406,7 +411,8 @@ export class GitService {
         const mergedRaw = execSync('git branch --merged main', {
           cwd: repoPath,
           encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'ignore']
+          stdio: ['ignore', 'pipe', 'ignore'],
+          windowsHide: true
         });
         mergedRaw.split('\n').forEach(b => {
           const name = b.replace(/^[*\s]+/, '').trim();
@@ -422,7 +428,8 @@ export class GitService {
         const statusRaw = execSync('git status --porcelain', {
           cwd: repoPath,
           encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'ignore']
+          stdio: ['ignore', 'pipe', 'ignore'],
+          windowsHide: true
         });
         dirtyFiles = statusRaw.split('\n').filter(l => l.trim().length > 0).length;
       } catch {
@@ -517,7 +524,8 @@ export class GitService {
         const aheadOut = execSync('git rev-list @{u}..HEAD', {
           cwd: repoPath,
           encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'ignore']
+          stdio: ['ignore', 'pipe', 'ignore'],
+          windowsHide: true
         }).trim();
         if (aheadOut) {
           aheadOut.split(/\s+/).filter(Boolean).forEach(h => aheadHashes.add(h));
@@ -528,7 +536,8 @@ export class GitService {
         const behindOut = execSync('git rev-list HEAD..@{u}', {
           cwd: repoPath,
           encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'ignore']
+          stdio: ['ignore', 'pipe', 'ignore'],
+          windowsHide: true
         }).trim();
         if (behindOut) {
           behindOut.split(/\s+/).filter(Boolean).forEach(h => behindHashes.add(h));
@@ -539,7 +548,8 @@ export class GitService {
       const rawLog = execSync(`git log --all --topo-order --format="${format}" --name-status -n ${limit}`, {
         cwd: repoPath,
         encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true
       });
 
       const rawCommits = [];
@@ -621,7 +631,8 @@ export class GitService {
       const porcelain = execSync('git status --porcelain=v1 -b', {
         cwd: repoPath,
         encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore']
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true
       });
 
       const lines = porcelain.split('\n');
@@ -752,7 +763,8 @@ export class GitService {
       execSync('git fetch --all --prune', {
         cwd: repoPath,
         encoding: 'utf-8',
-        stdio: ['ignore', 'ignore', 'ignore']
+        stdio: ['ignore', 'ignore', 'ignore'],
+        windowsHide: true
       });
       return true;
     } catch {
